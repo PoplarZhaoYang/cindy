@@ -31,6 +31,9 @@ describe('SQLite history outline', () => {
     expect(outline('tool_result', `<tool_use_error>${body}`, null, true)).toBe('<tool_use_error>');
     expect(outline('tool_result', 'saved cindy-media://blobs/a.png', null, true)).toBe('saved cindy-media://blobs/a.png');
     expect(outline('tool_result', 'xdt-file:///work/report.pdf', null, true)).toBe('xdt-file:///work/report.pdf');
+    // Incidental mentions in long output must not keep the whole body.
+    expect(outline('tool_result', `const xdt_helper = 1;\n${body}`, null, true)).toBe('');
+    expect(outline('tool_result', `${body}see xdt-file:///work/report.pdf`, null, true)).toBe('');
   });
   it('keeps visible prose, artifacts and malformed legacy bodies intact', () => {
     expect(outline('assistant', 'Final answer')).toBe('Final answer');
