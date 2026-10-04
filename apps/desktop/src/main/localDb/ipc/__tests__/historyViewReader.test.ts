@@ -145,6 +145,32 @@ describe('host history view', () => {
     list.mockImplementationOnce(async (...args) => { const result = await implementation(...args); source.length = 0; return result; });
     await expect(api.page('s')).rejects.toMatchObject({ code: 'NOT_FOUND', message: '[NOT_FOUND] History range changed' });
   });
+  it.each(['raw scan', 'outline scan', 'hydrate'])('rejects a cursor answer rewound during %s', async (phase) => {
+    const source = [row(0, 'user'), row(1),
+      { ...row(2, 'assistant'), content: 'Continuing', agentMeta: { turnCompleted: true } }, row(3),
+      { ...row(4, 'assistant'), content: '# Result\nDelivered', agentMeta: { turnCompleted: true } }];
+    const base = reader(source);
+    const read = vi.fn(async (sid: string, opts: { before?: string; limit: number }) => {
+      const rows = await base.list(sid, opts);
+      if (phase !== 'hydrate') source.pop();
+      return rows;
+    });
+    const api = createHistoryViewReader({ list: read, outline: read,
+      hydrate: async (_sid, ids) => {
+        const rows = source.filter((message) => ids.includes(message.id));
+        if (phase === 'hydrate') source.pop();
+        return rows;
+      },
+      anchor: async (_sid, id) => {
+        const found = source.find((message) => message.id === id);
+        if (!found) throwIpcError('NOT_FOUND', 'History range changed');
+        return found;
+      }, running: () => false });
+    // Only the right-hand context disappears; both scanned endpoints survive.
+    await expect(api.page('s', '4', phase !== 'raw scan'))
+      .rejects.toMatchObject({ code: 'NOT_FOUND', message: '[NOT_FOUND] History range changed' });
+    expect(source.map((message) => message.id)).toEqual(['0', '1', '2', '3']);
+  });
   it.each([1000, 200000])('rejects details cleared or rewound during a batch before returning (%i bytes)', async (size) => {
     for (const keep of [0, 1]) {
       const source = [row(1), row(2), row(3)].map((message) => ({ ...message, content: 'x'.repeat(size) }));

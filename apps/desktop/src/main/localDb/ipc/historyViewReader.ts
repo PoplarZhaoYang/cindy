@@ -148,7 +148,10 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       }
       // A clear/rewind during the scan invalidates the whole snapshot, including
       // already-read rows. Never publish a prefix from the previous history epoch.
-      if (raw.length) await Promise.all([deps.anchor(sessionId, raw[0].id, outlined), deps.anchor(sessionId, raw[raw.length - 1].id, outlined)]);
+      // The cursor can also supply grouping context without appearing in raw.
+      const anchors = raw.length ? [raw[0].id, raw[raw.length - 1].id] : [];
+      if (beforeAnchor) anchors.push(beforeAnchor.id);
+      await Promise.all(anchors.map((id) => deps.anchor(sessionId, id, outlined)));
       const hasMore = !exhausted || selected.length < items.length;
       return { version: 1, items: selected, hasMore,
         nextCursor: hasMore && selected.length ? firstId(selected[0]) : null };
