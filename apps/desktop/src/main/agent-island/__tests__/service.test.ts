@@ -3569,7 +3569,9 @@ describe('AgentIslandService native publishing', () => {
     ]);
   });
 
-  it.each([false, true])('keeps IM completions quiet across status/done and queue drain (headless=%s)', async (headless) => {
+  it.each([
+    [false, 'user'], [true, 'user'], [false, 'scheduler'], [true, 'scheduler'],
+  ] as const)('keeps direct IM completions quiet (headless=%s, kind=%s)', async (headless, kind) => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);
     const playSound = vi.fn(() => true);
@@ -3585,8 +3587,9 @@ describe('AgentIslandService native publishing', () => {
       complete: customSound('complete.wav'),
     } });
     const meta = { sessionId: 'im', agentKind: 'codex' as const };
-    const turnOrigin = { kind: 'user', surface: 'im' } as const;
-    service.handleUserPrompt(meta, 'IM message');
+    const turnOrigin = { kind, surface: 'im' } as const;
+    // Both IM runners send directly without the App's handleUserPrompt path.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
     service.setCompletionDeferResolver(() => true);
     playSound.mockClear();
     service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
@@ -3603,20 +3606,32 @@ describe('AgentIslandService native publishing', () => {
       expect.objectContaining({ sessionId: 'im', phase: 'completed', attention: true }),
     ]);
     // A later IM reply must not erase the earlier unread App reply.
-    service.handleUserPrompt(meta, 'another IM message');
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
     service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
     expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
       expect.objectContaining({ sessionId: 'im', attention: true }),
     ]);
     service.resetRuntimeState();
     syncEnabledForTest(service, publish);
-    service.handleUserPrompt(meta, 'failing IM message');
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
     service.handleAgentEvent(meta, {
       type: 'error', data: { message: 'model unavailable' }, turnOrigin,
     });
     expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
       expect.objectContaining({ sessionId: 'im', phase: 'error', attention: true }),
     ]);
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ sessionId: 'im', attention: true }),
+    ]);
+    // Reading the old result during the IM turn must not resurrect it on completion.
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: true }, turnOrigin });
+    service.handleSessionAttentionCleared(meta.sessionId, 'explicit');
+    service.handleAgentEvent(meta, { type: 'status', data: { isRunning: false, status: 'Done' }, turnOrigin });
+    service.handleAgentEvent(meta, { ...doneEvent(), turnOrigin });
+    expect(onSessionActivityChange.mock.calls.at(-1)?.[0]).toEqual([]);
     service.resetRuntimeState();
   });
 

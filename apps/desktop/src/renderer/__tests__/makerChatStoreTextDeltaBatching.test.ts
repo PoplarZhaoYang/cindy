@@ -526,6 +526,8 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
     emit({ type: 'done', data: {}, turnOrigin });
     expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
+    emit({ type: 'done', data: {} });
+    expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
     emit({ type: 'status', data: { isRunning: false } });
     expect(makerChatStore.wasLastStopQuietCompletion(SESSION_ID)).toBe(true);
     emit({ type: 'status', data: { isRunning: true } });
