@@ -2340,6 +2340,55 @@ describe('DeviceLinkClient', () => {
     }
   });
 
+  it('多 peer:两个可靠对端同时沉默但还有活动的旧版控制端时,不得连带断开它', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const opens = [
+        establishInboundReliableLink(h, 'asleep-stream-b', 1, 'dev-b'),
+        establishInboundReliableLink(h, 'asleep-stream-c', 1, 'dev-c'),
+        // 旧版控制端:不声明可靠传输,走 legacy 帧
+        establishInboundReliableLink(h, 'legacy-stream-e', 1, 'dev-e', []),
+      ];
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all(opens);
+
+      const socket = h.current();
+      h.client.sendInvokeResult('dev-b', 'asleep-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'asleep-c', { ok: true, result: [] });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-b/));
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-c/));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled/));
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      // 旧版控制端仍在原连接上收到回包
+      const sentBefore = socket.sent.length;
+      h.client.sendInvokeResult('dev-e', 'legacy-e', { ok: true, result: [] });
+      expect(socket.sent.slice(sentBefore).some((env) => (
+        env.kind === 'invoke-result' && env.dst === 'dev-e'
+      ))).toBe(true);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {
     const h = makeHarness({
       timing: {
