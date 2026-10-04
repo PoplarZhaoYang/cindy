@@ -2186,6 +2186,109 @@ describe('DeviceLinkClient', () => {
     }
   });
 
+  const firstReliableMeta = (socket: FakeWs, dst: string) => {
+    const env = socket.sent.find((sent) => (
+      sent.kind === 'invoke-result' && sent.dst === dst && parseTransportPayload(sent.payload)
+    ))!;
+    return parseTransportPayload(env.payload)!.meta;
+  };
+
+  it('多个对端同时沉默且期间没有任何对端入站:判定 relay 连接卡死并重连,而不是逐个复位 peer', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const openB = establishInboundReliableLink(h, 'stall-stream-b', 1, 'dev-b');
+      const openC = establishInboundReliableLink(h, 'stall-stream-c', 1, 'dev-c');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all([openB, openC]);
+
+      const firstSocket = h.current();
+      h.client.sendInvokeResult('dev-b', 'stuck-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'stuck-c', { ok: true, result: [] });
+
+      // 两个对端都不 ACK,也没有任何对端帧到达 → 连接级故障,整条 relay 连接重建
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled, forcing reconnect/));
+      expect(firstSocket.terminated || firstSocket.closed !== null).toBe(true);
+      expect(h.sockets.length).toBeGreaterThan(1);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/resetting peer link/));
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('多 peer:一个对端沉默而另一对端仍有入站时只复位沉默 peer,relay 连接与健康 peer 零感知', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 3,
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    try {
+      h.client.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.current().ack();
+      const openB = establishInboundReliableLink(h, 'quiet-stream-b', 1, 'dev-b');
+      const openC = establishInboundReliableLink(h, 'healthy-stream-c', 1, 'dev-c');
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.all([openB, openC]);
+
+      const socket = h.current();
+      h.client.sendInvokeResult('dev-b', 'sleeping-b', { ok: true, result: [] });
+      h.client.sendInvokeResult('dev-c', 'answered-c', { ok: true, result: [] });
+      await vi.advanceTimersByTimeAsync(1);
+      // dev-c 正常 ACK:证明 relay 转发方向是通的,dev-b 沉默只是它自己的问题
+      const metaC = firstReliableMeta(socket, 'dev-c');
+      socket.push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-c',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: { streamId: metaC.streamId, ackSeq: metaC.seq },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      // dev-c 随后还有一条尚未确认的帧:它在 ACK 之后才发出,不构成「多个对端沉默」
+      h.client.sendInvokeResult('dev-c', 'in-flight-c', { ok: true, result: [] });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/resetting peer link .*dst=dev-b/));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/relay connection looks stalled/));
+      expect(socket.terminated).toBe(false);
+      expect(socket.closed).toBeNull();
+      expect(h.sockets).toHaveLength(1);
+      // 健康 peer 的 link 仍可用:在途帧继续在同一条连接上重发
+      const sentToC = socket.sent.filter((env) => (
+        env.kind === 'invoke-result' && env.dst === 'dev-c' && parseTransportPayload(env.payload)
+      ));
+      expect(sentToC.length).toBeGreaterThan(1);
+    } finally {
+      h.client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {
     const h = makeHarness({
       timing: {
