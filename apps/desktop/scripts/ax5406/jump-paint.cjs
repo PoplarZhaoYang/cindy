@@ -63,9 +63,16 @@ function onFrame(frame) {
   if (!cfg.light) fs.writeFileSync(path.join(cfg.output, file), frame.toPNG());
   active.frames.push({ at, file, ...decoded });
 }
-async function control(kind, css) {
+async function control(kind) {
   active = { frames: [] };
-  await js(`(()=>{const s=document.createElement('style');s.id='negative-control';s.textContent=${JSON.stringify(css)};document.head.append(s)})()`);
+  // Keep both negative controls literal: never interpolate CSS into renderer code.
+  if (kind === 'placeholder') {
+    await js(`(()=>{const s=document.createElement('style');s.id='negative-control';s.textContent='.msg-stream-items>[data-message-client-id="synthetic-499"]{background-image:linear-gradient(rgb(255,0,255),rgb(255,0,255))!important}';document.head.append(s)})()`);
+  } else if (kind === 'empty viewport') {
+    await js(`(()=>{const s=document.createElement('style');s.id='negative-control';s.textContent='.msg-stream-items>*{visibility:hidden!important}';document.head.append(s)})()`);
+  } else {
+    throw Error('Unknown native paint control: ' + kind);
+  }
   await wait(180);
   const frames = active.frames;
   const detected = kind === 'placeholder' ? frames.some(f => f.blank > 16) : frames.some(f => !f.rows.length);
@@ -148,8 +155,8 @@ async function run() {
     await js(`window.ax5406Visual.theme(${dark});window.ax5406Visual.streamFinish()`);await wait(200);
     await install(); report.bounds ??= []; report.bounds.push(bounds); win.webContents.beginFrameSubscription(false,onFrame);await wait(150);
     if (!report.controls.length) {
-      await control('placeholder','.msg-stream-items>[data-message-client-id="synthetic-499"]{background-image:linear-gradient(rgb(255,0,255),rgb(255,0,255))!important}');
-      await control('empty viewport','.msg-stream-items>*{visibility:hidden!important}');
+      await control('placeholder');
+      await control('empty viewport');
     }
     const prefix=`${width}x${height}-${dark?'dark':'light'}`;
     for (const [i,f] of [.15,.8,.3,.9].entries())await runCase(prefix+'-instant-'+i,'instant',f);
