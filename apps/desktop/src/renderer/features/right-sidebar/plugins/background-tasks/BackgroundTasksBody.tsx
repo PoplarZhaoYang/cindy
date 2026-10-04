@@ -1,3 +1,4 @@
+import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -168,15 +169,11 @@ function statusIcon(status: string): LucideIcon {
   return LoaderCircle;
 }
 
-/** 毫秒 → 紧凑时长文案(与 AgentTaskCard 同口径;该实现未导出,此处内联)。 */
+/** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
 function formatDuration(ms: number | undefined): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSharedDuration(ms);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */

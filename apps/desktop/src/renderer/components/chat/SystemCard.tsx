@@ -1,3 +1,4 @@
+import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
@@ -770,7 +771,11 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   // post_tokens / duration_ms fields.
   const stats: string[] = [];
   if (saved > 0) stats.push(t('chat.systemCard.compact.savedTokens', { tokens: fmtTokens(saved) }));
-  if (durationMs > 0) stats.push(`${(durationMs / 1000).toFixed(1)}s`);
+  if (durationMs > 0) {
+    stats.push(durationMs >= 60_000
+      ? formatSharedDuration(durationMs)
+      : `${(durationMs / 1000).toFixed(1)}s`);
+  }
   const triggerLabel =
     trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
 
@@ -802,11 +807,7 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
  * 由 mapServerMessages 从持久化的 agentMeta.goalCompletion 派生(重开会话仍在)。
  */
 function fmtGoalDuration(ms: number): string {
-  const totalSec = Math.max(0, Math.round(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
+  return formatSharedDuration(ms, { minimumSeconds: 0 });
 }
 
 function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
@@ -1458,7 +1459,9 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
       <div className="flex items-center gap-2">
         <span className={cn(titleClass, 'mb-0')}>$ Shell</span>
         {statusChip}
-        <span className={cn(labelClass, 'text-12 ml-auto')}>{elapsedMs}ms</span>
+        <span className={cn(labelClass, 'text-12 ml-auto')}>
+          {elapsedMs >= 1000 ? formatSharedDuration(elapsedMs) : `${elapsedMs}ms`}
+        </span>
       </div>
 
       <pre className={cmdLineClass}>{cmdLine || '<empty>'}</pre>

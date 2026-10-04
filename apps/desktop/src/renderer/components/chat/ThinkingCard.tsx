@@ -1,3 +1,4 @@
+import { formatDuration } from '@cindy/maker-shared/message-render';
 /**
  * ThinkingCard
  * ---------------------------------------------------------------------------
@@ -65,16 +66,10 @@ interface ThinkingCardProps {
 }
 
 /**
- * Format ms as `Xs` for short durations, or `Xm Ys` for longer.
+ * Format ms with hours/days for long durations, always retaining minutes.
  * Exported for reuse by WorkGroupBlock (same display convention).
  */
-export function formatDuration(ms: number): string {
-  const totalSec = Math.max(1, Math.round(ms / 1000));
-  if (totalSec < 60) return `${totalSec}s`;
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
-}
+export { formatDuration };
 
 /** Shared body wrapper — left-railed container mirroring AgentActionsBlock. */
 function BodyRail({ children }: { children: React.ReactNode }) {

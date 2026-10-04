@@ -1,3 +1,4 @@
+import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
 import { Fragment, useEffect, useMemo, useCallback, useState } from 'react';
 import {
   AlertCircle,
@@ -114,11 +115,7 @@ function detailText(...values: Array<string | undefined>): string | undefined {
 function formatDuration(ms: number | undefined): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSharedDuration(ms);
 }
 
 function statusIcon(status: AgentTaskUpdate['status']) {

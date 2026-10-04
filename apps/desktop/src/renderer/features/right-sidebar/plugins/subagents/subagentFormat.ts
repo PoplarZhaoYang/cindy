@@ -1,3 +1,4 @@
+import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
 /**
  * Presentation helpers shared by the Subagent list and detail views.
  *
@@ -37,11 +38,7 @@ export function statusIcon(status: SubagentDisplayStatus): LucideIcon {
 
 export function formatDuration(ms: number | undefined): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
-  const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  return formatSharedDuration(ms);
 }
 
 export function providerLabel(provider: SubagentProvider): string {

@@ -1,3 +1,4 @@
+import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -11,19 +12,13 @@ const OUTPUT_TAIL_POLL_MS = 2000;
 /** 展开区最多显示的输出行数。 */
 export const OUTPUT_TAIL_MAX_LINES = 12;
 
-/**
- * 运行时长(ms)→ 紧凑展示,始终显示秒:`9s` / `5m 09s` / `2h 05m 09s`。
- * 秒(及小时档的分)补零两位,避免每秒 tick 时宽度抖动。
- */
+/** 运行时长折算小时、天后保留分钟,低位补零以保持计时宽度稳定。 */
 export function formatTaskElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const s = total % 60;
-  const m = Math.floor(total / 60) % 60;
-  const h = Math.floor(total / 3600);
-  const ss = String(s).padStart(2, '0');
-  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m ${ss}s`;
-  if (m > 0) return `${m}m ${ss}s`;
-  return `${s}s`;
+  return formatSharedDuration(Math.floor(ms / 1000) * 1000, {
+    minimumSeconds: 0,
+    alwaysShowRemainder: true,
+    padRemainder: true,
+  });
 }
 
 export function parseTaskTimestamp(value: string | undefined): number | undefined {
