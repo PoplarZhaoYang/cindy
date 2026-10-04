@@ -9639,6 +9639,10 @@
       "noFeedback": "(피드백 없음)",
       "cancelled": "취소됨"
     },
+    "thinking": {
+      "completed": "생각 {{duration}}",
+      "aborted": "생각 {{duration}} (중단됨)"
+    },
     "workGroup": {
       "working": "작업 중…",
       "worked": "{{duration}} 동안 작업함",

@@ -220,9 +220,9 @@ export function ThinkingCard({
 
   // ── Final / aborted variant ───────────────────────────────────────────
   // aborted 是 Codex 专属(turn_aborted 时 reasoning 提前结束),Claude 不传。
-  const summary = aborted
-    ? `Thought for ${formatDuration(durationMs ?? 0, t)} (aborted)`
-    : `Thought for ${formatDuration(durationMs ?? 0, t)}`;
+  const summary = t(aborted ? 'chat.thinking.aborted' : 'chat.thinking.completed', {
+    duration: formatDuration(durationMs ?? 0, t),
+  });
   return (
     <div data-render-item-key={renderItemKey} className="flex w-full justify-start">
       <div className="w-full">

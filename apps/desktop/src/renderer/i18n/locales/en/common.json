@@ -9652,6 +9652,10 @@
       "noFeedback": "(no feedback provided)",
       "cancelled": "Cancelled"
     },
+    "thinking": {
+      "completed": "Thought for {{duration}}",
+      "aborted": "Thought for {{duration}} (aborted)"
+    },
     "workGroup": {
       "working": "Working…",
       "worked": "Worked for {{duration}}",

@@ -9638,6 +9638,10 @@
       "noFeedback": "(未提供反饋)",
       "cancelled": "已取消"
     },
+    "thinking": {
+      "completed": "思考 {{duration}}",
+      "aborted": "思考 {{duration}}（已終止）"
+    },
     "workGroup": {
       "working": "正在工作…",
       "worked": "已工作 {{duration}}",
