@@ -23,7 +23,7 @@ describe('device detail project scope header layout', () => {
     const header = branch.slice(branch.indexOf('<SimpleStackHeader'), branch.indexOf('/>', branch.indexOf('titleTestID="deviceDetail.title"')));
 
     expect(branch).toContain('simpleScrollScreenSafeAreaEdges()');
-    expect(header).toMatch(/\n\s+scrollEdge\n/);
+    expect(header).toMatch(/^\s+scrollEdge\r?$/m);
   });
 
   it('renders the search entry inside the inset-adjusted list header', () => {
