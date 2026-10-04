@@ -4628,11 +4628,12 @@ export class DeviceLinkClient {
    * 对端在同一毫秒 ACK 超时,约 80s 后才自行恢复,期间手机持续显示「电脑端未响应」)。
    * 此时逐个复位 peer 无济于事,故障在连接层,恢复动作也应在连接层。
    *
-   * 判定刻意从严,只有同时满足才视为连接级故障:
+   * 重建连接会打断**每一个**已就绪 peer,所以必须每一个都拿得出卡死证据,判定刻意从严:
    * - 自本 peer 队头首发以来,没有收到**任何**对端转发来的帧(含 ACK);
-   * - 至少还有另一个已就绪 peer 的队头同样首发后无任何对端入站,且已经历过多轮重发。
-   * 只有一台休眠手机时条件不成立(其余 peer 要么没有待确认帧,要么在正常 ACK);
-   * 多台对端同时休眠且无其它对端有往来时,重连不会打扰任何仍在活动的 peer。
+   * - 其余每个已就绪 peer 都有队头,且同样首发后无任何对端入站、已经历过多轮重发;
+   * - 这样的其余 peer 至少一个(单 peer 时无从区分对端休眠与连接卡死)。
+   * 任一已就绪 peer 缺少证据(空闲无待确认帧,或正在正常 ACK)时,仍只复位本 peer:
+   * 两台手机同时休眠时,空闲但健康的第三个 peer 不会被连带断链。
    */
   private isRelayWideReliableStall(dst: string, peer: PeerTransportState): boolean {
     // 与首发同一时刻到达的入站帧不可能是对它的应答,所以取 <=。
@@ -4644,12 +4645,14 @@ export class DeviceLinkClient {
     const ownHead = peer.pending.values().next().value as PendingReliableMessage | undefined;
     if (!silentSince(ownHead)) return false;
     const minAttempts = Math.min(3, this.timing.transportMaxRetryAttempts);
+    let stalledOthers = 0;
     for (const [otherId, other] of this.peerTransport) {
       if (otherId === dst || !other.reliable || !this.isPeerSendReady(other)) continue;
       const head = other.pending.values().next().value as PendingReliableMessage | undefined;
-      if (silentSince(head) && head!.attempts >= minAttempts) return true;
+      if (!silentSince(head) || head!.attempts < minAttempts) return false;
+      stalledOthers += 1;
     }
-    return false;
+    return stalledOthers > 0;
   }
 
   /**
