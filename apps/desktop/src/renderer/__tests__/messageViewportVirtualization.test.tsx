@@ -90,7 +90,11 @@ beforeEach(() => {
   host = document.body.appendChild(document.createElement('div'));
   root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(async () => {
+  await act(async () => root.unmount());
+  document.getSelection()?.removeAllRanges();
+  host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+});
 describe('message viewport content virtualization', () => {
   it('initializes before the owner restores a precise reading offset', async () => {
     await act(async () => root.render(<Fixture restore restoreOffset={97} />));
@@ -227,6 +231,9 @@ describe('message viewport content virtualization', () => {
     } finally { await act(async () => { release(); releaseSecond(); }); }
   });
   it.each([{ ctrlKey: true }, { metaKey: true }])('exposes page text before native select-all with BODY focused: %j', async modifiers => {
+    // jsdom does not perform native select-all. Inspect the keydown commit
+    // before the later settlement task checks the browser's resulting selection.
+    vi.useFakeTimers();
     await act(async () => root.render(<Fixture />));
     await flushFrames();
     expect(document.activeElement).toBe(document.body);
@@ -235,6 +242,8 @@ describe('message viewport content virtualization', () => {
     })));
     expect(host.querySelectorAll('button').length).toBe(80);
     expect(scroller().scrollHeight - scroller().scrollTop - viewportHeight).toBe(0);
+    await act(async () => vi.runOnlyPendingTimers());
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
   });
   it.each(['input', 'textarea'])('leaves select-all in an editable %s alone', async tag => {
     await act(async () => root.render(<Fixture />));
@@ -243,6 +252,78 @@ describe('message viewport content virtualization', () => {
     input.focus();
     await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true })));
     expect(host.querySelectorAll('button').length).toBeLessThan(20);
+  });
+  it.each([false, true])('exposes offscreen controls before Tab enters from outside (reverse: %s), then releases on exit', async shiftKey => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const outside = host.appendChild(document.createElement('input'));
+    outside.focus();
+    expect(row(0).querySelector('button')).toBeNull();
+    await act(async () => {
+      outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+      // Assert during keydown, before the browser chooses its default target.
+      expect(row(0).querySelector('button')).not.toBeNull();
+      row(0).querySelector('button')!.focus();
+      vi.runOnlyPendingTimers();
+    });
+    expect(host.querySelectorAll('button')).toHaveLength(80);
+    await act(async () => { outside.focus(); vi.runOnlyPendingTimers(); });
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
+    // The row that was actually used keeps its state; untouched rows can unmount.
+    expect(row(0).querySelector('button')).not.toBeNull();
+    expect(row(1).hasAttribute('data-message-placeholder')).toBe(true);
+  });
+  it('releases a prevented external Tab that leaves focus outside the messages', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const outside = host.appendChild(document.createElement('input'));
+    outside.focus();
+    outside.addEventListener('keydown', event => event.preventDefault());
+    await act(async () => outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })));
+    await act(async () => vi.runOnlyPendingTimers());
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
+  });
+  it('releases select-all on selection collapse without moving the reading anchor', async () => {
+    vi.useFakeTimers();
+    await act(async () => root.render(<Fixture restore />));
+    const before = row(40).getBoundingClientRect().top;
+    await act(async () => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
+      const range = document.createRange(); range.selectNodeContents(scroller());
+      document.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+      vi.runOnlyPendingTimers();
+    });
+    expect(host.querySelectorAll('button')).toHaveLength(80);
+    await act(async () => { document.getSelection()!.removeAllRanges(); document.dispatchEvent(new Event('selectionchange')); });
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
+    expect(row(40).getBoundingClientRect().top).toBe(before);
+  });
+  it('preserves selections starting outside the stream and releases when they move outside', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    const outside = document.createElement('span'); outside.textContent = 'Outside'; host.prepend(outside);
+    await act(async () => {
+      const range = document.createRange(); range.setStart(outside.firstChild!, 0); range.setEndAfter(row(40));
+      document.getSelection()!.addRange(range); document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(host.querySelectorAll('button')).toHaveLength(80);
+    await act(async () => {
+      const range = document.createRange(); range.selectNodeContents(outside);
+      document.getSelection()!.removeAllRanges(); document.getSelection()!.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    expect(host.querySelectorAll('button').length).toBeLessThan(20);
+  });
+  it('keeps page-text access active when a selection ends, then releases independently', async () => {
+    await act(async () => root.render(<Fixture restore />));
+    let release = () => {};
+    try {
+      await act(async () => { release = acquirePageTextAccess(); });
+      await act(async () => document.dispatchEvent(new Event('selectionchange')));
+      expect(host.querySelectorAll('button')).toHaveLength(80);
+      await act(async () => release());
+      expect(host.querySelectorAll('button').length).toBeLessThan(20);
+    } finally { await act(async () => release()); }
   });
   it('mounts the bottom viewport and preserves full row geometry on first paint', async () => {
     await act(async () => root.render(<Fixture />));
@@ -371,6 +452,7 @@ describe('message viewport content virtualization', () => {
     expect(row(77).querySelector('button')).not.toBeNull();
   });
   it('exposes loaded rows for sharing and keyboard selection', async () => {
+    vi.useFakeTimers();
     await act(async () => root.render(<Fixture disabled />));
     expect(host.querySelectorAll('button').length).toBe(80);
     await act(async () => root.render(<Fixture />));
