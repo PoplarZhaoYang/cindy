@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const goalRows = vi.hoisted(() => ({ value: [] as Array<{ status: string }> }));
+const goalRows = vi.hoisted(() => ({
+  value: [] as Array<{ status: string; usageResetAt: number | null }>,
+}));
 const latestAssistant = vi.hoisted(() => ({ value: '' }));
 
 vi.mock('../../localDb/client/current.js', () => {
@@ -14,7 +16,7 @@ vi.mock('../../localDb/client/current.js', () => {
 });
 
 vi.mock('../../localDb/latestMessageText.js', () => ({
-  latestMessageText: vi.fn(async () => latestAssistant.value),
+  latestNonEmptyMessageText: vi.fn(async () => latestAssistant.value),
 }));
 
 import {
@@ -42,28 +44,42 @@ describe('goal inactive note', () => {
     expect(hasTrailingGoalVerdictBlock('')).toBe(false);
   });
 
-  it('目标不在运行且上一条回复带裁决块时才注入', () => {
-    for (const goalStatus of [
+  it('末尾围栏块的 reason 含花括号时也能认出', () => {
+    expect(
+      hasTrailingGoalVerdictBlock(
+        '已改好。\n\n```json\n{"goal_status":"continue","reason":"还要处理 {config} 段"}\n```\n',
+      ),
+    ).toBe(true);
+    expect(
+      hasTrailingGoalVerdictBlock(
+        '```json\n{"goal_status":"continue"}\n```\n\n示例:\n```ts\nconst a = {};\n```',
+      ),
+    ).toBe(false);
+  });
+
+  it('目标不再续跑且上一条回复带裁决块时才注入', () => {
+    const goal = (status: string, usageResetAt: number | null = null) => ({ status, usageResetAt });
+    for (const g of [
       null,
-      'paused',
-      'blocked',
-      'complete',
-      'budgetLimited',
-      'usageLimited',
+      goal('paused'),
+      goal('blocked'),
+      goal('budgetLimited'),
+      // 没有重置时刻的 usageLimited 不会自动恢复,停着等手动 resume。
+      goal('usageLimited'),
     ]) {
       expect(
-        shouldPrependGoalInactiveNote({ goalStatus, latestAssistantText: REPLY_WITH_VERDICT }),
+        shouldPrependGoalInactiveNote({ goal: g, latestAssistantText: REPLY_WITH_VERDICT }),
       ).toBe(true);
     }
-    expect(
-      shouldPrependGoalInactiveNote({
-        goalStatus: 'active',
-        latestAssistantText: REPLY_WITH_VERDICT,
-      }),
-    ).toBe(false);
-    expect(
-      shouldPrependGoalInactiveNote({ goalStatus: null, latestAssistantText: '普通回复' }),
-    ).toBe(false);
+    // active 正在续跑;带重置时刻的 usageLimited 会到点自动恢复,都不能说"不会自动继续"。
+    for (const g of [goal('active'), goal('usageLimited', 1_800_000_000_000)]) {
+      expect(
+        shouldPrependGoalInactiveNote({ goal: g, latestAssistantText: REPLY_WITH_VERDICT }),
+      ).toBe(false);
+    }
+    expect(shouldPrependGoalInactiveNote({ goal: null, latestAssistantText: '普通回复' })).toBe(
+      false,
+    );
   });
 
   it('说明要求停吐裁决块、不承诺自动续跑,并以用户消息边界收尾', () => {
@@ -77,10 +93,10 @@ describe('goal inactive note', () => {
     latestAssistant.value = REPLY_WITH_VERDICT;
     expect(await peekGoalInactiveNote('s1')).toBe(buildGoalInactiveNote());
 
-    goalRows.value = [{ status: 'active' }];
+    goalRows.value = [{ status: 'active', usageResetAt: null }];
     expect(await peekGoalInactiveNote('s1')).toBeNull();
 
-    goalRows.value = [{ status: 'paused' }];
+    goalRows.value = [{ status: 'paused', usageResetAt: null }];
     latestAssistant.value = '模型已不再输出裁决块。';
     expect(await peekGoalInactiveNote('s1')).toBeNull();
   });
