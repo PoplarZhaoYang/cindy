@@ -91,6 +91,37 @@ afterEach(() => {
 });
 
 describe('ComputerUseSection driver update completion', () => {
+  it.each(['response', 'rejection'])('labels a retained offer after a failed recheck (%s)', async (failure) => {
+    const { computer } = installApi();
+    render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.available: ${newVersion}`);
+    if (failure === 'response') computer.checkUpdate.mockResolvedValue({ ...offer, checkStatus: 'error' });
+    else computer.checkUpdate.mockRejectedValue(new Error('offline'));
+    fireEvent.click(screen.getByRole('button', { name: `${updateKey}.check` }));
+    await screen.findByText(`${updateKey}.checkFailed`);
+    expect(screen.getByText(`${updateKey}.previouslyAvailable: ${newVersion}`)).toBeTruthy();
+    expect(screen.queryByText(`${updateKey}.available: ${newVersion}`)).toBeNull();
+    expect((screen.getByRole('button', { name: `${updateKey}.action` }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: `${updateKey}.retry` })).toBeTruthy();
+  });
+
+  it('finishes local permission recovery even when the post-install network check is slow', async () => {
+    const { computer, setEnabled } = installApi(true);
+    const check = deferred<ComputerDriverUpdateCheck>();
+    render(<ComputerUseSection />);
+    await screen.findByText(`${updateKey}.available: ${newVersion}`);
+    computer.checkUpdate.mockReturnValue(check.promise);
+    computer.status.mockRejectedValue(new Error('permission probe unavailable'));
+    await clickUpdate();
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('computer', false));
+    expect(computer.status).toHaveBeenCalledWith({ forcePermissionProbe: true, freshPermissionProbe: true });
+    expect(toast.warning).toHaveBeenCalledWith('settings.computerUse.directControl.toast.permissionPending');
+    await screen.findByText(`${updateKey}.checking`);
+    expect(screen.getByText(`${versionKey}: ${newVersion}`)).toBeTruthy();
+    expect(screen.queryByText(`${updateKey}.updating`)).toBeNull();
+    await act(async () => { check.resolve(upToDate); });
+  });
+
   it('distinguishes reading the local version from checking for updates and shows the final result', async () => {
     const { computer } = installApi();
     const status = deferred<ComputerDriverStatus>();

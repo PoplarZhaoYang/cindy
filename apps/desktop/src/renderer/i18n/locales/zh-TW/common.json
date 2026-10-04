@@ -3965,6 +3965,7 @@
         "noProjectHint": "從專案任務中開啟「設定」可針對該專案開關直接電腦控制。",
         "update": {
           "available": "發現新版本 v{{version}}，更新後如系統權限失效需重新授權。",
+          "previouslyAvailable": "上次檢查發現 v{{version}}，安裝前會重新確認是否可用。",
           "readingVersion": "正在讀取版本…",
           "checking": "正在檢查更新…",
           "upToDate": "已是最新版本",

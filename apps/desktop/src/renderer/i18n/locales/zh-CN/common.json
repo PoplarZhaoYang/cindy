@@ -3965,6 +3965,7 @@
         "noProjectHint": "从项目任务中打开「设置」可针对该项目开关直接电脑控制。",
         "update": {
           "available": "发现新版本 v{{version}}，更新后如系统权限失效需重新授权。",
+          "previouslyAvailable": "上次检查发现 v{{version}}，安装前会重新确认是否可用。",
           "readingVersion": "正在读取版本…",
           "checking": "正在检查更新…",
           "upToDate": "已是最新版本",

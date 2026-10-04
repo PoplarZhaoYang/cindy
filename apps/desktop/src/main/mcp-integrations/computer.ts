@@ -3103,7 +3103,7 @@ function commitDriverUpdateCheck(
     cachedDriverUpdateCheck = {
       ...cachedDriverUpdateCheck,
       currentVersion: result.currentVersion,
-      updateAvailable: cachedDriverUpdateCheck.latestVersion !== null
+      updateAvailable: cachedDriverUpdateCheck.updateAvailable && cachedDriverUpdateCheck.latestVersion !== null
         && compareSemver(result.currentVersion, cachedDriverUpdateCheck.latestVersion) < 0,
       checkStatus: result.checkStatus,
       checkedAt: result.checkedAt,
@@ -3126,7 +3126,7 @@ function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerD
     const knownVerifiedTarget = cachedDriverUpdateCheck?.updateAvailable
       ? cachedDriverUpdateCheck.latestVersion
       : null;
-    const pending = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
+    const pending: Promise<Omit<ComputerDriverUpdateCheck, 'updating'>> = fetchDriverUpdateCheck(fetchImpl, new Set(), knownVerifiedTarget)
       .then((result) => {
         const completed = completedDriverUpdateCheck(result);
         // An installation can invalidate a check that started against the old binary.
@@ -3134,7 +3134,9 @@ function startDriverUpdateCheck(fetchImpl: typeof fetch): Promise<Omit<ComputerD
           commitDriverUpdateCheck(completed);
           return cachedDriverUpdateCheck!;
         }
-        return completed;
+        // Existing callers must also receive the post-install state, not only
+        // callers of a later check. Reuse the current check/cache when available.
+        return driverUpdateCheckInFlight ?? cachedDriverUpdateCheck ?? startDriverUpdateCheck(fetchImpl);
       })
       .finally(() => {
         if (driverUpdateCheckInFlight === pending) {

@@ -4451,6 +4451,16 @@ describe('computer driver update check', () => {
     }
   });
 
+  it('does not turn an unverified cached tag into an update after a local downgrade and network failure', async () => {
+    mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
+    await expect(checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch))
+      .resolves.toMatchObject({ latestVersion: '0.7.0', updateAvailable: false });
+    mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
+    const failedFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+    await expect(checkComputerDriverUpdate(failedFetch as unknown as typeof fetch, { force: true }))
+      .resolves.toMatchObject({ currentVersion: '0.5.8', updateAvailable: false, checkStatus: 'error' });
+  });
+
   it('keeps a newer verified target when its background probe transiently falls back', async () => {
     mockDriverSpawn({ stdout: 'cua-driver 0.10.0\n' });
     const initialFetch = vi
@@ -4599,7 +4609,7 @@ describe('computer driver update check', () => {
     expect(refreshedFetch).toHaveBeenCalled();
   });
 
-  it('does not restore the old offer when a pre-install background check finishes late', async () => {
+  it.each(['cached', 'pending', 'absent'])('returns post-install state to late check callers (new check: %s)', async (freshState) => {
     mockDriverSpawn({ stdout: 'cua-driver 0.5.8\n' });
     const fetchImpl = mockRefsThenReleaseFetch();
     await checkComputerDriverUpdate(fetchImpl as unknown as typeof fetch);
@@ -4611,10 +4621,11 @@ describe('computer driver update check', () => {
       let finishOldCheck!: (response: unknown) => void;
       const lateFetch = vi.fn()
         .mockImplementationOnce(() => new Promise((resolve) => { finishOldCheck = resolve; }))
-        .mockResolvedValue({
+        .mockResolvedValueOnce({
           ok: true,
           json: async () => ({ tag_name: 'cua-driver-rs-v0.7.0', assets: [currentPlatformReleaseAsset('0.7.0')] }),
-        });
+        })
+        .mockImplementation(mockRefsThenReleaseFetch());
       const oldCheck = checkComputerDriverUpdate(lateFetch as unknown as typeof fetch);
       await vi.waitFor(() => expect(lateFetch).toHaveBeenCalledOnce());
 
@@ -4624,11 +4635,21 @@ describe('computer driver update check', () => {
       await updateComputerDriver(undefined, { fetchImpl: fetchImpl as unknown as typeof fetch });
 
       mockDriverSpawn({ stdout: 'cua-driver 0.7.0\n' });
-      await expect(checkComputerDriverUpdate(mockRefsThenReleaseFetch() as unknown as typeof fetch))
-        .resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
+      let finishFreshCheck!: (response: unknown) => void;
+      const freshFetch = vi.fn().mockImplementation(() => new Promise((resolve) => { finishFreshCheck = resolve; }));
+      const freshCheck = freshState === 'absent' ? null : checkComputerDriverUpdate(
+        (freshState === 'cached' ? mockRefsThenReleaseFetch() : freshFetch) as unknown as typeof fetch,
+      );
+      if (freshState === 'cached') await freshCheck;
+      if (freshState === 'pending') await vi.waitFor(() => expect(freshFetch).toHaveBeenCalledOnce());
       finishOldCheck({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
-      await oldCheck;
-      expect(lateFetch).toHaveBeenCalledTimes(2);
+      if (freshState === 'pending') {
+        await vi.waitFor(() => expect(lateFetch).toHaveBeenCalledTimes(2));
+        finishFreshCheck({ ok: true, json: async () => [{ ref: 'refs/tags/cua-driver-rs-v0.7.0' }] });
+      }
+      await expect(oldCheck).resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
+      if (freshCheck) await expect(freshCheck).resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });
+      expect(lateFetch).toHaveBeenCalledTimes(freshState === 'absent' ? 3 : 2);
       const unusedFetch = vi.fn();
       await expect(checkComputerDriverUpdate(unusedFetch as unknown as typeof fetch))
         .resolves.toMatchObject({ currentVersion: '0.7.0', updateAvailable: false });

@@ -721,7 +721,6 @@ export function ComputerUseSection({
       // Publish the installed version and remove the old offer before probing
       // permissions. A slow/failed permission probe must not retain old versions.
       setDriverUpdate(null);
-      await refreshDriverUpdateCheck();
       if (!nextStatus?.installed || !computerUseSectionMountedRef.current) return;
       if (nextStatus.permissionState?.platform === 'macos') {
         const previousPermissionState = nextStatus.permissionState;
@@ -768,7 +767,11 @@ export function ComputerUseSection({
         toast.success(t('settings.computerUse.directControl.update.toast.success'));
       }
     } finally {
-      if (computerUseSectionMountedRef.current) setDriverUpdatePending(false);
+      if (computerUseSectionMountedRef.current) {
+        setDriverUpdatePending(false);
+        // Finish local permission recovery before starting the network check.
+        void refreshDriverUpdateCheck();
+      }
     }
   }, [computerEnabled, refreshDriverUpdateCheck, t]);
 
@@ -1637,7 +1640,9 @@ export function ComputerUseSection({
                         ·
                       </span>
                       <span className="text-11 text-[var(--settings-section-desc)]">
-                        {t('settings.computerUse.directControl.update.available', {
+                        {t(driverCheckFailed
+                          ? 'settings.computerUse.directControl.update.previouslyAvailable'
+                          : 'settings.computerUse.directControl.update.available', {
                           version: driverUpdate.latestVersion,
                         })}
                       </span>
