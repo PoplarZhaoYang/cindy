@@ -2461,12 +2461,91 @@ describe("remote desktop controls", () => {
     },
   );
 
+  it("does not retry a remembered fit that failed after the first frame", async () => {
+    // Another window size: the fit is reapplied only after the first frame.
+    await AsyncStorage.setItem(
+      "cindy.mobile.remote-desktop.resolution.v1.computer.display",
+      JSON.stringify({
+        kind: "fit",
+        width: 658,
+        height: 1280,
+        viewport: { width: 390, height: 760 },
+        window: { width: 600, height: 844 },
+      }),
+    );
+    // A reconnect gets a fresh lease, as on a real host.
+    let starts = 0;
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const request = args[2][0];
+      if (request.op === "start" && ++starts > 1)
+        return { ...(await original(...args)), lease: "lease-2" };
+      if (request.op === "capabilities")
+        return {
+          ...(await original(...args)),
+          viewerDisplay: true,
+          viewerDisplayRestore: true,
+          videoSettings: true,
+        };
+      if (request.op === "viewerDisplay")
+        throw Object.assign(new Error("DESKTOP_DISPLAY_MODE_FAILED"), {
+          code: "DESKTOP_DISPLAY_MODE_FAILED",
+        });
+      return original(...args);
+    });
+    const measured = () =>
+      sent().filter((message) => message.type === "measureViewport");
+    await connect();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(measured()).toHaveLength(1);
+    await act(async () =>
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "viewportSize",
+            epoch: "lease",
+            width: 390,
+            height: 760,
+          }),
+        },
+      }),
+    );
+    expect(
+      requests().filter((request) => request.op === "viewerDisplay"),
+    ).toHaveLength(1);
+    fixture.invoke.mockClear();
+    fixture.post.mockClear();
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+    });
+    act(() => {
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease-2"}' },
+      });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(starts).toBeGreaterThan(1);
+    expect(sent().find((message) => message.type === "init")).toMatchObject({
+      epoch: "lease-2",
+    });
+    expect(measured()).toEqual([]);
+    expect(
+      requests().filter((request) => request.op === "viewerDisplay"),
+    ).toEqual([]);
+  });
+
   it.each([
     ["control", "INVOKE_TIMEOUT", true],
     ["control", "DESKTOP_INPUT_BUSY", true],
     ["control", "DESKTOP_VIEW_ONLY", true],
+    // Refused before the host touched the display: the lease is kept.
+    ["viewerDisplay", "DESKTOP_VIEW_ONLY", true],
+    ["viewerDisplay", "DESKTOP_DISPLAY_BUSY", true],
     ["viewerDisplay", "DESKTOP_INPUT_BUSY", true],
-    ["viewerDisplay", "DESKTOP_VIEWER_DISPLAY_UNAVAILABLE", true],
+    // The host ends the lease when a sent change fails.
+    ["viewerDisplay", "DESKTOP_VIEWER_DISPLAY_UNAVAILABLE", false],
+    ["viewerDisplay", "DESKTOP_DISPLAY_MODE_FAILED", false],
     // The change may have happened: geometry is unknown, as for a manual fit.
     ["viewerDisplay", "INVOKE_TIMEOUT", false],
     ["viewerDisplay", "DESKTOP_LEASE_EXPIRED", false],
@@ -2512,6 +2591,25 @@ describe("remote desktop controls", () => {
       const init = sent().find((message) => message.type === "init");
       if (!keeps) {
         expect(init).toBeUndefined();
+        // The reconnect stays at the computer's own size and never retries
+        // the failed choice, so a persistent failure cannot loop.
+        fixture.invoke.mockClear();
+        fixture.post.mockClear();
+        await act(async () => vi.advanceTimersByTimeAsync(20_000));
+        await connect();
+        await act(async () => vi.advanceTimersByTimeAsync(0));
+        expect(
+          requests().filter((request) => request.op === "start").length,
+        ).toBeGreaterThan(0);
+        expect(sent().find((message) => message.type === "init")).toMatchObject(
+          { width: display.width, height: display.height },
+        );
+        expect(
+          requests().filter((request) => request.op === "viewerDisplay"),
+        ).toEqual([]);
+        expect(
+          sent().filter((message) => message.type === "measureViewport"),
+        ).toEqual([]);
         return;
       }
       // Same session at the current size; the after-frame path fits again.

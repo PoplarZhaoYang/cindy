@@ -1818,6 +1818,7 @@ export function RemoteDesktopSession({
               true,
               undefined,
               viewport,
+              true,
             );
           } else void fitViewerDisplay(message.width, message.height);
         }
@@ -2567,6 +2568,7 @@ export function RemoteDesktopSession({
     exactResolution = false,
     modeId?: string,
     viewport?: { width: number; height: number },
+    remembered = false,
   ) => {
     const current = active.current;
     if (
@@ -2689,6 +2691,8 @@ export function RemoteDesktopSession({
       if (active.current === current)
         applyConfirmedControl(current, control.controlling);
     } catch (cause) {
+      // A reconnect must not retry a remembered choice that just failed.
+      if (remembered) rememberedDisplayGaveUp.current = true;
       if (active.current === current) {
         setSettingNotice(t("remoteDesktop.settingFailed"));
         if ((cause as { code?: string })?.code === "INVOKE_TIMEOUT")
@@ -2707,23 +2711,31 @@ export function RemoteDesktopSession({
   // One early failure (for example a locked computer refusing the change)
   // leaves later connections in this screen to the after-frame path.
   const earlyDisplayFailed = useRef(false);
+  // A remembered change that failed once and rebuilt the connection is not
+  // retried in this screen, so a persistent failure cannot loop reconnects.
+  const rememberedDisplayGaveUp = useRef(false);
   // The early change is optional: a failure keeps the connection going and the
-  // after-frame path retries. Only an ended lease, or a display change whose
-  // reply was lost (geometry unknown, as for a manual change), rebuilds.
+  // after-frame path retries. Once the display change was sent, the host ends
+  // the lease on any failure except a refusal before touching the display;
+  // a lost reply leaves the geometry unknown, as for a manual change.
   const earlyDisplayFailureEndsConnection = (
     cause: unknown,
     displayChangeSent: boolean,
   ) => {
     const code = remoteDesktopErrorCode(cause);
+    if (code === "DESKTOP_LEASE_EXPIRED" || code === "DESKTOP_STOPPED")
+      return true;
     return (
-      code === "DESKTOP_LEASE_EXPIRED" ||
-      code === "DESKTOP_STOPPED" ||
-      (displayChangeSent && code === "INVOKE_TIMEOUT")
+      displayChangeSent &&
+      code !== "DESKTOP_VIEW_ONLY" &&
+      code !== "DESKTOP_DISPLAY_BUSY" &&
+      code !== "DESKTOP_INPUT_BUSY"
     );
   };
   applyRememberedDisplay.current = async (current, hostCaps, isCurrent) => {
     if (
       earlyDisplayFailed.current ||
+      rememberedDisplayGaveUp.current ||
       !hostCaps.canControl ||
       !wantsControl.current
     )
@@ -2791,8 +2803,10 @@ export function RemoteDesktopSession({
       if (
         isCurrent() &&
         earlyDisplayFailureEndsConnection(cause, displayChangeSent)
-      )
+      ) {
+        rememberedDisplayGaveUp.current = true;
         throw cause;
+      }
       return false;
     }
   };
@@ -2804,6 +2818,7 @@ export function RemoteDesktopSession({
       !frameReady ||
       !(caps?.resolutionRestore || caps?.viewerDisplay) ||
       fittedDisplay ||
+      rememberedDisplayGaveUp.current ||
       rememberedResolutionLease.current === current.lease
     )
       return;
@@ -2834,7 +2849,14 @@ export function RemoteDesktopSession({
       if (!caps?.resolutionRestore) return;
       const mode = findRememberedMode(await readResolutionModes(), remembered);
       if (!mode || mode.current || !unchanged()) return;
-      await fitViewerDisplay(mode.width, mode.height, true, mode.id);
+      await fitViewerDisplay(
+        mode.width,
+        mode.height,
+        true,
+        mode.id,
+        undefined,
+        true,
+      );
     })().catch(() => {});
   }, [
     controlReady,
