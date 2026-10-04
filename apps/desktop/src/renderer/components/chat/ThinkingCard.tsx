@@ -1,4 +1,5 @@
-import { formatDuration } from '@cindy/maker-shared/message-render';
+import { formatSessionDuration as formatDuration } from '@/lib/sessionDurationFormat';
+import { useTranslation } from 'react-i18next';
 /**
  * ThinkingCard
  * ---------------------------------------------------------------------------
@@ -95,6 +96,7 @@ export function ThinkingCard({
   aborted,
   blockKey,
 }: ThinkingCardProps) {
+  const { t } = useTranslation();
   // Live elapsed counter while streaming. Re-renders every 500ms.
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
@@ -186,7 +188,7 @@ export function ThinkingCard({
             </div>
             <div className="flex-1" />
             <span className="font-mono text-12 text-[var(--msg-tool-card-chevron)]">
-              {formatDuration(elapsedMs)}
+              {formatDuration(elapsedMs, t)}
             </span>
             <ChevronRight
               size={14}
@@ -219,8 +221,8 @@ export function ThinkingCard({
   // ── Final / aborted variant ───────────────────────────────────────────
   // aborted 是 Codex 专属(turn_aborted 时 reasoning 提前结束),Claude 不传。
   const summary = aborted
-    ? `Thought for ${formatDuration(durationMs ?? 0)} (aborted)`
-    : `Thought for ${formatDuration(durationMs ?? 0)}`;
+    ? `Thought for ${formatDuration(durationMs ?? 0, t)} (aborted)`
+    : `Thought for ${formatDuration(durationMs ?? 0, t)}`;
   return (
     <div data-render-item-key={renderItemKey} className="flex w-full justify-start">
       <div className="w-full">

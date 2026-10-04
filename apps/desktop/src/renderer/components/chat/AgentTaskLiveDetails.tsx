@@ -1,4 +1,5 @@
-import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -13,8 +14,8 @@ const OUTPUT_TAIL_POLL_MS = 2000;
 export const OUTPUT_TAIL_MAX_LINES = 12;
 
 /** 运行时长折算小时、天后保留分钟,低位补零以保持计时宽度稳定。 */
-export function formatTaskElapsed(ms: number): string {
-  return formatSharedDuration(Math.floor(ms / 1000) * 1000, {
+export function formatTaskElapsed(ms: number, t?: TFunction): string {
+  return formatSessionDuration(Math.floor(ms / 1000) * 1000, t, {
     minimumSeconds: 0,
     alwaysShowRemainder: true,
     padRemainder: true,
@@ -48,7 +49,7 @@ export function RunningElapsed({ startedAtMs }: { startedAtMs: number }) {
   const now = useNowTicker(true);
   return (
     <span data-agent-task-elapsed="running" className="tabular-nums">
-      {t('chat.agentTask.runningFor', { duration: formatTaskElapsed(now - startedAtMs) })}
+      {t('chat.agentTask.runningFor', { duration: formatTaskElapsed(now - startedAtMs, t) })}
     </span>
   );
 }
@@ -169,7 +170,7 @@ export function BackgroundCommandDetails({
               ? t('chat.agentTask.noOutputYet')
               : t('chat.agentTask.recentOutput', {
                   // 读取端算的 ageMs + 本机收到之后经过的时间:两段各自同一时钟,不跨设备相减。
-                  time: formatTaskElapsed(tail.ageMs + Math.max(0, now - snapshot.receivedAtMs)),
+                  time: formatTaskElapsed(tail.ageMs + Math.max(0, now - snapshot.receivedAtMs), t),
                 })}
           </p>
           {lines.length > 0 && (

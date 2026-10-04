@@ -1,4 +1,5 @@
-import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * BackgroundTasksBody —— 「后台任务」tab 的内容区。
  *
@@ -170,10 +171,10 @@ function statusIcon(status: string): LucideIcon {
 }
 
 /** 与 AgentTaskCard 共用长耗时换算,保留亚秒精度。 */
-function formatDuration(ms: number | undefined): string | undefined {
+function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
   if (ms < 1000) return `${ms}ms`;
-  return formatSharedDuration(ms);
+  return formatSessionDuration(ms, t);
 }
 
 /** workflow 行副标题:workflow_agent 条目 done/error 计数 / 总数。 */
@@ -307,7 +308,7 @@ function TaskRow({
       }
     }
     const usage = item.update?.usage;
-    const duration = formatDuration(usage?.durationMs);
+    const duration = formatDuration(usage?.durationMs, t);
     if (duration) parts.push(duration);
     if (typeof usage?.totalTokens === 'number') {
       parts.push(

@@ -1,4 +1,4 @@
-import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
 /**
@@ -6070,7 +6070,7 @@ function RunningStatusBar({
   // the icon answers "what is it doing right now".
   const isCompacting = typeof status === 'string' && status.toLowerCase().startsWith('compact');
 
-  const elapsedText = formatSharedDuration(elapsed * 1000, {
+  const elapsedText = formatSessionDuration(elapsed * 1000, t, {
     minimumSeconds: 0,
     alwaysShowRemainder: true,
   });

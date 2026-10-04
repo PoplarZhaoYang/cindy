@@ -1785,7 +1785,13 @@ export function formatDuration(
     minimumSeconds = 1,
     alwaysShowRemainder = false,
     padRemainder = false,
-  }: { minimumSeconds?: number; alwaysShowRemainder?: boolean; padRemainder?: boolean } = {},
+    formatLongDuration,
+  }: {
+    minimumSeconds?: number;
+    alwaysShowRemainder?: boolean;
+    padRemainder?: boolean;
+    formatLongDuration?: (parts: { days: number; hours: string; minutes: string }) => string;
+  } = {},
 ): string {
   const totalSec = Math.max(minimumSeconds, Math.round((Number.isFinite(ms) ? ms : 0) / 1000));
   if (totalSec < 60) return `${totalSec}s`;
@@ -1794,6 +1800,13 @@ export function formatDuration(
     const days = Math.floor(totalSec / 86_400);
     const hours = Math.floor((totalSec % 86_400) / 3_600);
     const minutes = Math.floor((totalSec % 3_600) / 60);
+    if (formatLongDuration) {
+      return formatLongDuration({
+        days,
+        hours: days > 0 ? formatRemainder(hours) : String(hours),
+        minutes: formatRemainder(minutes),
+      });
+    }
     return days > 0
       ? `${days}d ${formatRemainder(hours)}h ${formatRemainder(minutes)}m`
       : `${hours}h ${formatRemainder(minutes)}m`;

@@ -145,7 +145,7 @@ function formatCompactCard(data: Record<string, unknown> | undefined): SystemCar
     parts.push(i18n.t('message.systemCard.compact.savedTokens', { tokens: formatCompactTokens(preTokens - postTokens) }));
   }
   if (durationMs) {
-    parts.push(durationMs >= 60_000
+    parts.push(durationMs >= 3_600_000
       ? formatLocalizedDuration(durationMs)
       : `${(durationMs / 1000).toFixed(1)}s`);
   }

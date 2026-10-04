@@ -1,4 +1,4 @@
-import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 /**
  * Presentation helpers shared by the Subagent list and detail views.
  *
@@ -36,9 +36,9 @@ export function statusIcon(status: SubagentDisplayStatus): LucideIcon {
   return LoaderCircle;
 }
 
-export function formatDuration(ms: number | undefined): string | undefined {
+export function formatDuration(ms: number | undefined, t?: TFunction): string | undefined {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return undefined;
-  return formatSharedDuration(ms);
+  return formatSessionDuration(ms, t);
 }
 
 export function providerLabel(provider: SubagentProvider): string {
@@ -71,7 +71,7 @@ export function usageMetadata(
   options: { includeCost?: boolean } = {},
 ): string[] {
   const parts: string[] = [];
-  const duration = formatDuration(usage?.durationMs);
+  const duration = formatDuration(usage?.durationMs, t);
   if (duration) parts.push(duration);
   if (typeof usage?.totalTokens === 'number' && usage.totalTokens > 0) {
     parts.push(

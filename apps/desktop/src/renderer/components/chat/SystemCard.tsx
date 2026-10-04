@@ -1,4 +1,4 @@
-import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
+import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
 /**
@@ -772,9 +772,7 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   const stats: string[] = [];
   if (saved > 0) stats.push(t('chat.systemCard.compact.savedTokens', { tokens: fmtTokens(saved) }));
   if (durationMs > 0) {
-    stats.push(durationMs >= 60_000
-      ? formatSharedDuration(durationMs)
-      : `${(durationMs / 1000).toFixed(1)}s`);
+    stats.push(formatCompactionDuration(durationMs, t));
   }
   const triggerLabel =
     trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
@@ -806,10 +804,6 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
  * 它不是要读的信息面板,而是会话里的一条达成标记("目标已达成 · N 轮 · 耗时 X")。
  * 由 mapServerMessages 从持久化的 agentMeta.goalCompletion 派生(重开会话仍在)。
  */
-function fmtGoalDuration(ms: number): string {
-  return formatSharedDuration(ms, { minimumSeconds: 0 });
-}
-
 function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const turnsUsed = typeof data?.turnsUsed === 'number' ? data.turnsUsed : 0;
@@ -817,7 +811,7 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
   const reason = typeof data?.reason === 'string' ? data.reason : '';
   const label = t('goal.complete.record', {
     turns: turnsUsed,
-    duration: fmtGoalDuration(elapsedMs),
+    duration: formatSessionDuration(elapsedMs, t, { minimumSeconds: 0 }),
   });
 
   return (
@@ -1412,6 +1406,7 @@ export function SystemCard({
 // apps/desktop/src/main/commands/builtins.ts:CmdExecutionResult。
 
 function CmdCard({ data }: { data?: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const cmdLine = (data?.cmdLine as string) ?? '';
   const cwd = (data?.cwd as string) ?? '';
   const exitCode = (data?.exitCode as number) ?? -1;
@@ -1460,7 +1455,7 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
         <span className={cn(titleClass, 'mb-0')}>$ Shell</span>
         {statusChip}
         <span className={cn(labelClass, 'text-12 ml-auto')}>
-          {elapsedMs >= 1000 ? formatSharedDuration(elapsedMs) : `${elapsedMs}ms`}
+          {formatShellDuration(elapsedMs, t)}
         </span>
       </div>
 

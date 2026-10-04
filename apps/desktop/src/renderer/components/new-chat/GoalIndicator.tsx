@@ -1,4 +1,5 @@
-import { formatDuration as formatSharedDuration } from '@cindy/maker-shared/message-render';
+import type { TFunction } from 'i18next';
+import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { Button } from '@/components/ui/button';
 /**
  * GoalIndicator —— 会话内 /goal 进行中的状态 chip(composer 上方)。
@@ -32,8 +33,8 @@ function isAttentionStatus(status: GoalStatusPayload['status']): boolean {
 }
 
 /** 运行时长折算小时、天后保留分钟,低位补零以保持计时宽度稳定。 */
-function formatElapsed(ms: number): string {
-  return formatSharedDuration(Math.floor(ms / 1000) * 1000, {
+function formatElapsed(ms: number, t?: TFunction): string {
+  return formatSessionDuration(Math.floor(ms / 1000) * 1000, t, {
     minimumSeconds: 0,
     alwaysShowRemainder: true,
     padRemainder: true,
@@ -271,7 +272,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
           style={{ color: 'var(--text-tertiary)' }}
           title={t('goal.elapsedTooltip')}
         >
-          {formatElapsed(elapsedMs)}
+          {formatElapsed(elapsedMs, t)}
         </span>
       )}
       <GoalEditor sessionId={sessionId} goal={goal} />

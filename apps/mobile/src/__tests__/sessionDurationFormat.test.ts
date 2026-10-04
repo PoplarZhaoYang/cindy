@@ -6,14 +6,16 @@ import zhTW from '../i18n/locales/zh-TW/message.json';
 import ja from '../i18n/locales/ja/message.json';
 import ko from '../i18n/locales/ko/message.json';
 import { formatLocalizedDuration, formatLocalizedSeconds } from '../session/sessionDurationFormat';
+import { formatMobileSystemCard } from '../session/systemCard';
 
 // Exercise the real catalogs without loading native system-locale detection.
-const state = vi.hoisted(() => ({ renderer: {} as Record<string, string> }));
+const state = vi.hoisted(() => ({ catalog: {} as Record<string, unknown> }));
 vi.mock('@/i18n', () => ({
   i18n: {
     t(key: string, values: Record<string, number>) {
-      const template = state.renderer[key.replace('message.renderer.', '')];
-      if (!template) throw new Error(`Missing duration translation: ${key}`);
+      const template = key.replace(/^message\./, '').split('.').reduce<unknown>((node, part) =>
+        (node as Record<string, unknown>)[part], state.catalog);
+      if (typeof template !== 'string') throw new Error(`Missing duration translation: ${key}`);
       return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values[name]));
     },
   },
@@ -27,7 +29,7 @@ describe('localized task durations', () => {
     [ja, '21時間31分', '2日3時間4分', '1時間0分', '1日0時間0分'],
     [ko, '21시간 31분', '2일 3시간 4분', '1시간 0분', '1일 0시간 0분'],
   ] as const)('converts long durations using the catalog %#', (catalog, hours, days, hour, day) => {
-    state.renderer = catalog.renderer;
+    state.catalog = catalog;
     expect(formatLocalizedDuration(77_516_000)).toBe(hours);
     expect(formatLocalizedDuration(183_845_000)).toBe(days);
     expect(formatLocalizedDuration(3_599_600)).toBe(hour);
@@ -35,7 +37,7 @@ describe('localized task durations', () => {
   });
 
   it('preserves short-duration rounding and live zero values', () => {
-    state.renderer = en.renderer;
+    state.catalog = en;
     expect(formatLocalizedDuration(400)).toBe('1s');
     expect(formatLocalizedDuration(59_499)).toBe('59s');
     expect(formatLocalizedDuration(59_500)).toBe('1m');
@@ -48,5 +50,13 @@ describe('localized task durations', () => {
     expect(formatLocalizedSeconds(60, { alwaysShowSeconds: true })).toBe('1m 0s');
     expect(formatLocalizedSeconds(3_600, { alwaysShowSeconds: true })).toBe('1h 0m');
     expect(formatLocalizedSeconds(86_400, { alwaysShowSeconds: true })).toBe('1d 0h 0m');
+  });
+
+  it('keeps compaction tenths of a second below an hour in the actual system card', () => {
+    state.catalog = en;
+    expect(formatMobileSystemCard('compact', { durationMs: 1500 }).title).toBe('Auto compact · 1.5s');
+    expect(formatMobileSystemCard('compact', { durationMs: 75_500 }).title).toBe('Auto compact · 75.5s');
+    expect(formatMobileSystemCard('compact', { durationMs: 3_599_900 }).title).toBe('Auto compact · 3599.9s');
+    expect(formatMobileSystemCard('compact', { durationMs: 3_600_000 }).title).toBe('Auto compact · 1h 0m');
   });
 });
