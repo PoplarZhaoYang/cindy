@@ -2461,57 +2461,70 @@ describe("remote desktop controls", () => {
     },
   );
 
-  it("falls back to the after-frame path when the early display change fails", async () => {
-    await AsyncStorage.setItem(
-      "cindy.mobile.remote-desktop.resolution.v1.computer.display",
-      JSON.stringify({
-        kind: "fit",
-        width: 658,
-        height: 1280,
-        viewport: { width: 390, height: 760 },
-        window: { width: 390, height: 844 },
-      }),
-    );
-    let refuse = true;
-    const original = fixture.invoke.getMockImplementation()!;
-    fixture.invoke.mockImplementation(async (...args) => {
-      const request = args[2][0];
-      if (request.op === "capabilities")
-        return {
-          ...(await original(...args)),
-          viewerDisplay: true,
-          viewerDisplayRestore: true,
-          videoSettings: true,
-        };
-      if (request.op === "viewerDisplay") {
-        if (refuse) throw new Error("DESKTOP_VIEWER_DISPLAY_UNAVAILABLE");
-        return {
-          lease: "lease",
-          controlling: false,
-          display: { ...display, id: "virtual", width: 658, height: 1280 },
-        };
+  it.each([
+    ["control", "INVOKE_TIMEOUT", true],
+    ["control", "DESKTOP_INPUT_BUSY", true],
+    ["control", "DESKTOP_VIEW_ONLY", true],
+    ["viewerDisplay", "DESKTOP_INPUT_BUSY", true],
+    ["viewerDisplay", "DESKTOP_VIEWER_DISPLAY_UNAVAILABLE", true],
+    // The change may have happened: geometry is unknown, as for a manual fit.
+    ["viewerDisplay", "INVOKE_TIMEOUT", false],
+    ["viewerDisplay", "DESKTOP_LEASE_EXPIRED", false],
+  ] as const)(
+    "an early %s failure (%s) keeps the connection: %s",
+    async (failingOp, code, keeps) => {
+      await AsyncStorage.setItem(
+        "cindy.mobile.remote-desktop.resolution.v1.computer.display",
+        JSON.stringify({
+          kind: "fit",
+          width: 658,
+          height: 1280,
+          viewport: { width: 390, height: 760 },
+          window: { width: 390, height: 844 },
+        }),
+      );
+      let failures = 1;
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (...args) => {
+        const request = args[2][0];
+        if (request.op === "capabilities")
+          return {
+            ...(await original(...args)),
+            viewerDisplay: true,
+            viewerDisplayRestore: true,
+            videoSettings: true,
+          };
+        if (request.op === failingOp && failures > 0) {
+          failures--;
+          throw Object.assign(new Error(code), { code });
+        }
+        if (request.op === "viewerDisplay")
+          return {
+            lease: "lease",
+            controlling: false,
+            display: { ...display, id: "virtual", width: 658, height: 1280 },
+          };
+        return original(...args);
+      });
+      await connect();
+      await act(async () => vi.advanceTimersByTimeAsync(0));
+      expect(failures).toBe(0);
+      const init = sent().find((message) => message.type === "init");
+      if (!keeps) {
+        expect(init).toBeUndefined();
+        return;
       }
-      return original(...args);
-    });
-    await connect();
-    await act(async () => vi.advanceTimersByTimeAsync(0));
-    const ops = (op: string) =>
-      requests().filter((request) => request.op === op);
-    expect(ops("viewerDisplay")).toHaveLength(1);
-    expect(sent().some((message) => message.type === "init")).toBe(false);
-    refuse = false;
-    fixture.invoke.mockClear();
-    fixture.post.mockClear();
-    // The next attempt connects normally, then fits after the first frame.
-    await act(async () => vi.advanceTimersByTimeAsync(20_000));
-    await connect();
-    await act(async () => vi.advanceTimersByTimeAsync(0));
-    expect(ops("start").length).toBeGreaterThan(0);
-    expect(ops("viewerDisplay")).toEqual([]);
-    expect(
-      sent().filter((message) => message.type === "measureViewport"),
-    ).toHaveLength(1);
-  });
+      // Same session at the current size; the after-frame path fits again.
+      expect(init).toMatchObject({
+        width: display.width,
+        height: display.height,
+      });
+      expect(requests().filter((request) => request.op === "stop")).toEqual([]);
+      expect(
+        sent().filter((message) => message.type === "measureViewport"),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each([
     [false, 390, 760, 658, 1280],

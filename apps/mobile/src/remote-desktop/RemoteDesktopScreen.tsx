@@ -2707,6 +2707,20 @@ export function RemoteDesktopSession({
   // One early failure (for example a locked computer refusing the change)
   // leaves later connections in this screen to the after-frame path.
   const earlyDisplayFailed = useRef(false);
+  // The early change is optional: a failure keeps the connection going and the
+  // after-frame path retries. Only an ended lease, or a display change whose
+  // reply was lost (geometry unknown, as for a manual change), rebuilds.
+  const earlyDisplayFailureEndsConnection = (
+    cause: unknown,
+    displayChangeSent: boolean,
+  ) => {
+    const code = remoteDesktopErrorCode(cause);
+    return (
+      code === "DESKTOP_LEASE_EXPIRED" ||
+      code === "DESKTOP_STOPPED" ||
+      (displayChangeSent && code === "INVOKE_TIMEOUT")
+    );
+  };
   applyRememberedDisplay.current = async (current, hostCaps, isCurrent) => {
     if (
       earlyDisplayFailed.current ||
@@ -2731,6 +2745,7 @@ export function RemoteDesktopSession({
         remembered.window?.height !== Math.round(windowSize.height))
     )
       return false;
+    let displayChangeSent = false;
     try {
       let modeId: string | undefined;
       if (!fit) {
@@ -2748,6 +2763,7 @@ export function RemoteDesktopSession({
       }
       const control = await viewerSession.current.control(true);
       if (!isCurrent() || !control.controlling) return false;
+      displayChangeSent = true;
       await viewerSession.current.fitDisplay(
         remembered.width,
         remembered.height,
@@ -2769,7 +2785,15 @@ export function RemoteDesktopSession({
       return true;
     } catch (cause) {
       earlyDisplayFailed.current = true;
-      throw cause;
+      // Let the after-frame path reapply the choice for this lease.
+      if (rememberedResolutionLease.current === current.lease)
+        rememberedResolutionLease.current = null;
+      if (
+        isCurrent() &&
+        earlyDisplayFailureEndsConnection(cause, displayChangeSent)
+      )
+        throw cause;
+      return false;
     }
   };
   useEffect(() => {
