@@ -2,7 +2,16 @@
 
 2026-10-04，Windows，分支 `cindy/witty-feynman`。
 
-**结论：rebase 完成，本次改动的 dev 关键路径复测通过，未发现新增回归。整仓测试不是全绿：尚有 40 项失败，已逐项在同一 main 基线上复现。没有提交或推送。**
+**阶段结论：rebase 完成，dev 关键路径复测通过。下文保留当时的原始结果；其中 40 项失败及随后发现的 7 项原生集成失败已在后续修复，提交前状态见下面的补充记录。**
+
+## 提交前补充验证（2026-10-04）
+
+- 原 40 项失败逐项复测通过。修正 Windows 链接与路径写法、数据库测试夹具及过期源码断言，未删除或放宽产品行为断言。
+- Desktop unit：47,465 通过、148 既有跳过、0 失败；Desktop DB：1,896 通过、6 既有跳过、0 失败；maker-core unit：5,169 通过、37 既有跳过、0 失败。另有 guard 与行为定向回归 323 项通过。
+- 原生集成的 7 项失败全部通过：Claude 测试等待子进程实际关闭后再恢复或清理目录；Pi 旧版 API 路径遇到子任务缺少 settings.json 时使用默认设置，仅捕获 ENOENT，仍上抛权限错误与损坏配置。
+- 六个原生集成测试文件共 86 通过、11 既有跳过、0 失败（真实原生程序与本地模拟上游）；Pi bridge 相关回归 671 通过、4 既有跳过、0 失败。Desktop 和 maker-core 类型检查通过。
+- 这些是对受影响测试范围的后续复测，并非在最后一处修复后重新执行整仓默认矩阵。下文 dev 视觉验收对应消息渲染实现；后续产品代码仅修改 Pi bridge 的缺失配置处理。
+- 本机详细证据：`C:/Users/User/AppData/Local/Temp/cindy-baseline-test-fixes-P0fAwt/REPORT.html` 与 `C:/Users/User/AppData/Local/Temp/cindy-native-integration-b59e2a55/REPORT.html`；这些临时路径仅供本机核查，不是仓库附件。
 
 ## 版本与改动保护
 
