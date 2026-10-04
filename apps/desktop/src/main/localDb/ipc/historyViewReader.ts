@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { throwIpcError } from '../../utils/ipcValidate';
+import { isDeliveryProseText } from '@cindy/maker-shared/message-render';
 import {
   HISTORY_VIEW_PAGE_BYTES, HISTORY_VIEW_PAGE_ITEMS, HISTORY_DETAIL_PAGE_BYTES,
   projectHistoryView, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries, type HistoryMessageSource, type HistoryViewItem,
@@ -31,6 +32,14 @@ function firstId<T extends HistoryMessageSource>(item: HistoryViewItem<T>): stri
   return item.type === 'work' ? item.summary.firstMessageId : item.messages[0].id;
 }
 
+/** A progress seal can fold into later work; only a delivered answer is a stable cut. */
+function isHistoryPageBoundary(row: HistoryMessageSource): boolean {
+  if (row.role === 'user' || row.role === 'system') return true;
+  const meta = row.agentMeta as { parentUuid?: unknown; turnCompleted?: unknown } | null;
+  return row.role === 'assistant' && !meta?.parentUuid && meta?.turnCompleted === true
+    && typeof row.content === 'string' && isDeliveryProseText(row.content);
+}
+
 export function createHistoryViewReader<T extends HistoryMessageSource>(deps: HistoryViewReaderDependencies<T>) {
   let readRevision = 0;
   const readerEpoch = randomUUID();
@@ -54,6 +63,21 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       let items: HistoryViewItem<T>[] = [];
       let scannedRows = 0;
       let scannedBytes = 0;
+      const project = (live: T[]) => {
+        const boundary = exhausted ? 0 : raw.findIndex(isHistoryPageBoundary);
+        if (boundary < 0) return [];
+        // A page may start at a sealed answer. Keep that answer as right-hand
+        // context when reading the preceding page, or an older progress seal
+        // would become the "last answer" and escape its completed work group.
+        const context = beforeAnchor?.role === 'assistant'
+          && (beforeAnchor.agentMeta as { turnCompleted?: unknown } | null)?.turnCompleted === true
+          ? beforeAnchor : undefined;
+        const projected = projectHistoryView(
+          [...raw.slice(boundary), ...live, ...(context ? [context] : [])],
+          !before && deps.running(sessionId), lazyDetails,
+        );
+        return context ? projected.filter((item) => firstId(item) !== context.id) : projected;
+      };
       const unavailable = () => throwIpcError('UNSUPPORTED_CAPABILITY', 'History view scan budget exceeded');
       const liveRows = (stored: readonly T[]) => {
         const ids = new Set(stored.map((row) => row.clientId));
@@ -85,17 +109,18 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         cursor = next;
         chunks.push(rows.slice().reverse());
         exhausted = rows.length < batchSize;
-        if (!exhausted && !rows.some((row) => row.role === 'user' || row.role === 'system')) continue;
+        if (!exhausted && !rows.some(isHistoryPageBoundary)) continue;
         raw = chunks.slice().reverse().flat();
         const live = liveRows(raw);
-        const boundary = exhausted ? 0 : raw.findIndex((row) => row.role === 'user' || row.role === 'system');
-        items = boundary < 0 ? [] : projectHistoryView([...raw.slice(boundary), ...live], !before && deps.running(sessionId), lazyDetails);
-        if (exhausted || items.length >= HISTORY_VIEW_PAGE_ITEMS) break;
+        items = project(live);
+        // Large completed groups can fill the byte-limited page well before
+        // twenty items. Continuing to scan then only spends the scan budget.
+        if (exhausted || items.length >= HISTORY_VIEW_PAGE_ITEMS
+          || Buffer.byteLength(JSON.stringify(items), 'utf8') + 1024 >= HISTORY_VIEW_PAGE_BYTES) break;
       }
       raw = chunks.slice().reverse().flat();
       const live = liveRows(raw);
-      const boundary = exhausted ? 0 : raw.findIndex((row) => row.role === 'user' || row.role === 'system');
-      items = boundary < 0 ? [] : projectHistoryView([...raw.slice(boundary), ...live], !before && deps.running(sessionId), lazyDetails);
+      items = project(live);
       if (outlined) {
         // Select by visible objects before reading any hidden payloads. Every
         // hydrated row is rechecked against the current session/rewind epoch.

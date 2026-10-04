@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { throwIpcError } from '../../../utils/ipcValidate';
 import { createHistoryViewReader } from '../historyViewReader';
-import type { HistoryMessageSource } from '@cindy/maker-shared/message-window';
+import { projectHistoryView, type HistoryMessageSource, type HistoryViewItem } from '@cindy/maker-shared/message-window';
 function row(n: number, role = 'thinking'): HistoryMessageSource {
   return { id: String(n), clientId: `c${n}`, rowid: n, role, content: 'body '.repeat(200), createdAt: new Date(1700000000000 + n).toISOString() };
 }
@@ -171,6 +171,74 @@ describe('host history view', () => {
 });
 
 describe('history scan budget', () => {
+  it.each([
+    { outlined: false, streaming: false },
+    { outlined: true, streaming: false },
+    { outlined: true, streaming: true },
+  ])('pages completed deliveries without rescanning the entire automatic run ($outlined/$streaming)', async ({ outlined, streaming }) => {
+    let n = 0;
+    const source = [row(n++, 'user')];
+    for (let turn = 0; turn < 90; turn++) {
+      for (let step = 0; step < 50; step++) source.push({ ...row(n++), content: 'detail '.repeat(300) });
+      source.push({ ...row(n++, 'assistant'), content: 'Continuing', agentMeta: { turnCompleted: true } });
+      source.push(row(n++));
+      source.push({ ...row(n++, 'assistant'), content: '# Result\nDelivered', agentMeta: { turnCompleted: true } });
+    }
+    // An odd number of visible items makes a page start on the sealed answer,
+    // rather than always on its preceding group. The older page needs its seal.
+    source.push(row(n++, 'user'));
+    if (streaming) source.push(row(n++));
+    expect(Buffer.byteLength(JSON.stringify(source))).toBeGreaterThan(8 * 1024 * 1024);
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list,
+      ...(outlined ? { outline: base.list, hydrate: async (_sid: string, ids: string[]) => source.filter((r) => ids.includes(r.id)) } : {}),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => streaming });
+    const received: HistoryViewItem<HistoryMessageSource>[] = [];
+    let before: string | undefined;
+    let pages = 0;
+    do {
+      base.list.mockClear();
+      const page = await api.page('s', before, outlined);
+      expect(page.items.length).toBeGreaterThan(0);
+      expect(base.list.mock.calls.length).toBeLessThanOrEqual(outlined ? 2 : 10);
+      received.unshift(...page.items);
+      expect(page.nextCursor).not.toBe(before);
+      before = page.nextCursor ?? undefined;
+      expect(++pages).toBeLessThan(20);
+    } while (before);
+    const withoutRevision = (items: unknown) => JSON.parse(JSON.stringify(items, (key, value) => key === 'revision' ? undefined : value));
+    expect(withoutRevision(received)).toEqual(withoutRevision(projectHistoryView(source, streaming, outlined)));
+    expect(received.flatMap((item) => item.type === 'messages' ? item.messages : [])
+      .some((message) => message.content === 'Continuing')).toBe(false);
+  });
+
+  it('stops when delivered bytes fill a page even with fewer than twenty visible items', async () => {
+    let n = 0;
+    const source = [row(n++, 'user')];
+    for (let turn = 0; turn < 40; turn++) {
+      for (let step = 0; step < 99; step++) source.push(row(n++));
+      source.push({ ...row(n++, 'assistant'), content: '# Report\n' + 'x'.repeat(200000), agentMeta: { turnCompleted: true } });
+    }
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list, outline: base.list,
+      hydrate: async (_sid, ids) => source.filter((r) => ids.includes(r.id)),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    expect(base.list).toHaveBeenCalledTimes(1);
+    expect(page.items.length).toBeGreaterThan(1);
+    expect(page.items.length).toBeLessThan(20);
+    expect(page.hasMore).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1024 * 1024);
+  });
+
+  it.each(['progress', 'subagent'])('does not split work at a %s completion seal', async (kind) => {
+    const source = Array.from({ length: 2500 }, (_, n) => n % 50 === 0
+      ? { ...row(n, 'assistant'), content: kind === 'progress' ? 'Continuing' : '# Child report',
+          agentMeta: { turnCompleted: true, ...(kind === 'subagent' ? { parentUuid: 'child' } : {}) } }
+      : row(n));
+    await expect(reader(source).api.page('s')).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+  });
+
   it('returns a full visible page before scanning an older oversized work group', async () => {
     const older = Array.from({ length: 2500 }, (_, i) => row(i));
     const latest = Array.from({ length: 20 }, (_, i) => row(2500 + i, 'user'));
