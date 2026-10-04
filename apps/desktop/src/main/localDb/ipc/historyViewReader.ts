@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { throwIpcError } from '../../utils/ipcValidate';
 import { isDeliveryProseText } from '@cindy/maker-shared/message-render';
+import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import {
   HISTORY_VIEW_PAGE_BYTES, HISTORY_VIEW_PAGE_ITEMS, HISTORY_DETAIL_PAGE_BYTES,
   projectHistoryView, historySubagentScopes, mapHistoryViewMessages, historyWorkSummaries, type HistoryMessageSource, type HistoryViewItem,
@@ -40,6 +41,26 @@ function isHistoryPageBoundary(row: HistoryMessageSource): boolean {
     && typeof row.content === 'string' && isDeliveryProseText(row.content);
 }
 
+/** A suffix must retain the tool headers that establish its parent/result scope. */
+function cutsHistoryToolContext(rows: readonly HistoryMessageSource[], start: number, knownScopes?: ReadonlyMap<string, string>): boolean {
+  const tools = new Set<string>();
+  for (let i = start; i < rows.length; i++) {
+    if (rows[i].role !== 'tool_use') continue;
+    const id = parseMessageToolUse(rows[i]).toolUseId;
+    if (id) tools.add(id);
+  }
+  for (let i = start; i < rows.length; i++) {
+    const row = rows[i];
+    const parent = knownScopes ? knownScopes.get(row.id)
+      : (row.agentMeta as { parentUuid?: unknown } | null)?.parentUuid;
+    if (typeof parent === 'string' && parent && !tools.has(parent)) return true;
+    // Before reading the owning call, an orphan result could be a child row.
+    // Once scopes are known, ordinary main-task results may paginate normally.
+    if (!knownScopes && row.role === 'tool_result' && row.toolUseId && !tools.has(row.toolUseId)) return true;
+  }
+  return false;
+}
+
 export function createHistoryViewReader<T extends HistoryMessageSource>(deps: HistoryViewReaderDependencies<T>) {
   let readRevision = 0;
   const readerEpoch = randomUUID();
@@ -66,6 +87,10 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
       const project = (live: T[]) => {
         const boundary = exhausted ? 0 : raw.findIndex(isHistoryPageBoundary);
         if (boundary < 0) return [];
+        // Continue back to the owning headers instead of promoting orphan child
+        // rows to the main timeline at a newly introduced delivery boundary.
+        if (!exhausted && raw[boundary].role === 'assistant'
+          && cutsHistoryToolContext([...raw, ...live], boundary)) return [];
         // A page may start at a sealed answer. Keep that answer as right-hand
         // context when reading the preceding page, or an older progress seal
         // would become the "last answer" and escape its completed work group.
@@ -146,13 +171,22 @@ export function createHistoryViewReader<T extends HistoryMessageSource>(deps: Hi
         selected.unshift(items[index]);
         bytes += size;
       }
+      const hasMore = !exhausted || selected.length < items.length;
+      if (hasMore && selected.length) {
+        const rows = [...raw, ...live];
+        const start = rows.findIndex((row) => row.id === firstId(selected[0]));
+        // A deferred card can own rows newer than its own header. A cursor inside
+        // that span would lose them on the older page; use the existing raw path.
+        if (start >= 0 && cutsHistoryToolContext(rows, start, historySubagentScopes(rows))) {
+          throwIpcError('UNSUPPORTED_CAPABILITY', 'History page would split tool context');
+        }
+      }
       // A clear/rewind during the scan invalidates the whole snapshot, including
       // already-read rows. Never publish a prefix from the previous history epoch.
       // The cursor can also supply grouping context without appearing in raw.
       const anchors = raw.length ? [raw[0].id, raw[raw.length - 1].id] : [];
       if (beforeAnchor) anchors.push(beforeAnchor.id);
       await Promise.all(anchors.map((id) => deps.anchor(sessionId, id, outlined)));
-      const hasMore = !exhausted || selected.length < items.length;
       return { version: 1, items: selected, hasMore,
         nextCursor: hasMore && selected.length ? firstId(selected[0]) : null };
     },

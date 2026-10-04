@@ -298,6 +298,64 @@ describe('history scan budget', () => {
 
 
 describe('outline history reads', () => {
+  it('allows an ordinary main-task result to paginate separately from its call', async () => {
+    const source = [row(0, 'user'),
+      { ...row(1, 'tool_use'), toolUseId: 'main-call', content: { toolName: 'Bash', input: {} } },
+      ...Array.from({ length: 30 }, (_, i) => row(i + 2, 'user')),
+      { ...row(32, 'tool_result'), toolUseId: 'main-call' }];
+    const page = await reader(source).api.page('s', undefined, true);
+    expect(page.hasMore).toBe(true);
+    expect(page.items.at(-1)).toMatchObject({ type: 'work', summary: { lastMessageId: '32' } });
+  });
+
+  it.each([false, true])('keeps an Agent spanning deliveries intact (outlined=%s)', async (outlined) => {
+    let n = 0;
+    const source = [row(n++, 'user'),
+      { ...row(n++, 'tool_use'), toolUseId: 'a', content: { toolName: 'Agent', input: {} } },
+      { ...row(n++, 'tool_use'), toolUseId: 'b', content: { toolName: 'Agent', input: {} }, agentMeta: { parentUuid: 'a' } }];
+    for (let i = 0; i < 1200; i++) {
+      if (i % 300 === 0) source.push({ ...row(n++, 'assistant'), content: '# Result\nDelivered', agentMeta: { turnCompleted: true } });
+      source.push({ ...row(n++), agentMeta: { parentUuid: i % 2 ? 'a' : 'b' } });
+    }
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list,
+      ...(outlined ? { outline: base.list, hydrate: async (_sid: string, ids: string[]) => source.filter((r) => ids.includes(r.id)) } : {}),
+      anchor: async (_sid, id) => source.find((r) => r.id === id)!, running: () => false });
+    const page = await api.page('s', undefined, true);
+    const withoutRevision = (items: unknown) => JSON.parse(JSON.stringify(items, (key, value) => key === 'revision' ? undefined : value));
+    expect(withoutRevision(page.items)).toEqual(withoutRevision(projectHistoryView(source, false, true)));
+    expect(page.hasMore).toBe(false);
+    const card = page.items.find((item) => item.type === 'messages' && item.deferred?.parentToolUseId === 'a');
+    expect(card?.type === 'messages' && card.deferred?.messageCount).toBe(1201);
+  });
+
+  it.each([
+    { lazy: false, outlined: false, large: false },
+    { lazy: true, outlined: false, large: false },
+    { lazy: true, outlined: true, large: false },
+    { lazy: true, outlined: true, large: true },
+    { lazy: true, outlined: true, large: false, resultOnly: true },
+    { lazy: true, outlined: true, large: false, liveTail: true },
+  ])('falls back instead of cutting an Agent with the returned cursor ($lazy/$outlined/$large/$resultOnly/$liveTail)', async ({ lazy, outlined, large, resultOnly = false, liveTail = false }) => {
+    let n = 0;
+    const source = [row(n++, 'user'),
+      { ...row(n++, 'tool_use'), toolUseId: 'a', content: { toolName: 'Agent', input: {} } }];
+    if (resultOnly) source.push({ ...row(n++, 'tool_use'), toolUseId: 'child-call', content: { toolName: 'Bash', input: {} }, agentMeta: { parentUuid: 'a' } });
+    for (let i = 0; i < (large ? 6 : 30); i++) {
+      source.push(resultOnly || liveTail ? row(n++) : { ...row(n++), agentMeta: { parentUuid: 'a' } });
+      source.push({ ...row(n++, 'assistant'), content: '# Result\n' + 'x'.repeat(large ? 200000 : 10), agentMeta: { turnCompleted: true } });
+    }
+    const tail = resultOnly ? { ...row(n++, 'tool_result'), toolUseId: 'child-call' }
+      : { ...row(n++), agentMeta: { parentUuid: 'a' } };
+    const live = liveTail ? [{ ...tail, id: `history-live:${tail.clientId}` }] : [];
+    if (!liveTail) source.push(tail);
+    const base = reader(source);
+    const api = createHistoryViewReader({ list: base.list,
+      ...(outlined ? { outline: base.list, hydrate: async (_sid: string, ids: string[]) => source.filter((r) => ids.includes(r.id)) } : {}),
+      anchor: async (_sid, id) => [...source, ...live].find((r) => r.id === id)!, running: () => liveTail, live: () => live });
+    await expect(api.page('s', undefined, lazy)).rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' });
+  });
+
   it('reads visible bodies first across thousands of interleaved subagent rows, then pages only the expanded agent', async () => {
     const source = [row(0, 'user'),
       { ...row(1, 'tool_use'), toolUseId: 'a', content: { toolName: 'Agent', input: { description: 'A' } } },
