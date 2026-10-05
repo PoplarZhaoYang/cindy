@@ -272,6 +272,40 @@ describe('useRemoteSessionBackgroundTasks', () => {
     expect(result.current.stopping).toBe(false);
   });
 
+  it('停止回执迟到时同一会话的归属设备已变化:不清空新设备的提示,也不显示停止中', async () => {
+    mocks.devices = [
+      { deviceId: 'dev-1', connected: true },
+      { deviceId: 'dev-2', connected: true },
+    ];
+    mocks.activity.mockResolvedValue({ active: true });
+    let releaseStop!: () => void;
+    mocks.stopAll.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseStop = resolve)),
+    );
+    const { result, rerender } = renderHook(
+      ({ dev }) => useRemoteSessionBackgroundTasks('s1', dev, false),
+      { initialProps: { dev: 'dev-1' } },
+    );
+    await flush();
+    let stopPromise!: Promise<void>;
+    act(() => {
+      stopPromise = result.current.stopAll();
+    });
+    expect(result.current.stopping).toBe(true);
+
+    rerender({ dev: 'dev-2' });
+    await flush();
+    expect(result.current.active).toBe(true);
+    expect(result.current.stopping).toBe(false);
+
+    await act(async () => {
+      releaseStop();
+      await stopPromise;
+    });
+    expect(result.current.active).toBe(true);
+    expect(result.current.stopping).toBe(false);
+  });
+
   it('「全部停止」成功后,停止前发出的在途读取不会重新点亮提示', async () => {
     mocks.activity.mockResolvedValue({ active: true });
     const { result } = renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));
