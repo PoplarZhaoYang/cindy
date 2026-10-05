@@ -4484,8 +4484,13 @@ export default function NewRemoteSessionScreen() {
         throw new Error(t('session.outbox.recoveryTarget'));
       }
       if (recovering?.creation?.cancelled && previousRecovery?.creation
-        && effectiveDraft.workingDir === previousRecovery.creation.draft.workingDir) {
-        effectiveDraft = { ...effectiveDraft, workingDir: recovering.creation.draft.workingDir };
+        && effectiveDraft.workingDir === previousRecovery.creation.draft.workingDir
+        && effectiveDraft.workingDir !== recovering.creation.draft.workingDir) {
+        // Eligibility and branch preference belong to the old directory. Let the
+        // form probe the restored target before accepting another submission.
+        outboxRecoveryRef.current = recovering;
+        setDraft((current) => ({ ...current, workingDir: recovering.creation!.draft.workingDir }));
+        return;
       }
       const recoveryIdentity = recovering ? outboxCreationRetryIdentity(recovering, createNewSessionId) : null;
       const sessionId = recoveryIdentity?.sessionId ?? createNewSessionId();
@@ -4502,6 +4507,66 @@ export default function NewRemoteSessionScreen() {
           if (latest && !latest.prepared) await mobileDurableOutbox.update(latest, { suspended: false, state: 'queued' });
           throw new Error(t('session.outbox.taskAlreadyCreated'));
         }
+      }
+      // Preserve input and attachment bytes before reserving or creating a remote worktree.
+      const agentKindSnapshot = effectiveDraft.agentKind;
+      const deviceIdSnapshot = selectedDeviceId;
+      // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
+      const legacyPlanRestore = effectiveDraft.permissionMode === 'plan'
+        ? (() => {
+          const fallback = runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
+          const remembered = prePlanPermissionModeRef.current;
+          return remembered && remembered !== 'plan' ? remembered : fallback;
+        })()
+        : null;
+      if (!isCurrentOwner()) return;
+      releaseDurableCreation = holdDurableOutboxCreation(sessionId);
+      const firstMessageClientId = recovering?.item.clientId ?? createOutboxClientId();
+      // Legacy Plan requires a live session-wide permission change. Keep its existing
+      // online creation pipeline instead of introducing deferred permission mutations.
+      const useDurableCreation = legacyPlanRestore === null;
+      if (recovering && !useDurableCreation) throw new Error(t('session.outbox.legacyPlanRecovery'));
+      if (useDurableCreation) {
+        let firstRecord: DurableOutboxRecord = {
+          version: 1, accountId: authOwnerAtCreate.accountKey, deviceId: deviceIdSnapshot,
+          ...(recoveryIdentity ? { storageSessionId: recoveryIdentity.storageSessionId } : {}),
+          createdAt: recovering?.createdAt ?? Date.now(), state: 'queued', suspended: creatingWorktree, uploads: [], clearBoundaryMs: null,
+          creation: { draft: effectiveDraft, deviceName: selectedDeviceName,
+            ...(creatingWorktree ? { originalWorkingDir: effectiveDraft.workingDir } : {}),
+            planModeArm: planModeCapability && planModeDraftOn, restorePermissionMode: legacyPlanRestore },
+          item: buildOutboxItem({
+            clientId: firstMessageClientId, sessionId, text: effectiveDraft.firstMessage,
+            quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
+            permissionModeAtSend: effectiveDraft.permissionMode, readyAttachments: sendAttachments,
+            readyPreviews: sendAttachments.map((a) => attachmentPreviews[a.id] ?? null), claimedUploads: [],
+          }),
+        };
+        let filesCommitted = false;
+        try {
+          for (let slot = 0; slot < sendAttachments.length; slot++) {
+            const attachment = sendAttachments[slot];
+            const source = getUploadedSource(attachment.id);
+            const oldSlot = recovering?.item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
+            const oldUpload = recovering?.uploads.find((u) => u.slot === oldSlot);
+            if (source) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, source));
+            else if (recovering && oldUpload) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, {
+              ...oldUpload, uri: durableOutboxUploadUri(recovering, oldUpload),
+            }));
+            else if (outboxAttachmentNeedsLocalBytes(attachment)) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
+          }
+          if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+          if (recovering) {
+            const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === recovering.item.sessionId);
+            if (latest !== recovering || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
+            firstRecord = await mobileDurableOutbox.update(latest, firstRecord);
+          } else await mobileDurableOutbox.add(firstRecord);
+          filesCommitted = true;
+        } finally {
+          if (!filesCommitted) await removeRetainedOutboxFiles(firstRecord).catch(() => undefined);
+        }
+        outboxRecoveryRef.current = firstRecord;
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+        releaseUploadedSources(sendAttachments.map((a) => a.id));
       }
       let precreatedWorktree: {
         path: string;
@@ -4661,64 +4726,14 @@ export default function NewRemoteSessionScreen() {
           return;
         }
       }
-      const agentKindSnapshot = effectiveDraft.agentKind;
-      const deviceIdSnapshot = selectedDeviceId;
-      // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
-      const legacyPlanRestore = effectiveDraft.permissionMode === 'plan'
-        ? (() => {
-          const fallback = runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
-          const remembered = prePlanPermissionModeRef.current;
-          return remembered && remembered !== 'plan' ? remembered : fallback;
-        })()
-        : null;
-      if (!isCurrentOwner()) return;
-      releaseDurableCreation = holdDurableOutboxCreation(sessionId);
-      const firstMessageClientId = recovering?.item.clientId ?? createOutboxClientId();
-      // Legacy Plan requires a live session-wide permission change. Keep its existing
-      // online creation pipeline instead of introducing deferred permission mutations.
-      const useDurableCreation = legacyPlanRestore === null;
-      if (recovering && !useDurableCreation) throw new Error(t('session.outbox.legacyPlanRecovery'));
-      if (useDurableCreation) {
-        const firstRecord: DurableOutboxRecord = {
-          version: 1, accountId: authOwnerAtCreate.accountKey, deviceId: deviceIdSnapshot,
-          ...(recoveryIdentity ? { storageSessionId: recoveryIdentity.storageSessionId } : {}),
-          createdAt: recovering?.createdAt ?? Date.now(), state: 'queued', suspended: false, uploads: [], clearBoundaryMs: null,
-          creation: { draft: effectiveDraft, deviceName: selectedDeviceName,
-            ...(precreatedWorktree ? { originalWorkingDir: precreatedWorktree.originalWorkingDir } : {}),
-            planModeArm: planModeCapability && planModeDraftOn, restorePermissionMode: legacyPlanRestore },
-          item: buildOutboxItem({
-            clientId: firstMessageClientId, sessionId, text: effectiveDraft.firstMessage,
-            quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
-            permissionModeAtSend: effectiveDraft.permissionMode, readyAttachments: sendAttachments,
-            readyPreviews: sendAttachments.map((a) => attachmentPreviews[a.id] ?? null), claimedUploads: [],
-          }),
-        };
-        let filesCommitted = false;
-        try {
-          for (let slot = 0; slot < sendAttachments.length; slot++) {
-            const attachment = sendAttachments[slot];
-            const source = getUploadedSource(attachment.id);
-            const oldSlot = recovering?.item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
-            const oldUpload = recovering?.uploads.find((u) => u.slot === oldSlot);
-            if (source) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, source));
-            else if (recovering && oldUpload) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, {
-              ...oldUpload, uri: durableOutboxUploadUri(recovering, oldUpload),
-            }));
-            else if (outboxAttachmentNeedsLocalBytes(attachment)) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
-          }
-          if (!isCurrentOwner() || !ensureDeviceAlive()) return;
-          if (recovering) {
-            const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === recovering.item.sessionId);
-            if (latest !== recovering || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
-            await mobileDurableOutbox.update(latest, firstRecord);
-          } else await mobileDurableOutbox.add(firstRecord);
-          filesCommitted = true;
-        } finally {
-          if (!filesCommitted) await removeRetainedOutboxFiles(firstRecord).catch(() => undefined);
-        }
-        outboxRecoveryRef.current = firstRecord;
+      if (useDurableCreation && precreatedWorktree) {
+        const current = outboxRecoveryRef.current;
+        if (!current?.creation || current.item.sessionId !== sessionId) throw new Error('OUTBOX_STALE_WRITE');
+        const updated = await mobileDurableOutbox.update(current, {
+          creation: { ...current.creation, draft: effectiveDraft }, suspended: false,
+        });
+        outboxRecoveryRef.current = updated;
         if (!isCurrentOwner() || !ensureDeviceAlive()) return;
-        releaseUploadedSources(sendAttachments.map((a) => a.id));
       }
       // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并

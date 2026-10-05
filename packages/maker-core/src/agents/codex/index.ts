@@ -5142,7 +5142,7 @@ assertRouteCurrent();
     })();
     const hostGeneration = this.hostGenerations.get(currentHostKey) ?? 0;
     const capturedHostWasRegistered = this.hosts.get(currentHostKey) === host;
-    const retireSingleSessionHost = async (): Promise<void> => {
+    const retireSingleSessionHost = async (throwOnShutdownFailure = accountSessionHost): Promise<void> => {
       if (!reviewMode && !usesCustomContextHost && !accountSessionHost && !sessionSqliteHome) return;
       const purpose = reviewMode ? 'Review' : accountSessionHost ? 'account' : 'custom context';
       const reason = `Cindy ${purpose} host is single-session`;
@@ -5151,9 +5151,9 @@ assertRouteCurrent();
         logPrefix: `codex ${purpose.toLowerCase()} host cleanup`,
         ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
         expectedGeneration: hostGeneration,
-        throwOnShutdownFailure: accountSessionHost,
+        throwOnShutdownFailure,
       }).catch((error) => {
-        if (accountSessionHost) throw error;
+        if (throwOnShutdownFailure) throw error;
         log.warn(`${purpose} host retire failed`, {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -5162,11 +5162,11 @@ assertRouteCurrent();
     if (usesCustomContextHost || accountSessionHost) {
       registerFailedCustomContextStartupCleanup(async () => {
         releaseHostBindingLeaseIfNeeded();
-        await retireSingleSessionHost();
+        await retireSingleSessionHost(true);
         // retireHostKey may skip an already-replaced generation, or preserve a
         // shutdown error for retry. Only confirmed retirement of our captured
         // host may authorize releasing this startup's workdir guard.
-        await host.retire('Codex isolated startup failed');
+        await host.retire('Codex isolated startup failed', { throwOnTransportError: true });
       });
     }
     startup.cleanup = async () => {

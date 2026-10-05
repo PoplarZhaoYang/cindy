@@ -35172,23 +35172,33 @@ describe('CodexAgent custom provider context window override', () => {
     await agent.dispose();
   });
 
-  it('never reports stopped when the isolated startup transport fails to retire', async () => {
+  it.each([
+    ['account', Method.Initialize], ['custom-context', Method.Initialize],
+    ['account', Method.ThreadStart], ['custom-context', Method.ThreadStart],
+  ])('never reports stopped when the %s startup transport fails to retire after %s fails', async (kind, method) => {
     MockCodexTransport.onCreate = (transport) => {
-      transport.setMockResponse(Method.Initialize, {
-        error: { code: -32_000, message: 'initialize boom' },
+      transport.setMockResponse(method, {
+        error: { code: -32_000, message: 'startup boom' },
       });
     };
     MockCodexTransport.closeError = new Error('shutdown unconfirmed');
     const agent = new CodexAgent(createDeps({}, {
-      isCodexAccountProvider: (id) => id === 'account-a',
+      ...(kind === 'account'
+        ? { isCodexAccountProvider: (id?: string | null) => id === 'account-a' }
+        : { resolveCodexThreadContextWindow: () => 700_000 }),
+      prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
     }));
     const failure = await agent.startSession({
       sessionId: 'failed-isolated-start', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo',
     }).catch((error) => error);
     expect(failure).toBeInstanceOf(Error);
+    expect(failure).toBe(MockCodexTransport.closeError);
     expect(failure).not.toBeInstanceOf(AgentStartupStoppedError);
+    expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(1);
     MockCodexTransport.closeError = null;
     await agent.dispose();
+    expect(createdTransports[0]?.closed).toBe(true);
+    expect((agent as unknown as { retiringHosts: Map<string, unknown> }).retiringHosts.size).toBe(0);
   });
 
   it('releases the failed account startup without interrupting another live host', async () => {
