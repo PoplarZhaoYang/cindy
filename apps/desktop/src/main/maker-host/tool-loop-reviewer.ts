@@ -148,9 +148,10 @@ function describeEvidence(evidence: readonly ToolLoopEvidence[]): string {
 }
 
 export function buildToolLoopReviewPrompt(request: ToolLoopReviewRequest): string {
-  const { reason, count, toolName } = request.verdict;
+  // 信号行只放 maker-core 产生的枚举与计数;工具名由模型产生,只在证据块内经转义出现。
+  const { reason, count } = request.verdict;
   return [
-    `Detector signal: ${reason} (count ${count}, latest tool ${toolName}).`,
+    `Detector signal: ${reason} (count ${count}).`,
     `Recent tool calls, oldest first (t = seconds since the first listed call):`,
     '<tool_calls>',
     describeEvidence(request.evidence),
