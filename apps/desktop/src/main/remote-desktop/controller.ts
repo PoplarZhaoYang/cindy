@@ -820,8 +820,8 @@ export class RemoteDesktopController {
       }
       case 'control': {
         if (this.locking) throw new Error('DESKTOP_BUSY');
-        if (request.enabled) this.setBackgroundViewing(active, false);
         if (request.enabled && this.inputStarting) throw new Error('DESKTOP_INPUT_BUSY');
+        if (request.enabled) this.setBackgroundViewing(active, false);
         if (!request.enabled) {
           await this.revokeControl();
           return { controlling: active.controlling };

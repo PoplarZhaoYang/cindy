@@ -248,7 +248,8 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
         const tune = () =>
           updateVideoSenders((parameters) => {
             const limits = desktopEncoderLimits(command.settings!, background);
-            const degradation = moving ? limits.degradation : 'maintain-resolution';
+            const degradation =
+              moving || !limits.sharpWhenStill ? limits.degradation : 'maintain-resolution';
             let changed = parameters.degradationPreference !== degradation;
             parameters.degradationPreference = degradation;
             for (const encoding of parameters.encodings) {
@@ -314,7 +315,8 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
               if (current === generation) latestCursor = value;
             },
             command.cursorOverlay || command.continuousNativeCapture ? fps : 15,
-            command.settings && profile.sharpWhenStill ? onMotion : undefined,
+            // Any tier may become the saver tier in the background, so motion is always tracked.
+            command.settings ? onMotion : undefined,
           );
           if (current !== generation) {
             result.stop();
@@ -459,6 +461,9 @@ export function startDesktopCaptureHost(api: DesktopCaptureApi): () => void {
           let requests = 0;
           let challenge = '';
           heartbeat = setInterval(() => {
+            // Encoder ceilings follow state, not events: an update the encoder
+            // rejected converges here, and a matching encoder is left untouched.
+            if (current === generation) void applyEncoder?.();
             // Keep one outstanding challenge until its reply arrives. The host
             // lease bounds silence; replacing it here rejects valid slow pongs.
             if (channel.readyState !== 'open' || current !== generation || challenge) return;

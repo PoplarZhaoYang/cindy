@@ -47,11 +47,13 @@ describe('remote desktop quality tiers', () => {
       maxBitrate: 20_000_000,
       maxFramerate: 60,
       degradation: 'maintain-resolution',
+      sharpWhenStill: false,
     });
     expect(desktopEncoderLimits(hd, true)).toEqual({
       maxBitrate: 2_000_000,
       maxFramerate: 30,
       degradation: 'maintain-framerate',
+      sharpWhenStill: true,
     });
     expect(hd.quality).toBe('hd');
     const saver = { fps: 30, quality: 'saver', audio: false } as const;

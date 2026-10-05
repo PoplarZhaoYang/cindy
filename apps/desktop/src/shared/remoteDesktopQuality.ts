@@ -90,12 +90,14 @@ export function desktopVideoFramerate(settings?: RemoteDesktopVideoSettings): 30
 export function desktopEncoderLimits(
   settings: RemoteDesktopVideoSettings,
   background: boolean,
-): Pick<DesktopVideoProfile, 'maxBitrate' | 'degradation'> & { maxFramerate: 30 | 60 } {
+): Pick<DesktopVideoProfile, 'maxBitrate' | 'degradation' | 'sharpWhenStill'> & {
+  maxFramerate: 30 | 60;
+} {
   const tier: RemoteDesktopVideoSettings = background
     ? { ...settings, quality: 'saver' }
     : settings;
-  const { maxBitrate, degradation } = desktopVideoProfile(tier);
-  return { maxBitrate, degradation, maxFramerate: desktopVideoFramerate(tier) };
+  const { maxBitrate, degradation, sharpWhenStill } = desktopVideoProfile(tier);
+  return { maxBitrate, degradation, sharpWhenStill, maxFramerate: desktopVideoFramerate(tier) };
 }
 
 const BITRATE_HINTS = ['x-google-start-bitrate', 'x-google-min-bitrate', 'x-google-max-bitrate'];
