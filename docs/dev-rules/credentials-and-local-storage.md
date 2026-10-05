@@ -141,6 +141,8 @@ Claude.ai 登录，也不得收集、存储或中转订阅凭证。Cindy 因此�
 | 数据性质 | 正确位置 |
 |---|---|
 | Cindy 管理的持久数据 | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录 |
+| 预创建 worktree 的取消标记 | `userData/worktree-cancelled-creations/<sessionId 的 SHA-256>`，空文件原子排他创建；不含路径、草稿或关联密钥。保留以拒绝重启后迟到的创建请求，不按超时删除。只在核实未被任务认领后写入 |
+| Mobile 已取消创建的草稿 | 复用账号隔离的 durable outbox；`creation.cancelled` 与原项目目录先持久写入，再忘记回收账本。重建使用新远端 ID，`storageSessionId` 保持原 AsyncStorage 键和附件目录，通过单次记录写入提交；写入失败时原草稿仍可读 |
 | 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
 | 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
 | Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |

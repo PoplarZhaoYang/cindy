@@ -1,4 +1,6 @@
 import { modelNeedsReselection } from '@/session/modelReselection';
+import { completePrecreatedWorktreeRecovery } from '@/session/completePrecreatedWorktreeRecovery';
+import { outboxCreationRetryIdentity } from '@/session/cancelledCreationDraft';
 import { isRemoteTaskSuggestionId } from '@/session/remoteTaskSuggestionsModel';
 import { mobileDurableOutbox, holdDurableOutboxCreation, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
@@ -4412,11 +4414,10 @@ export default function NewRemoteSessionScreen() {
         },
       });
       const worktreeAccountId = authOwnerAtCreate.accountId;
-      if (
-        worktreeIntent.applicable
+      const creatingWorktree = worktreeIntent.applicable
         && worktreeIntent.enabled
-        && worktreeIntent.eligibility.status === 'eligible'
-      ) {
+        && worktreeIntent.eligibility.status === 'eligible';
+      if (creatingWorktree || outboxRecoveryRef.current) {
         // 两步创建必须先有可归属的账号账本。不能先在工作端落盘，再发现本地
         // 无法按账号持久化 cleanup obligation。
         if (!worktreeAccountId) {
@@ -4435,6 +4436,10 @@ export default function NewRemoteSessionScreen() {
           discardPrecreated: async (_deviceId, input) => (
             maker.worktree.discardPrecreated(input)
           ),
+          cancelPrecreated: maker.worktree.cancelPrecreated
+            ? async (_deviceId, input) => maker.worktree.cancelPrecreated!(input)
+            : undefined,
+          onDiscarded: completePrecreatedWorktreeRecovery,
           isSessionClaimed: async (_deviceId, pendingSessionId) => (
             isExactRemoteSessionClaimed(
               pendingSessionId,
@@ -4443,6 +4448,7 @@ export default function NewRemoteSessionScreen() {
           ),
           shouldDefer: (record) => (
             record.deviceId !== selectedDeviceId
+            || (!creatingWorktree && record.sessionId !== outboxRecoveryRef.current?.item.sessionId)
             || obligationOwnedByLiveTask(record.sessionId)
           ),
           isCurrent: isCurrentOwner,
@@ -4457,7 +4463,7 @@ export default function NewRemoteSessionScreen() {
           setError(t('session.new.worktreeCleanupPending'));
           return;
         }
-        if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
+        if (creatingWorktree && !isWorktreeCreateIntentCurrent(worktreeIntent)) {
           setError(t(resolveWorktreeCreateErrorKey()));
           return;
         }
@@ -4466,21 +4472,33 @@ export default function NewRemoteSessionScreen() {
       // 幂等),点创建**立即**进入会话页;openLink / 鉴权 revalidate / createSession
       // / 首条消息 enqueue 全部由 newSessionCreation 模块级后台管线完成(本页
       // unmount 不终止),失败重试面在会话页(横幅:重试 / 返回编辑)。
-      const recovering = outboxRecoveryRef.current;
+      // Recovery may have cancelled this creation while the editor was already open.
+      const previousRecovery = outboxRecoveryRef.current;
+      const recovering = previousRecovery
+        ? getCurrentMobileOutboxRecords().find((r) => r.deviceId === previousRecovery.deviceId
+          && r.item.clientId === previousRecovery.item.clientId
+          && r.item.sessionId === previousRecovery.item.sessionId)
+        : null;
+      if (previousRecovery && !recovering) throw new Error('OUTBOX_STALE_WRITE');
       if (recovering && recovering.deviceId !== selectedDeviceId) {
         throw new Error(t('session.outbox.recoveryTarget'));
       }
-      const sessionId = recovering?.item.sessionId ?? createNewSessionId();
+      if (recovering?.creation?.cancelled && previousRecovery?.creation
+        && effectiveDraft.workingDir === previousRecovery.creation.draft.workingDir) {
+        effectiveDraft = { ...effectiveDraft, workingDir: recovering.creation.draft.workingDir };
+      }
+      const recoveryIdentity = recovering ? outboxCreationRetryIdentity(recovering, createNewSessionId) : null;
+      const sessionId = recoveryIdentity?.sessionId ?? createNewSessionId();
       if (recovering) {
         // Editing creation parameters is allowed only after the original task is proven absent.
         let found = false;
-        try { found = !!(await maker.getSession(sessionId)); }
+        try { found = !!(await maker.getSession(recovering.item.sessionId)); }
         catch (error) {
           if (!formatRemoteError(error).includes('NOT_FOUND')) throw error;
         }
         if (!isCurrentOwner()) return;
         if (found) {
-          const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === recovering.item.clientId && r.item.sessionId === sessionId);
+          const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === recovering.item.clientId && r.item.sessionId === recovering.item.sessionId);
           if (latest && !latest.prepared) await mobileDurableOutbox.update(latest, { suspended: false, state: 'queued' });
           throw new Error(t('session.outbox.taskAlreadyCreated'));
         }
@@ -4663,8 +4681,10 @@ export default function NewRemoteSessionScreen() {
       if (useDurableCreation) {
         const firstRecord: DurableOutboxRecord = {
           version: 1, accountId: authOwnerAtCreate.accountKey, deviceId: deviceIdSnapshot,
+          ...(recoveryIdentity ? { storageSessionId: recoveryIdentity.storageSessionId } : {}),
           createdAt: recovering?.createdAt ?? Date.now(), state: 'queued', suspended: false, uploads: [], clearBoundaryMs: null,
           creation: { draft: effectiveDraft, deviceName: selectedDeviceName,
+            ...(precreatedWorktree ? { originalWorkingDir: precreatedWorktree.originalWorkingDir } : {}),
             planModeArm: planModeCapability && planModeDraftOn, restorePermissionMode: legacyPlanRestore },
           item: buildOutboxItem({
             clientId: firstMessageClientId, sessionId, text: effectiveDraft.firstMessage,
@@ -4688,8 +4708,8 @@ export default function NewRemoteSessionScreen() {
           }
           if (!isCurrentOwner() || !ensureDeviceAlive()) return;
           if (recovering) {
-            const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === sessionId);
-            if (!latest || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
+            const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === recovering.item.sessionId);
+            if (latest !== recovering || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
             await mobileDurableOutbox.update(latest, firstRecord);
           } else await mobileDurableOutbox.add(firstRecord);
           filesCommitted = true;
@@ -5092,6 +5112,10 @@ export default function NewRemoteSessionScreen() {
           discardPrecreated: async (_deviceId, recoveryInput) => (
             maker.worktree.discardPrecreated(recoveryInput)
           ),
+          cancelPrecreated: maker.worktree.cancelPrecreated
+            ? async (_deviceId, input) => maker.worktree.cancelPrecreated!(input)
+            : undefined,
+          onDiscarded: completePrecreatedWorktreeRecovery,
           isSessionClaimed: async (_deviceId, pendingSessionId) => (
             isExactRemoteSessionClaimed(
               pendingSessionId,

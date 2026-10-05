@@ -11,6 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
+const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/session/mobileDurableOutbox', () => ({ persistCancelledCreationDraft: persistCancelledDraft }));
 const recoveryAsyncStorage = vi.hoisted(() => ({
   getItem: vi.fn(async (key: string) => recoveryStorage.get(key) ?? null),
   setItem: vi.fn(async (key: string, value: string) => {
@@ -32,6 +34,7 @@ vi.mock('expo-crypto', () => ({
 }));
 import {
   dismissNewSessionCreation,
+  dismissRecoveredPrecreatedSession,
   drainStashedNewSessionDraft,
   getNewSessionCreationTask,
   prepareNewSessionCreationForEdit,
@@ -70,6 +73,7 @@ interface MakerMock {
   setPermissionMode: ReturnType<typeof vi.fn>;
   worktree: {
     discardPrecreated: ReturnType<typeof vi.fn>;
+    cancelPrecreated?: ReturnType<typeof vi.fn>;
   };
   input: {
     enqueue: ReturnType<typeof vi.fn>;
@@ -132,6 +136,7 @@ async function flushPipeline(): Promise<void> {
 
 describe('newSessionCreation pipeline', () => {
   beforeEach(async () => {
+    persistCancelledDraft.mockReset();
     await recoveryTesting.drainMutations();
     recoveryStorage.clear();
     recoveryTesting.resetVolatileLedgers();
@@ -796,6 +801,76 @@ describe('newSessionCreation pipeline', () => {
     }]);
   });
 
+  it('returns the original draft after an uncertain create is cancelled by the host', async () => {
+    const record = { sessionId: 'cancel-me', deviceId: 'dev-1', path: '/repo/.cindy-worktrees/orphan', recoveryKey: 'recovery-cancel-key', createdAt: Date.now(), phase: 'precreated' as const };
+    await registerPendingPrecreatedWorktree('owner-a', record);
+    const maker = makeMaker({
+      createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }),
+      worktree: { discardPrecreated: vi.fn(), cancelPrecreated: vi.fn(async () => ({ discarded: true })) },
+    });
+    startNewSessionCreation(makeParams(record.sessionId, maker, {
+      draft: { ...DRAFT, workingDir: record.path },
+      precreatedWorktree: { path: record.path, recoveryKey: record.recoveryKey, originalWorkingDir: '/repo', createdAt: record.createdAt },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    const task = await prepareNewSessionCreationForEdit(record.sessionId);
+    expect(task?.draft.firstMessage).toBe(DRAFT.firstMessage);
+    expect(task?.precreatedWorktree?.originalWorkingDir).toBe('/repo');
+    expect(maker.worktree.cancelPrecreated).toHaveBeenCalledWith({ sessionId: record.sessionId, recoveryKey: record.recoveryKey });
+    expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
+    expect(persistCancelledDraft).toHaveBeenCalledWith({ sessionId: record.sessionId, deviceId: record.deviceId, originalWorkingDir: '/repo' });
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toEqual([]);
+  });
+
+  it('retry reconciles a late exact-id success without another create', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }) });
+    startNewSessionCreation(makeParams('late-success', maker, {
+      precreatedWorktree: { path: '/repo/worktree', recoveryKey: 'late-recovery-key', originalWorkingDir: '/repo' },
+      precreatedWorktreeAccountId: 'owner-a',
+    }));
+    await flushPipeline();
+    expect(getNewSessionCreationTask('late-success')?.status).toBe('create-failed');
+    maker.getSession.mockResolvedValue(sessionFromCreateResult({ sessionId: 'late-success', workDir: '/repo/worktree' }, DRAFT));
+    retryNewSessionCreation('late-success');
+    await flushPipeline();
+    expect(maker.createSession).toHaveBeenCalledTimes(1);
+    expect(maker.input.enqueue).toHaveBeenCalledTimes(1);
+    expect(getNewSessionCreationTask('late-success')).toBeNull();
+  });
+
+  it('keeps the edit recovery obligation when persisting the cancelled draft fails', async () => {
+    const record = { sessionId: 'cancel-save-fails', deviceId: 'dev-1', path: '/repo/.cindy-worktrees/orphan',
+      recoveryKey: 'recovery-cancel-save-key', createdAt: Date.now(), phase: 'precreated' as const };
+    await registerPendingPrecreatedWorktree('owner-a', record);
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('INVOKE_TIMEOUT'); }),
+      worktree: { discardPrecreated: vi.fn(), cancelPrecreated: vi.fn(async () => ({ discarded: true })) } });
+    startNewSessionCreation(makeParams(record.sessionId, maker, {
+      draft: { ...DRAFT, workingDir: record.path }, precreatedWorktreeAccountId: 'owner-a',
+      precreatedWorktree: { path: record.path, recoveryKey: record.recoveryKey, originalWorkingDir: '/repo', createdAt: record.createdAt },
+    }));
+    await flushPipeline();
+    persistCancelledDraft.mockRejectedValueOnce(new Error('disk full'));
+    await expect(prepareNewSessionCreationForEdit(record.sessionId)).rejects.toThrow('disk full');
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toHaveLength(1);
+    expect(getNewSessionCreationTask(record.sessionId)?.status).toBe('create-failed');
+    await prepareNewSessionCreationForEdit(record.sessionId);
+    expect(await listPendingPrecreatedWorktrees('owner-a')).toEqual([]);
+    dismissNewSessionCreation(record.sessionId);
+  });
+
+  it('hides only a cancelled synthetic row on the matching device', () => {
+    const row = { ...sessionFromCreateResult({ sessionId: 'orphan' }, DRAFT), pendingLocalCreation: true };
+    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', row);
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'other-device' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(1);
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(0);
+    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', { ...row, pendingLocalCreation: false });
+    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions()).toHaveLength(1);
+  });
+
   it.each([
     ['null', null],
     ['empty object', {}],
@@ -836,7 +911,7 @@ describe('newSessionCreation pipeline', () => {
     retryNewSessionCreation('s20');
     await flushPipeline();
     expect(maker.createSession).toHaveBeenCalledTimes(1);
-    expect(maker.getSession).toHaveBeenCalledTimes(1);
+    expect(maker.getSession).toHaveBeenCalledTimes(2);
     await expect(prepareNewSessionCreationForEdit('s20')).rejects.toThrow('worktree');
     expect(maker.worktree.discardPrecreated).not.toHaveBeenCalled();
     await expect(listPendingPrecreatedWorktrees('owner-a')).resolves.toEqual([{

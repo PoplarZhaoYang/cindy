@@ -3601,7 +3601,13 @@ assertRouteCurrent();
           if (!signal.aborted && error instanceof CodexRouteSelectionChangedError && error.retryable && attempt < 7) continue;
           throw new AgentStartupStoppedError(signal.aborted ? signal.reason : error);
         }
-        await startup.customContext?.();
+        if (startup.customContext) {
+          await startup.customContext();
+          // Retirement of this isolated local host proves the failed startup
+          // cannot keep using its workdir. Propagate that proof to Maker so its
+          // onStartFailed hook releases the directory lease.
+          if (!opts.remoteHostId) throw new AgentStartupStoppedError(error);
+        }
         throw error;
       }
     }
@@ -5157,6 +5163,10 @@ assertRouteCurrent();
       registerFailedCustomContextStartupCleanup(async () => {
         releaseHostBindingLeaseIfNeeded();
         await retireSingleSessionHost();
+        // retireHostKey may skip an already-replaced generation, or preserve a
+        // shutdown error for retry. Only confirmed retirement of our captured
+        // host may authorize releasing this startup's workdir guard.
+        await host.retire('Codex isolated startup failed');
       });
     }
     startup.cleanup = async () => {

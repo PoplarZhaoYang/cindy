@@ -21,6 +21,7 @@ import {
   PINNED_SKILL_INVOCATION,
   CodexResumePreparationBlockedError,
   AgentNotAuthenticatedError,
+  AgentStartupStoppedError,
   type AgentDeps,
   type AgentSessionHandle,
   type TurnPermissionPolicy,
@@ -35143,14 +35144,16 @@ describe('CodexAgent custom provider context window override', () => {
     await agent.dispose();
   });
 
-  it('retires the isolated custom-context app-server when initialize fails', async () => {
+  it.each(['account', 'custom-context'])('reports confirmed %s host exit after initialize fails', async (kind) => {
     MockCodexTransport.onCreate = (transport) => {
       transport.setMockResponse(Method.Initialize, {
         error: { code: -32_000, message: 'initialize boom' },
       });
     };
     const agent = new CodexAgent(createDeps({}, {
-      resolveCodexThreadContextWindow: () => 700_000,
+      ...(kind === 'account'
+        ? { isCodexAccountProvider: (id?: string | null) => id === 'mygpt' }
+        : { resolveCodexThreadContextWindow: () => 700_000 }),
       prepareCodexExtraSpawnConfig: async () => ({ extraArgs: [], extraEnv: {} }),
     }));
 
@@ -35159,10 +35162,47 @@ describe('CodexAgent custom provider context window override', () => {
       model: 'gpt-5.6-sol',
       providerId: 'mygpt',
       workingDir: '/repo',
-    })).rejects.toThrow('initialize boom');
+    })).rejects.toMatchObject({
+      name: 'AgentStartupStoppedError',
+      cause: expect.objectContaining({ message: expect.stringContaining('initialize boom') }),
+    });
 
     expect(createdTransports[0]?.closed).toBe(true);
     expect((agent as unknown as { hosts: Map<string, unknown> }).hosts.size).toBe(0);
+    await agent.dispose();
+  });
+
+  it('never reports stopped when the isolated startup transport fails to retire', async () => {
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.Initialize, {
+        error: { code: -32_000, message: 'initialize boom' },
+      });
+    };
+    MockCodexTransport.closeError = new Error('shutdown unconfirmed');
+    const agent = new CodexAgent(createDeps({}, {
+      isCodexAccountProvider: (id) => id === 'account-a',
+    }));
+    const failure = await agent.startSession({
+      sessionId: 'failed-isolated-start', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo',
+    }).catch((error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(AgentStartupStoppedError);
+    MockCodexTransport.closeError = null;
+    await agent.dispose();
+  });
+
+  it('releases the failed account startup without interrupting another live host', async () => {
+    const agent = new CodexAgent(createDeps({}, { isCodexAccountProvider: () => true }));
+    const live = await agent.startSession({ sessionId: 'unrelated-live', providerId: 'account-b', model: 'gpt-5.4', workingDir: '/other' });
+    MockCodexTransport.onCreate = (transport) => {
+      transport.setMockResponse(Method.Initialize, { error: { code: -32_000, message: 'initialize boom' } });
+    };
+    await expect(agent.startSession({ sessionId: 'failed-start', providerId: 'account-a', model: 'gpt-5.4', workingDir: '/repo' }))
+      .rejects.toBeInstanceOf(AgentStartupStoppedError);
+    expect(createdTransports[0].closed).toBe(false);
+    expect(createdTransports[1].closed).toBe(true);
+    await live.send({ type: 'user', content: 'still available' });
+    await live.close();
     await agent.dispose();
   });
 

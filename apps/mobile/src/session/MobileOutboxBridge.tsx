@@ -169,7 +169,7 @@ export function MobileOutboxBridge() {
         AppState.currentState !== "background" &&
         AppState.currentState !== "inactive" &&
         (isDurableOutboxSettled(r) ||
-          (!r.suspended &&
+          (!r.suspended && !r.creation?.cancelled &&
             !isDurableOutboxCreationHeld(r.item.sessionId) &&
             latest.current.link.status === "online" &&
             latest.current.link.getPresenceAvailability(r.deviceId) !== false &&
