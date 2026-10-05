@@ -958,6 +958,11 @@ export function setControllerFallbackDisplayName(deviceId: string, name: string)
   if (subscriptions.updateControllerMetadata(deviceId, normalized)) syncForwarding();
 }
 
+/** 与被控横幅同一优先级的控制端展示名；未知时返回 undefined，由调用方决定兜底。 */
+export function getControllerDisplayName(deviceId: string): string | undefined {
+  return controllerDisplayNameByDevice.get(deviceId) ?? reportedControllerNameByDevice.get(deviceId);
+}
+
 /** 账号切换 / 链路 teardown 时清空 presence 展示名，避免串到下一段身份。 */
 export function clearControllerDisplayNames(): void {
   controllerDisplayNameByDevice.clear();
