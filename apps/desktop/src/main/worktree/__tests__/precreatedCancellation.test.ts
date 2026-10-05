@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const profile = vi.hoisted(() => ({ root: '' }));
 vi.mock('electron', () => ({ app: { getPath: () => profile.root } }));
-import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation } from '../precreatedCancellation';
+import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from '../precreatedCancellation';
 
 describe('durable precreated cancellation', () => {
   beforeEach(() => { profile.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-cancel-test-')); });
@@ -28,9 +28,12 @@ describe('durable precreated cancellation', () => {
     expect(files).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/)]);
   });
 
-  it('fails closed when the cancellation store is unreadable', () => {
+  it('fails closed when the cancellation store is unreadable', async () => {
     fs.writeFileSync(path.join(profile.root, 'worktree-cancelled-creations'), 'not a directory');
     expect(() => assertPrecreatedSessionNotCancelled('id')).toThrow();
     expect(() => sealPrecreatedSessionCancellation('id')).toThrow();
+    const operation = vi.fn(async () => {});
+    await expect(withPrecreatedSessionOperationLock('id', operation)).rejects.toThrow();
+    expect(operation).not.toHaveBeenCalled();
   });
 });

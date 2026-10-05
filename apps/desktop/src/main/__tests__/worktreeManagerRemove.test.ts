@@ -19,6 +19,7 @@ import os from 'node:os';
 import type { WorktreeMeta } from '../worktree/types';
 const cancelledIds = vi.hoisted(() => new Set<string>());
 vi.mock('../worktree/precreatedCancellation', () => ({
+  withPrecreatedSessionOperationLock: (_id: string, task: () => Promise<unknown>) => task(),
   sealPrecreatedSessionCancellation: (id: string) => { cancelledIds.add(id); },
   assertPrecreatedSessionNotCancelled: (id: string) => {
     if (cancelledIds.has(id)) throw new Error('PRECONDITION_FAILED: cancelled');

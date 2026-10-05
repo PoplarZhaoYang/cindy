@@ -47,7 +47,7 @@ import { recycleManagedWorktree } from './managedRecycle';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease } from './runtimeLeases';
 import * as store from './worktreeStore';
-import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation } from './precreatedCancellation';
+import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
 import { createLogger } from '../logger';
 import { getDbClient } from '../localDb/client/current';
 import {
@@ -386,7 +386,7 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 
   await previous.catch(() => {});
   try {
-    return await fn();
+    return await withPrecreatedSessionOperationLock(sessionId, fn);
   } finally {
     releaseCurrent();
     if (precreatedWorktreeOperationQueues.get(sessionId) === queued) {
@@ -1215,7 +1215,16 @@ async function createWorktreeInner(req: CreateWorktreeReq): Promise<CreateWorktr
         );
       }
 
-      // 9. store + DB
+      // 9. Recheck after asynchronous Git/setup work before publishing metadata.
+      // The profile/session lock also closes the check -> store.set window.
+      try {
+        assertPrecreatedSessionNotCancelled(req.sessionId);
+      } catch (error) {
+        // Rollback must not race our own background checkout writer.
+        await bgPromise?.catch(() => undefined);
+        throw error;
+      }
+      // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,
         name,

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
+import { withCrossProcessLock } from '../device-link/crossProcessLock';
 
 // A cancelled creation id must never be reused, including after a restart. An
 // empty, exclusively-created file is an atomic tombstone; no user content or
@@ -9,6 +10,16 @@ import { app } from 'electron';
 function marker(sessionId: string): string {
   return path.join(app.getPath('userData'), 'worktree-cancelled-creations',
     createHash('sha256').update(sessionId).digest('hex'));
+}
+
+/** Serialize creation/registration and cancellation across processes sharing a profile. */
+export async function withPrecreatedSessionOperationLock<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+  const lockPath = `${marker(sessionId)}.lock`;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  return withCrossProcessLock(lockPath, { label: 'precreated-worktree', waitMs: 10_000 }, async (status) => {
+    if (!status.held) throw new Error('PRECONDITION_FAILED: Worktree creation or cancellation is still in progress');
+    return task();
+  });
 }
 
 export function assertPrecreatedSessionNotCancelled(sessionId: string): void {
