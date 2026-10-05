@@ -2399,17 +2399,20 @@ function compactDetailForSession(session: AgentIslandSessionState): string {
 }
 
 /**
- * 同步给其它设备的完成摘要:只取最后一条回复。驻留中的用户提问、「完成」占位和工具状态
- * 都不算结果;没有回复时给空串,由接收端用自己的语言显示「完成」。
+ * 同步给其它设备的完成摘要:只取本轮(最后一条用户消息之后)的最后一条回复。驻留中的
+ * 用户提问、「完成」占位、工具状态和上一轮的回复都不算结果;没有回复时给空串,由接收端
+ * 用自己的语言显示「完成」。
  */
 export function completedReplySummary(
   snapshot: Pick<AgentIslandSessionSnapshot, 'activityLines'>,
 ): string {
-  const reply = snapshot.activityLines
-    .slice()
-    .reverse()
-    .find((line) => line.kind === 'assistant');
-  return reply ? truncateInlineText(reply.text, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH) : '';
+  for (const line of snapshot.activityLines.slice().reverse()) {
+    if (line.kind === 'user') break;
+    if (line.kind === 'assistant') {
+      return truncateInlineText(line.text, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH);
+    }
+  }
+  return '';
 }
 
 function messagePreviewTextForSession(session: AgentIslandSessionState): string | null {

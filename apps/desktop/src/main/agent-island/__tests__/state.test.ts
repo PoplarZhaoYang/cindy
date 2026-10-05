@@ -886,7 +886,10 @@ describe('Agent Island display state', () => {
     applyAgentIslandUserPrompt(state, { sessionId: 'reply', title: 'Task' }, 'fix the login bug', start);
     applyAgentIslandEvent(state, { sessionId: 'reply' }, finalTextEvent('登录问题已修复。'), start + 100);
     applyAgentIslandEvent(state, { sessionId: 'reply' }, doneEvent(), start + 200);
-    // 没有回复:不把本机语言的占位当摘要发出去。
+    // 本轮没有回复:不取上一轮的回复,也不把本机语言的占位当摘要发出去。
+    applyAgentIslandUserPrompt(state, { sessionId: 'silent', title: 'Task' }, 'first turn', start - 500);
+    applyAgentIslandEvent(state, { sessionId: 'silent' }, finalTextEvent('第一轮的回复'), start - 400);
+    applyAgentIslandEvent(state, { sessionId: 'silent' }, doneEvent(), start - 300);
     applyAgentIslandUserPrompt(state, { sessionId: 'silent', title: 'Task' }, 'run it', start);
     applyAgentIslandEvent(state, { sessionId: 'silent' }, doneEvent(), start + 200);
 
