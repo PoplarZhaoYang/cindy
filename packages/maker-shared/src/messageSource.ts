@@ -68,6 +68,17 @@ export function sanitizeSourceName(value: unknown): string | undefined {
     : cleaned;
 }
 
+/**
+ * 写进**模型文本**的名字：在 sanitizeSourceName 基础上把 ASCII 方括号 / 圆括号换成全角，
+ * 名字就无法闭合 `[User · …]`、伪造 `[Silent scheduled run]` 一类标记或冒充 `(xxx_id: …)`。
+ * 只用于给模型的说明与交接摘要；界面显示仍用 sanitizeSourceName，保持原名。
+ */
+export function promptSafeSourceName(value: unknown): string | undefined {
+  const safe = sanitizeSourceName(value);
+  if (!safe) return undefined;
+  return safe.replace(/[[\]()]/g, (ch) => ({ '[': '［', ']': '］', '(': '（', ')': '）' })[ch] ?? ch);
+}
+
 function sanitizeSourceId(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\s()「」]+/g, '').slice(0, 128);
@@ -75,11 +86,11 @@ function sanitizeSourceId(value: unknown): string | undefined {
 }
 
 /**
- * `「名字」(id_key: id)`；缺名字时为 ` (id_key: id)`（带前导空格，便于直接接在「任务」后），
+ * 模型文本里的 `「名字」(id_key: id)`（名字经 promptSafeSourceName）；缺名字时为 ` (id_key: id)`（带前导空格，便于直接接在「任务」后），
  * 两者都缺时为空串。
  */
 export function formatSourceRef(name: unknown, idKey: string, id: unknown): string {
-  const safeName = sanitizeSourceName(name);
+  const safeName = promptSafeSourceName(name);
   const safeId = sanitizeSourceId(id);
   const idPart = safeId ? `(${idKey}: ${safeId})` : '';
   if (safeName) return `「${safeName}」${idPart}`;

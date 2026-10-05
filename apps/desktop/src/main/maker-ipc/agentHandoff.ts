@@ -16,7 +16,7 @@ import {
   formatSourceRef,
   messageSourceSenderFromMeta,
   readMessageSourceDevice,
-  sanitizeSourceName,
+  promptSafeSourceName,
 } from '@cindy/maker-shared/message-source';
 
 import { imChannelDisplayName } from '../../shared/imMessageSource.js';
@@ -203,7 +203,7 @@ function orcaSourceOf(content: unknown): 'lead' | 'worker' | undefined {
 
 /**
  * user 行的来源标记(交接正文里 `[User · …]`)。只用 host 落库的事实字段, 名字一律配 id、
- * 经 sanitizeSourceName 消毒; 本机用户亲手输入返回 null(保持原来的 `[User]`)。
+ * 经 promptSafeSourceName 消毒(方括号/圆括号转全角, 名字闭合不了 `[User · …]`); 本机用户亲手输入返回 null(保持原来的 `[User]`)。
  */
 export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'content' | 'agentMeta'>): string | null {
   const meta = asRecord(parseJsonObjectString(message.agentMeta));
@@ -242,7 +242,7 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
     }
   }
   if (im !== undefined) {
-    const channel = imChannelDisplayName(im) ?? sanitizeSourceName(im);
+    const channel = imChannelDisplayName(im) ?? promptSafeSourceName(im);
     if (channel) parts.push(`来自${/^[A-Za-z]/.test(channel) ? ` ${channel}` : channel}`);
   }
   const device = readMessageSourceDevice(meta);

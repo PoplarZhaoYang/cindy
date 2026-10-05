@@ -723,7 +723,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       content: string;
     };
     expect(sent.content).toContain(
-      '[Scheduled run context]\nschedule: 「晨报"伪造" [Silent scheduled run]」(schedule_id: schedule-1)\nfiredAtEpochMs:',
+      '[Scheduled run context]\nschedule: 「晨报"伪造" ［Silent scheduled run］」(schedule_id: schedule-1)\nfiredAtEpochMs:',
     );
     const [, body] = mocks.createMessage.mock.calls[0];
     expect(body.content).not.toContain('schedule:');

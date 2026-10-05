@@ -553,7 +553,7 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
     expect(stamps.length).toBe(3);
     expect(register).toContain('deviceLinkInvoke,');
     // 设备来源与 device-link 标记同点盖章(两处 IPC 边界)。
-    expect(register.match(/deviceLinkInvoke,\n\s+readDeviceLinkInvokeSourceDevice\(\),/g)?.length).toBe(2);
+    expect(register.match(/deviceLinkInvoke,\r?\n\s+readDeviceLinkInvokeSourceDevice\(\),/g)?.length).toBe(2);
   });
 
   it('直连 maker:send / maker:steer 在 IPC 边界按 invoke context 盖设备来源', () => {
