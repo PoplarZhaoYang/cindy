@@ -44,7 +44,7 @@ import { createLogger } from '../logger.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
-import { takePeerAttachment } from '../device-link/peerAttachmentStore.js';
+import { discardPeerAttachment, takePeerAttachment } from '../device-link/peerAttachmentStore.js';
 import { parseRemoteAttachmentRef } from '../device-link/remoteAttachment.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
 import {
@@ -540,6 +540,12 @@ export function registerFileBrowserIpc(): void {
         void removeRemote(ref.ossKey);
       }
     },
+    discardPart: async (deviceId, part) => {
+      const ref = parseRemoteAttachmentRef(part.ref);
+      if (!ref) return;
+      if (ref.peer) await discardPeerAttachment(deviceId, ref.peer);
+      else await removeRemote(ref.ossKey);
+    },
     sshTar: async (hostId, absDir) => {
       const host = getRemoteSshPool().get(hostId);
       if (!host) throw new Error(`remote host not found in pool: ${hostId}`);
@@ -551,7 +557,11 @@ export function registerFileBrowserIpc(): void {
       });
       const stream = new PassThrough();
       let stderr = '';
-      handle.onStdoutBytes((bytes) => stream.write(bytes));
+      // 背压:解包写盘跟不上时停读 SSH 通道,避免整个归档积压在主进程内存里。
+      handle.onStdoutBytes((bytes) => {
+        if (!stream.write(bytes)) handle.pause?.();
+      });
+      stream.on('drain', () => handle.resume?.());
       handle.onStderr((text) => {
         stderr = (stderr + text).slice(-2000);
       });
@@ -570,9 +580,14 @@ export function registerFileBrowserIpc(): void {
   };
   ipcMain.handle(
     FILE_BROWSER_INVOKE.CHAT_FILE_DOWNLOAD,
-    async (event, args: ChatFileFetchArgs) => {
+    async (event, args: ChatFileFetchArgs & { requestId?: unknown }) => {
       const wc = event.sender;
       let lastPush = 0;
+      // 进度带上发起方的请求 id:同一路径同时有取回 / 下载时 renderer 不串线。
+      const requestId =
+        typeof args?.requestId === 'string' && args.requestId.length <= 64
+          ? args.requestId
+          : undefined;
       const result = await downloadChatEntry(
         args,
         (received, total, phase) => {
@@ -586,6 +601,7 @@ export function registerFileBrowserIpc(): void {
               received,
               total,
               phase,
+              requestId,
             });
           }
         },

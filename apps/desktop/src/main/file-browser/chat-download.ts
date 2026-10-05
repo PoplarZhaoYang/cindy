@@ -7,8 +7,8 @@
  *   - 文件夹 + device:被控端打包并分段推送(dir-export.ts),本端收齐后解包;
  *     旧被控端不声明 `dirExport` 能力 → REMOTE_UNSUPPORTED(提示更新,不退回逐个文件);
  *   - 文件夹 + ssh:远端 `tar` 直接流过 SSH exec 通道,本端边收边解包。
- * 文件夹先解到「下载」文件夹里的隐藏暂存目录,完整成功才改名为最终名字,失败即清掉,
- * 不留半截文件夹。
+ * 文件与文件夹都先落到「下载」文件夹里的隐藏暂存目录,完整成功后先以排他方式占住
+ * 最终名字再改名进去,失败即清掉暂存——不留半截内容,并发下载同名项也不会互相覆盖。
  */
 
 import { constants, createReadStream, promises as fsp } from 'node:fs';
@@ -60,6 +60,8 @@ export interface ChatDownloadDeps extends Pick<ChatFileDeps, 'sshStat' | 'device
     destination: string,
     onProgress: (bytes: number) => void,
   ): Promise<void>;
+  /** 放弃一段不会再取的引用(直连收件箱删除 / OSS 对象删除),best-effort。 */
+  discardPart(deviceId: string, part: MigrationFileRef): Promise<void>;
   /** 在 SSH 远端以 `absDir` 为根打 tar 并流回。 */
   sshTar(hostId: string, absDir: string): Promise<SshTarStream>;
   pollMs?: number;
@@ -82,31 +84,37 @@ function candidateName(name: string, n: number): string {
   return `${name.slice(0, name.length - ext.length)} (${n})${ext}`;
 }
 
-async function placeFile(source: string, dir: string, name: string): Promise<string> {
-  await fsp.mkdir(dir, { recursive: true });
+/**
+ * 把暂存内容改名为「下载」文件夹里的最终名字。先排他创建同名占位(文件 `wx` / 目录
+ * mkdir)原子占住名字,再 rename 覆盖占位:并发下载或其他程序同时建同名项时只会
+ * 让出编号,不会覆盖已有内容。
+ */
+async function placeEntry(
+  source: string,
+  dir: string,
+  name: string,
+  directory: boolean,
+): Promise<string> {
   for (let n = 0; ; n++) {
     const target = path.join(dir, candidateName(name, n));
     try {
-      await fsp.copyFile(source, target, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+      if (directory) await fsp.mkdir(target);
+      else await fsp.writeFile(target, '', { flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+      throw err;
+    }
+    try {
+      // Windows 不允许 rename 覆盖目录:撤掉占位再改名(窗口极短)。
+      if (directory && process.platform === 'win32') await fsp.rmdir(target);
+      await fsp.rename(source, target);
       return target;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      await (directory ? fsp.rmdir(target) : fsp.rm(target, { force: true })).catch(
+        () => undefined,
+      );
+      throw err;
     }
-  }
-}
-
-async function placeDirectory(source: string, dir: string, name: string): Promise<string> {
-  for (let n = 0; ; n++) {
-    const target = path.join(dir, candidateName(name, n));
-    if (
-      await fsp.lstat(target).then(
-        () => true,
-        () => false,
-      )
-    )
-      continue;
-    await fsp.rename(source, target);
-    return target;
   }
 }
 
@@ -152,15 +160,57 @@ async function downloadDeviceDirectory(
     { op: 'exportDirStart', workdir, relPath },
   );
   if (!start?.ok || !start.transferId) throw new Error(start?.message ?? 'exportDirStart failed');
-  let status: (DirExportStatus & { ok: boolean }) | undefined;
+  // 被控端已推来的分段:下载失败时逐个放弃,不让直连分段在收件箱里滞留。
+  const known = new Map<string, MigrationFileRef>();
+  const taken = new Set<string>();
+  const remember = (parts: unknown) => {
+    if (Array.isArray(parts)) for (const p of parts) if (isRef(p)) known.set(p.ref, p);
+  };
+  try {
+    const status = await waitDirExport(
+      deviceId,
+      workdir,
+      start.transferId,
+      remember,
+      onProgress,
+      deps,
+    );
+    const file = parseExportedFile(status.file);
+    if (!file) throw new Error('invalid exported file');
+    remember('parts' in file ? file.parts : [file]);
+    const archive = path.join(staging, 'archive.tar');
+    let received = 0;
+    await receiveParts(file, archive, async (part, destination) => {
+      await deps.receivePart(deviceId, part, destination, (bytes) =>
+        onProgress(received + bytes, file.size, 'download'),
+      );
+      taken.add(part.ref);
+      received += part.size;
+    });
+    onProgress(0, file.size, 'extract');
+    await assertDiskCapacity([{ path: staging, bytes: file.size }]);
+    return (await extractDirectoryArchive(createReadStream(archive), root)) + status.skipped;
+  } catch (err) {
+    for (const [ref, part] of known)
+      if (!taken.has(ref)) await deps.discardPart(deviceId, part).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** 轮询被控端导出到 done;每次回包里已推送的分段交给 remember。 */
+async function waitDirExport(
+  deviceId: string,
+  workdir: string,
+  transferId: string,
+  remember: (parts: unknown) => void,
+  onProgress: ChatDownloadProgress,
+  deps: ChatDownloadDeps,
+): Promise<DirExportStatus> {
   for (let transient = 0; ;) {
     await new Promise((r) => setTimeout(r, deps.pollMs ?? POLL_MS));
+    let status: (DirExportStatus & { ok: boolean }) | undefined;
     try {
-      status = await deps.deviceOp(deviceId, {
-        op: 'exportDirStatus',
-        workdir,
-        transferId: start.transferId,
-      });
+      status = await deps.deviceOp(deviceId, { op: 'exportDirStatus', workdir, transferId });
       transient = 0;
     } catch (err) {
       // relay 瞬断只影响「问进度」,被控端的打包与推送照常进行。
@@ -169,24 +219,12 @@ async function downloadDeviceDirectory(
       throw err;
     }
     if (!status?.ok) throw new Error(status?.message ?? 'exportDirStatus failed');
+    remember(status.parts);
     if (status.state === 'error') throw new Error(status.message ?? 'remote export failed');
     if (status.state === 'packing') onProgress(status.packed, 0, 'pack');
     else onProgress(status.sent, status.total, 'upload');
-    if (status.state === 'done') break;
+    if (status.state === 'done') return status;
   }
-  const file = parseExportedFile(status.file);
-  if (!file) throw new Error('invalid exported file');
-  const archive = path.join(staging, 'archive.tar');
-  let received = 0;
-  await receiveParts(file, archive, async (part, destination) => {
-    await deps.receivePart(deviceId, part, destination, (bytes) =>
-      onProgress(received + bytes, file.size, 'download'),
-    );
-    received += part.size;
-  });
-  onProgress(0, file.size, 'extract');
-  await assertDiskCapacity([{ path: staging, bytes: file.size }]);
-  return (await extractDirectoryArchive(createReadStream(archive), root)) + status.skipped;
 }
 
 async function downloadSshDirectory(
@@ -237,8 +275,11 @@ export async function downloadChatEntry(
   ) {
     return { ok: false, code: 'BAD_ARGS' };
   }
-  const relPath = toWorkdirRel(workdir, absPath);
-  let isDirectory = false;
+  // 引用的正好是工作目录本身时按目录下载(toWorkdirRel 对根返回 null)。
+  const trim = (p: string) => p.replace(/[\\/]+$/, '');
+  const isRoot = trim(absPath) === trim(workdir);
+  const relPath = isRoot ? '' : toWorkdirRel(workdir, absPath);
+  let isDirectory = isRoot;
   if (relPath) {
     try {
       const stat =
@@ -253,21 +294,20 @@ export async function downloadChatEntry(
   const name = sanitizeSaveFileName(absPath.split(/[\\/]/).filter(Boolean).pop());
   const downloads = deps.downloadsDir();
 
-  if (!isDirectory) {
-    const fetched = await deps.fetchFile(args, (received, total, phase) =>
-      onProgress(received, total, phase ?? 'download'),
-    );
-    if (!fetched.ok) return fetched;
-    try {
-      const target = await placeFile(fetched.cachePath, downloads, name);
-      return { ok: true, path: target, stale: fetched.stale, skipped: 0 };
-    } catch (err) {
-      return { ok: false, code: errorCode(err), message: String(err) };
-    }
-  }
-
   let staging: string | null = null;
   try {
+    if (!isDirectory) {
+      const fetched = await deps.fetchFile(args, (received, total, phase) =>
+        onProgress(received, total, phase ?? 'download'),
+      );
+      if (!fetched.ok) return fetched;
+      await fsp.mkdir(downloads, { recursive: true });
+      staging = await fsp.mkdtemp(path.join(downloads, '.cindy-download-'));
+      const copy = path.join(staging, 'file');
+      await fsp.copyFile(fetched.cachePath, copy, constants.COPYFILE_FICLONE);
+      const target = await placeEntry(copy, downloads, name, false);
+      return { ok: true, path: target, stale: fetched.stale, skipped: 0 };
+    }
     await fsp.mkdir(downloads, { recursive: true });
     staging = await fsp.mkdtemp(path.join(downloads, '.cindy-download-'));
     const root = path.join(staging, 'root');
@@ -276,7 +316,7 @@ export async function downloadChatEntry(
       origin.kind === 'ssh'
         ? await downloadSshDirectory(
             origin.remoteHostId,
-            path.posix.join(workdir, relPath!),
+            path.posix.join(workdir, relPath ?? ''),
             root,
             onProgress,
             deps,
@@ -284,13 +324,13 @@ export async function downloadChatEntry(
         : await downloadDeviceDirectory(
             origin.deviceId,
             workdir,
-            relPath!,
+            relPath ?? '',
             staging,
             root,
             onProgress,
             deps,
           );
-    const target = await placeDirectory(root, downloads, name);
+    const target = await placeEntry(root, downloads, name, true);
     return { ok: true, path: target, stale: false, skipped };
   } catch (err) {
     return { ok: false, code: errorCode(err), message: String(err) };

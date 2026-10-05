@@ -71,6 +71,7 @@ describe('startDirExport', () => {
     expect(status.sent).toBe(status.total);
     expect(status.file).toMatchObject({ size: status.total });
     expect((status.file as { parts: unknown[] }).parts.length).toBeGreaterThan(1);
+    expect(status.parts).toEqual((status.file as { parts: unknown[] }).parts);
     expect(deps.sendPart).toHaveBeenCalledWith(
       'ctrl-1',
       expect.any(String),
@@ -99,6 +100,8 @@ describe('startDirExport', () => {
     const status = await waitTerminal(startDirExport(dir, 'ctrl-1', deps));
 
     expect(status).toMatchObject({ state: 'error', message: 'relay down' });
+    // 已推出的分段随失败终态告诉控制端,由它清理收件箱。
+    expect(status.parts).toHaveLength(1);
     expect(deps.removeRemote).toHaveBeenCalledWith('first-key');
     expect(await fsp.readdir(deps.temps)).toEqual([]);
   });

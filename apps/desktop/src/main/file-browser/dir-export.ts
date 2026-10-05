@@ -48,6 +48,8 @@ export interface DirExportStatus {
   total: number;
   /** 读不出而跳过的条目数。 */
   skipped: number;
+  /** 已推给控制端的分段(含失败终态):控制端放弃下载时据此清掉已收到的直连分段。 */
+  parts: MigrationFileRef[];
   file?: MigrationFile;
   message?: string;
 }
@@ -88,6 +90,7 @@ export function startDirExport(dir: string, controller: string, deps: DirExportD
     sent: 0,
     total: 0,
     skipped: 0,
+    parts: [],
     polledAt: Date.now(),
     abort: new AbortController(),
   };
@@ -112,8 +115,8 @@ export function getDirExportStatus(id: string): DirExportStatus | null {
   const job = jobs.get(id);
   if (!job) return null;
   job.polledAt = Date.now();
-  const { state, packed, sent, total, skipped, file, message } = job;
-  return { state, packed, sent, total, skipped, file, message };
+  const { state, packed, sent, total, skipped, parts, file, message } = job;
+  return { state, packed, sent, total, skipped, parts: [...parts], file, message };
 }
 
 async function runDirExport(
@@ -155,9 +158,11 @@ async function runDirExport(
           signal,
         );
         if (ref.ossKey) uploaded.push(ref.ossKey);
+        const done = { ref: ref.ref, size: ref.size, sha256: ref.sha256 };
+        job.parts.push(done);
         completed += ref.size;
         job.sent = completed;
-        return { ref: ref.ref, size: ref.size, sha256: ref.sha256 };
+        return done;
       },
       signal,
     );

@@ -2725,6 +2725,8 @@ interface ElectronAPI {
         received: number;
         total: number;
         phase?: 'pack' | 'upload' | 'download' | 'extract';
+        /** chatDownload 发起时带的请求 id(其它取回不带)。 */
+        requestId?: string;
       }) => void,
     ) => () => void;
     /** 聊天流文件取回:远端绝对路径 → 本地缓存副本(进度经 onTransferProgress,relPath 键 = absPath)。 */
@@ -2753,6 +2755,8 @@ interface ElectronAPI {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;
       absPath: string;
+      /** 进度推送回带此 id,用于区分同一路径上的并行请求。 */
+      requestId?: string;
     }) => Promise<
       | { ok: true; path: string; stale: boolean; skipped: number }
       | {

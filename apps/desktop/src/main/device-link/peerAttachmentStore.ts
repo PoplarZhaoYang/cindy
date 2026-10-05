@@ -216,6 +216,19 @@ export async function takePeerAttachment(peer: string, ref: PeerAttachment, dest
   );
 }
 
+/** Drops an attachment `peer` pushed to this device that will never be taken (failed download). */
+export async function discardPeerAttachment(peer: string, ref: PeerAttachment) {
+  if (!validTicket(ref.ticket)) return;
+  const root = ownerScopedUserDataPath('peer-attachment-inbox');
+  const file = path.join(root, ref.ticket);
+  await queue(`${root}:${ref.ticket}`, async () => {
+    const entry = JSON.parse(await fs.readFile(file + '.json', 'utf8')) as Entry;
+    if (entry.peer !== peer || entry.sha256 !== ref.sha256) return;
+    await fs.rm(file, { force: true });
+    await fs.rm(file + '.json', { force: true });
+  }).catch(() => {});
+}
+
 async function materializePeerAttachment(
   ref: PeerAttachment,
   destination: string,

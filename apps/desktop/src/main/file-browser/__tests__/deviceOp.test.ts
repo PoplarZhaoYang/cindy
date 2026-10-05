@@ -937,7 +937,16 @@ describe('file-browser device-op', () => {
         () => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: 'src' }),
       ),
     ).toEqual({ ok: false, message: 'REMOTE_UNSUPPORTED' });
-    expect(startDirExportMock).toHaveBeenCalledTimes(1);
+    // 工作目录本身(relPath 为空)也可导出。
+    expect(
+      await asController(() => handleRemoteOp({ op: 'exportDirStart', workdir, relPath: '' })),
+    ).toEqual({ ok: true, transferId: 'dir_1' });
+    expect(startDirExportMock).toHaveBeenLastCalledWith(
+      await realpath(workdir),
+      'ctrl-1',
+      expect.anything(),
+    );
+    expect(startDirExportMock).toHaveBeenCalledTimes(2);
   });
 
   it('exportDirStatus 幂等返回进度,未知 transfer 明确失败', async () => {

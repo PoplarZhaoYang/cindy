@@ -712,12 +712,14 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       const ctx = getDeviceLinkInvokeContext();
       if (!ctx?.controllerDeviceId || ctx.sharedTask) return bad('REMOTE_UNSUPPORTED');
       try {
+        // relPath 为空 = 下载工作目录本身(statEntry 不接受根,根是目录由 guard 保证)。
         const relPath = args.relPath ?? '';
-        const st = await statEntry(workdir, relPath);
-        if (st.type !== 'directory') return bad('not a directory');
+        if (relPath && (await statEntry(workdir, relPath)).type !== 'directory') {
+          return bad('not a directory');
+        }
         const realAbs = await fsp.realpath(path.resolve(workdir, relPath));
         const realRoot = await fsp.realpath(workdir);
-        if (!realAbs.startsWith(realRoot + path.sep)) {
+        if (realAbs !== realRoot && !realAbs.startsWith(realRoot + path.sep)) {
           return bad(`path escapes workdir: ${relPath}`);
         }
         dirExportDeps ??= createDirExportDeps();

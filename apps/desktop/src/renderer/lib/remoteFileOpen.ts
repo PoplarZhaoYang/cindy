@@ -135,8 +135,9 @@ export async function downloadRemoteChatEntry(
   const delayed = setTimeout(() => {
     progressToastId = toast.loading(progressText);
   }, 600);
+  const requestId = crypto.randomUUID();
   const offProgress = window.electronAPI.fileBrowser.onTransferProgress((e) => {
-    if (e.relPath !== absPath) return;
+    if (e.requestId !== requestId) return;
     progressText = chatDownloadProgressText(e);
     if (progressToastId) toast.update(progressToastId, progressText);
   });
@@ -146,7 +147,7 @@ export async function downloadRemoteChatEntry(
       : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
   try {
     const res = await window.electronAPI.fileBrowser
-      .chatDownload({ origin: wireOrigin, workdir, absPath })
+      .chatDownload({ origin: wireOrigin, workdir, absPath, requestId })
       .catch((err: unknown) => ({ ok: false as const, code: 'FETCH_FAILED' as const, message: String(err) }));
     if (!res.ok) {
       toast.error(chatDownloadErrorText(res.code));
