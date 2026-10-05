@@ -224,6 +224,8 @@ export function initAgentIslandService(deps: AgentIslandServiceDeps): AgentIslan
     ...deps,
     nativeHost: deps.nativeHost ?? (supportsNativeIsland ? undefined : HEADLESS_AGENT_ISLAND_NATIVE_HOST),
   });
+  // 远程任务同步与原生岛面无关:无原生岛的平台也要靠它发桌面通知。
+  serviceSingleton.registerDeviceSessionIpc();
   if (supportsNativeIsland) {
     serviceSingleton.registerIpc();
   } else {
@@ -491,6 +493,24 @@ export class AgentIslandService {
     this.handleInteractionDismissed(entry.sessionId, requestId);
   }
 
+  /** 各平台都注册(含无原生岛的 headless):灵动岛关闭时远程任务靠它发桌面通知。 */
+  registerDeviceSessionIpc(): void {
+    ipcMain.handle(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL, (event, raw: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      // 只认主窗:副窗也挂侧栏,多份输入会让跃迁判定来回抖动。
+      const mainWindow = this.deps.getMainWindow();
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents !== event.sender) {
+        return { ok: true };
+      }
+      const inputs = parseAgentIslandRemoteSessions(raw);
+      if (!inputs) {
+        throwIpcError('INVALID_PARAMS', 'remote sessions payload is invalid');
+      }
+      this.setDeviceSessions(inputs);
+      return { ok: true };
+    });
+  }
+
   registerIpc(): void {
     ipcMain.handle(AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL, (event, sessionId: unknown) => {
       const sourceWindow = BrowserWindow.fromWebContents(event.sender);
@@ -511,21 +531,6 @@ export class AgentIslandService {
       if (changed) {
         this.publish();
       }
-      return { ok: true };
-    });
-
-    ipcMain.handle(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL, (event, raw: unknown) => {
-      assertTrustedAppRendererEvent(event);
-      // 只认主窗:副窗也挂侧栏,多份输入会让跃迁判定来回抖动。
-      const mainWindow = this.deps.getMainWindow();
-      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents !== event.sender) {
-        return { ok: true };
-      }
-      const inputs = parseAgentIslandRemoteSessions(raw);
-      if (!inputs) {
-        throwIpcError('INVALID_PARAMS', 'remote sessions payload is invalid');
-      }
-      this.setDeviceSessions(inputs);
       return { ok: true };
     });
 

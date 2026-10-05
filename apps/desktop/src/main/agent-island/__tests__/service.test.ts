@@ -13,6 +13,7 @@ import {
   AGENT_ISLAND_PREVIEW_SOUND_CHANNEL,
   AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL,
   AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL,
+  AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL,
   AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL,
   AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL,
   DEFAULT_AGENT_ISLAND_SOUND_SETTINGS,
@@ -6175,6 +6176,22 @@ describe('Agent Island device sessions', () => {
 
     service.setDeviceSessions([deviceSession('completed'), deviceSession('completed', 'remote-2')]);
     expect(playSound).toHaveBeenCalledWith(DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete);
+  });
+
+  it('registers the remote-session channel on platforms without the native island', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const { initAgentIslandService } = await import('../service.js');
+      initAgentIslandService({ getMainWindow: () => null });
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+    }
+
+    const channels = mocks.ipcHandle.mock.calls.map(([channel]) => channel);
+    expect(channels).toContain(AGENT_ISLAND_SET_REMOTE_SESSIONS_CHANNEL);
+    // 原生岛面专属的 IPC 仍只在支持的平台注册。
+    expect(channels).not.toContain(AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL);
   });
 
   it('hands observed transitions to desktop notifications when the island is off', async () => {
