@@ -88,6 +88,7 @@ describe('fetchChatFile — ssh 来源', () => {
     expect(deps.fetchBigFile).toHaveBeenCalledWith(
       expect.objectContaining({ relPath: 'a.txt', remoteHostId: 'h1' }),
       noop,
+      undefined,
     );
   });
 
@@ -153,6 +154,7 @@ describe('fetchChatFile — device 来源', () => {
     expect(deps.fetchBigFile).toHaveBeenCalledWith(
       expect.objectContaining({ relPath: 'x/b.png', deviceId: 'd1' }),
       noop,
+      undefined,
     );
     expect(deps.deviceMediaFetch).not.toHaveBeenCalled();
   });

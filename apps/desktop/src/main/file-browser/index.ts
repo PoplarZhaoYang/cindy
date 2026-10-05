@@ -518,9 +518,9 @@ export function registerFileBrowserIpc(): void {
     sshStat: chatFileDeps.sshStat,
     deviceStat: chatFileDeps.deviceStat,
     downloadsDir: () => app.getPath('downloads'),
-    fetchFile: (args, onProgress) => fetchChatFile(args, onProgress, chatFileDeps),
+    fetchFile: (args, onProgress, signal) => fetchChatFile(args, onProgress, chatFileDeps, signal),
     deviceOp: deviceOpInvoke,
-    receivePart: async (deviceId, part, destination, onProgress) => {
+    receivePart: async (deviceId, part, destination, onProgress, signal) => {
       const ref = parseRemoteAttachmentRef(part.ref);
       if (!ref || ref.size !== part.size || ref.sha256 !== part.sha256) {
         throw new Error('invalid exported part');
@@ -536,6 +536,7 @@ export function registerFileBrowserIpc(): void {
           destination,
           { size: part.size, sha256: part.sha256 },
           onProgress,
+          signal,
         );
       } finally {
         void removeRemote(ref.ossKey);

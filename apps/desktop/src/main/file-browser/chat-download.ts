@@ -57,7 +57,11 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 export interface ChatDownloadDeps extends Pick<ChatFileDeps, 'sshStat' | 'deviceStat'> {
   downloadsDir(): string;
-  fetchFile(args: ChatFileFetchArgs, onProgress: FetchProgressFn): Promise<ChatFileFetchResult>;
+  fetchFile(
+    args: ChatFileFetchArgs,
+    onProgress: FetchProgressFn,
+    signal?: AbortSignal,
+  ): Promise<ChatFileFetchResult>;
   deviceOp<T>(deviceId: string, args: Record<string, unknown>): Promise<T>;
   /** 取一段被控端推来的引用(直连收件箱移出 / OSS 下载后删除)到 destination。 */
   receivePart(
@@ -65,6 +69,7 @@ export interface ChatDownloadDeps extends Pick<ChatFileDeps, 'sshStat' | 'device
     part: MigrationFileRef,
     destination: string,
     onProgress: (bytes: number) => void,
+    signal?: AbortSignal,
   ): Promise<void>;
   /** 放弃一段不会再取的引用(直连收件箱删除 / OSS 对象删除),best-effort。 */
   discardPart(deviceId: string, part: MigrationFileRef): Promise<void>;
@@ -190,8 +195,12 @@ async function downloadDeviceDirectory(
     let received = 0;
     await receiveParts(file, archive, async (part, destination) => {
       throwIfAborted(signal);
-      await deps.receivePart(deviceId, part, destination, (bytes) =>
-        onProgress(received + bytes, file.size, 'download'),
+      await deps.receivePart(
+        deviceId,
+        part,
+        destination,
+        (bytes) => onProgress(received + bytes, file.size, 'download'),
+        signal,
       );
       taken.add(part.ref);
       received += part.size;
@@ -319,8 +328,10 @@ export async function downloadChatEntry(
   let staging: string | null = null;
   try {
     if (!isDirectory) {
-      const fetched = await deps.fetchFile(args, (received, total, phase) =>
-        onProgress(received, total, phase ?? 'download'),
+      const fetched = await deps.fetchFile(
+        args,
+        (received, total, phase) => onProgress(received, total, phase ?? 'download'),
+        signal,
       );
       if (!fetched.ok) return fetched;
       throwIfAborted(signal);
@@ -328,6 +339,7 @@ export async function downloadChatEntry(
       staging = await fsp.mkdtemp(path.join(downloads, '.cindy-download-'));
       const copy = path.join(staging, 'file');
       await fsp.copyFile(fetched.cachePath, copy, constants.COPYFILE_FICLONE);
+      throwIfAborted(signal);
       const target = await placeEntry(copy, downloads, name, false);
       return { ok: true, path: target, stale: fetched.stale, skipped: 0 };
     }

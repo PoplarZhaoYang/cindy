@@ -80,6 +80,7 @@ export interface ChatFileDeps {
       deviceId?: string | null;
     },
     onProgress: FetchProgressFn,
+    signal?: AbortSignal,
   ): Promise<string>;
   /** device workdir 外:被控端 media:fetch(任意绝对路径上 OSS)。 */
   deviceMediaFetch(
@@ -139,8 +140,7 @@ export async function statChatFile(
   if (
     window &&
     (!Number.isFinite(window.startMs) ||
-      (window.endMs !== null &&
-        (!Number.isFinite(window.endMs) || window.endMs <= window.startMs)))
+      (window.endMs !== null && (!Number.isFinite(window.endMs) || window.endMs <= window.startMs)))
   ) {
     return 'nonfile';
   }
@@ -201,6 +201,8 @@ export async function fetchChatFile(
   args: ChatFileFetchArgs,
   onProgress: FetchProgressFn,
   deps: ChatFileDeps,
+  /** 调用方放弃(如下载的发起窗口已关闭)时中止取回;取消不走历史副本兜底。 */
+  signal?: AbortSignal,
 ): Promise<ChatFileFetchResult> {
   const { origin, workdir, absPath } = args ?? ({} as ChatFileFetchArgs);
   if (
@@ -244,6 +246,7 @@ export async function fetchChatFile(
           remoteHostId: origin.remoteHostId,
         },
         onProgress,
+        signal,
       );
       return { ok: true, cachePath, stale: false, size: stat.size };
     } catch (err) {
@@ -276,6 +279,7 @@ export async function fetchChatFile(
       const cachePath = await deps.fetchBigFile(
         { workdir, relPath, size: stat.size, mtimeMs: stat.mtimeMs, deviceId: origin.deviceId },
         onProgress,
+        signal,
       );
       return { ok: true, cachePath, stale: false, size: stat.size };
     } catch (err) {
@@ -318,6 +322,7 @@ export async function fetchChatFile(
             progress(fetched.size, fetched.size);
           },
           onProgress,
+          signal,
         );
         return { ok: true, cachePath, stale: false, size: fetched.size };
       } finally {
@@ -340,6 +345,7 @@ export async function fetchChatFile(
         }
       },
       onProgress,
+      signal,
     );
     if (!consumed) deps.removeRemote(fetched.ossKey);
     return { ok: true, cachePath, stale: false, size: fetched.size };

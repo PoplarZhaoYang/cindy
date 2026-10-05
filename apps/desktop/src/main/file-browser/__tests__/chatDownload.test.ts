@@ -325,6 +325,27 @@ describe('downloadChatEntry', () => {
     expect(await fsp.readdir(downloads)).toEqual([]);
   });
 
+  it('文件:中止信号传入取回链路,取回期间中止则不落盘', async () => {
+    const cache = path.join(tmp, 'cache.bin');
+    await fsp.writeFile(cache, 'data');
+    const abort = new AbortController();
+    const fetchFile = vi.fn(async (_a: unknown, _p: unknown, signal?: AbortSignal) => {
+      expect(signal).toBe(abort.signal);
+      abort.abort();
+      return { ok: true as const, cachePath: cache, stale: false, size: 4 };
+    });
+    const deps = makeDeps({ fetchFile: fetchFile as ChatDownloadDeps['fetchFile'] });
+    const res = await downloadChatEntry(
+      { origin: device, workdir: '/w', absPath: '/w/report.txt' },
+      () => undefined,
+      deps,
+      abort.signal,
+    );
+    expect(res).toMatchObject({ ok: false });
+    expect(fetchFile).toHaveBeenCalledTimes(1);
+    expect(await fsp.readdir(downloads).catch(() => [])).toEqual([]);
+  });
+
   it('发起方消失(abort)后停止轮询,不落盘', async () => {
     const abort = new AbortController();
     let polls = 0;
