@@ -42,6 +42,7 @@
     "sourceSessionId": "任务 ID：{{id}}",
     "sourceAutomationId": "自动化 ID：{{id}}",
     "sourcePluginId": "插件 ID：{{id}}",
+    "sourceMemberId": "成员 ID：{{id}}",
     "openSourceDeviceHint": "打开设备详情。设备 ID：{{id}}",
     "sourceDeviceRemoved": "该设备已移除",
     "sourcePluginNamed": "由插件「{{name}}」发送",

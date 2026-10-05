@@ -4,7 +4,7 @@ export type { PluginSetupCommandError } from './pluginSetupCommandError';
 import { emitTaskTagCatalog } from '@/features/task-tags/taskTagEvents';
 import { normalizeTaskTags } from '@cindy/maker-shared';
 import type { ImMessageSource } from '../../shared/imMessageSource';
-import { sharedTaskAuthorName } from '@cindy/maker-shared';
+import { sharedTaskAuthorMemberId, sharedTaskAuthorName } from '@cindy/maker-shared';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 import { applyCindyMakeCardAttention } from './cindyMakeAttention';
 import { confirmRemoteUsers, reserveRemoteUser } from './remoteUserHandoff';
@@ -481,6 +481,8 @@ export interface ChatMessage {
    */
   automationOrigin?: MessageAutomationOrigin;
   sharedAuthorName?: string;
+  /** 共享任务成员 id(作者行悬停显示,与模型 `[消息来源]` 的 member_id 同源)。 */
+  sharedAuthorMemberId?: string;
   /** 手机 / 另一台电脑远程发来时的发送设备(读自 agentMeta.sourceDevice)。 */
   sourceDevice?: MessageSourceDevice;
   /** 插件任务派发的消息来源(读自 agentMeta.sourcePlugin)。 */
@@ -18560,6 +18562,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
+        sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),
         clientId: m.clientId,
         role: m.role,
         content: parsed.text,

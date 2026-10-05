@@ -26,7 +26,13 @@ describe('UserMessage source labels', () => {
 
   it('marks the shared-task author line as a share-image source', () => {
     expect(userMessageSource).toMatch(
-      /\{sharedAuthorName && \(\s*<span \{\.\.\.\{ \[SHARE_SOURCE_ATTR\]: '' \}\}/,
+      /\{sharedAuthorName && \(\s*<span\s+\{\.\.\.\{ \[SHARE_SOURCE_ATTR\]: '' \}\}/,
+    );
+  });
+
+  it('shows the shared-task member id on hover, like the other source labels', () => {
+    expect(userMessageSource).toContain(
+      "t('chat.userMessage.sourceIds.member', { id: sharedAuthorMemberId })",
     );
   });
 

@@ -144,6 +144,8 @@ type UserImageItem =
 
 interface UserMessageProps {
   sharedAuthorName?: string;
+  /** 共享任务成员 id:作者行悬停显示。 */
+  sharedAuthorMemberId?: string;
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
    *  Stable per-session — only changes on session switch. */
   workingDir: string;
@@ -835,6 +837,7 @@ export function renderContent(
 
 export function UserMessage({
   sharedAuthorName,
+  sharedAuthorMemberId,
   workingDir,
   allowPrivilegedLinks = true,
   content,
@@ -1358,7 +1361,15 @@ export function UserMessage({
         )}
       >
         {sharedAuthorName && (
-          <span {...{ [SHARE_SOURCE_ATTR]: '' }} className="text-12 text-[var(--text-secondary)]">
+          <span
+            {...{ [SHARE_SOURCE_ATTR]: '' }}
+            className="text-12 text-[var(--text-secondary)]"
+            title={
+              sharedAuthorMemberId
+                ? t('chat.userMessage.sourceIds.member', { id: sharedAuthorMemberId })
+                : undefined
+            }
+          >
             {sharedAuthorName}
           </span>
         )}

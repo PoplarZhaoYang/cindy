@@ -465,6 +465,12 @@ describe("source labels reveal their ids on long press", () => {
         "message.automationOrigin",
       ),
     ).toContain("自动化 ID：sch-7");
+    expect(
+      longPress(
+        [msg("g1", "hi", { sharedTaskAuthor: { memberId: "mem-3", displayName: "张三" } })],
+        "message.sharedAuthor",
+      ),
+    ).toContain("成员 ID：mem-3");
   });
 
   it("keeps redacted sources static (no id to reveal)", () => {

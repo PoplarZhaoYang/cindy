@@ -42,6 +42,7 @@
     "sourceSessionId": "セッション ID：{{id}}",
     "sourceAutomationId": "自動化 ID：{{id}}",
     "sourcePluginId": "プラグイン ID：{{id}}",
+    "sourceMemberId": "メンバー ID：{{id}}",
     "openSourceDeviceHint": "デバイスの詳細を開きます。デバイス ID：{{id}}",
     "sourceDeviceRemoved": "このデバイスは削除されました",
     "sourcePluginNamed": "プラグイン「{{name}}」から送信",

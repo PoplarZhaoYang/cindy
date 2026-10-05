@@ -10378,7 +10378,8 @@
         "teammate": "동료 ID: {{id}}",
         "automation": "자동화 ID: {{id}}",
         "plugin": "플러그인 ID: {{id}}",
-        "device": "기기 ID: {{id}}"
+        "device": "기기 ID: {{id}}",
+        "member": "멤버 ID: {{id}}"
       },
       "expandLongMessage": "전체 메시지 보기",
       "collapseLongMessage": "접기",

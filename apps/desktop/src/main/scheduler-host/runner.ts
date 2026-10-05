@@ -3459,8 +3459,8 @@ function buildScheduledRunPrompt(schedule: Schedule, ctx: FireContext, checkOutp
  * 明确知道是哪条定时任务（名字 + schedule_id）触发了本轮、以及本轮 run.firedAt；
  * 具体查询时间范围仍由任务 prompt 决定。
  * 采用 epoch ms + UTC ISO，避免 UTC 日期与任务时区的壁钟日期被直接比较。
- * 伙伴（source === 'bot'）的 routine 工具刻意不接受 scheduleId（botRoutineTools.ts），
- * 所以只写名字，不给模型一个用不上的 id。名字是用户输入，按不可信展示文本处理。
+ * 名字一律配 schedule_id（伙伴 routine 也一样：id 用于区分同名任务、与界面和交接摘要
+ * 同源，与伙伴工具是否接受 scheduleId 无关）。名字是用户输入，按不可信展示文本处理。
  * 这一段是 per-fire user message 后缀，不进 system 段，不影响 prompt cache 前缀。
  */
 function buildScheduledRunContextInstruction(
@@ -3497,10 +3497,8 @@ function buildScheduledRunContextInstruction(
   ].join('\n');
 }
 
-function buildScheduleRefLine(schedule: Pick<Schedule, 'id' | 'name' | 'source'>): string[] {
-  const ref = schedule.source === 'bot'
-    ? formatSourceRef(schedule.name, 'schedule_id', undefined)
-    : formatSourceRef(schedule.name, 'schedule_id', schedule.id).trim();
+function buildScheduleRefLine(schedule: Pick<Schedule, 'id' | 'name'>): string[] {
+  const ref = formatSourceRef(schedule.name, 'schedule_id', schedule.id).trim();
   return ref ? [`schedule: ${ref}`] : [];
 }
 

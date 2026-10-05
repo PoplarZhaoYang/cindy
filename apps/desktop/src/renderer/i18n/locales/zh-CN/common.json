@@ -10373,7 +10373,8 @@
         "teammate": "伙伴 ID：{{id}}",
         "automation": "自动化 ID：{{id}}",
         "plugin": "插件 ID：{{id}}",
-        "device": "设备 ID：{{id}}"
+        "device": "设备 ID：{{id}}",
+        "member": "成员 ID：{{id}}"
       },
       "expandLongMessage": "展开全文",
       "collapseLongMessage": "收起",

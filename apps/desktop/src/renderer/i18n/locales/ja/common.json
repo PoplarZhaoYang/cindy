@@ -10378,7 +10378,8 @@
         "teammate": "仲間 ID：{{id}}",
         "automation": "自動化 ID：{{id}}",
         "plugin": "プラグイン ID：{{id}}",
-        "device": "デバイス ID：{{id}}"
+        "device": "デバイス ID：{{id}}",
+        "member": "メンバー ID：{{id}}"
       },
       "expandLongMessage": "全文を表示",
       "collapseLongMessage": "折りたたむ",

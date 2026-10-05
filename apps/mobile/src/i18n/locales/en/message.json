@@ -42,6 +42,7 @@
     "sourceSessionId": "Session ID: {{id}}",
     "sourceAutomationId": "Automation ID: {{id}}",
     "sourcePluginId": "Plugin ID: {{id}}",
+    "sourceMemberId": "Member ID: {{id}}",
     "openSourceDeviceHint": "Opens device details. Device ID: {{id}}",
     "sourceDeviceRemoved": "This device has been removed",
     "sourcePluginNamed": "Sent by plugin “{{name}}”",

@@ -6705,6 +6705,7 @@ const MessageItem = memo(function MessageItem({
       return (
         <UserMessage
           sharedAuthorName={message.sharedAuthorName}
+          sharedAuthorMemberId={message.sharedAuthorMemberId}
           workingDir={workingDir}
           content={message.content}
           sessionReferences={message.sessionReferences}

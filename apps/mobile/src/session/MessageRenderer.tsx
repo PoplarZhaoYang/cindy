@@ -3069,6 +3069,7 @@ const RenderListItemView = memo(function RenderListItemView({
  * 标签挂在气泡外——气泡本身不能挂 Pressable(会干扰正文横向滚动手势)。
  */
 function SourceLabelWithId({
+  accessibilityLabel,
   align,
   icon,
   label,
@@ -3077,8 +3078,10 @@ function SourceLabelWithId({
   openHint,
   testID,
 }: {
+  /** 读屏标签;缺省读 label。 */
+  accessibilityLabel?: string;
   align: 'user' | 'agent';
-  icon: ReactNode;
+  icon?: ReactNode;
   label: string;
   idText?: string;
   onPress?: () => void;
@@ -3092,7 +3095,7 @@ function SourceLabelWithId({
     <View style={[styles.sourceLabelStack, align === 'user' ? styles.sourceLabelStackUser : null]}>
       <Pressable
         accessibilityHint={hint || undefined}
-        accessibilityLabel={label}
+        accessibilityLabel={accessibilityLabel ?? label}
         accessibilityRole={onPress ? 'button' : 'text'}
         disabled={!onPress && !idText}
         hitSlop={8}
@@ -3881,15 +3884,17 @@ function MessageBubble({
       ]}
     >
       {item.message.kind === 'user' && item.message.sharedAuthorName ? (
-        // 共享任务成员发的消息:作者名放在气泡上方(对齐桌面 UserMessage),不进气泡。
-        <View
+        // 共享任务成员发的消息:作者名放在气泡上方(对齐桌面 UserMessage),不进气泡;
+        // 与其它来源标签一样长按显示成员 ID。
+        <SourceLabelWithId
+          align={isUser ? 'user' : 'agent'}
           accessibilityLabel={t('message.renderer.sharedAuthor', { name: item.message.sharedAuthorName })}
-          accessible
-          style={styles.automationOriginRow}
+          idText={item.message.sharedAuthorMemberId
+            ? t('message.renderer.sourceMemberId', { id: item.message.sharedAuthorMemberId })
+            : undefined}
+          label={item.message.sharedAuthorName}
           testID="message.sharedAuthor"
-        >
-          <Text numberOfLines={1} style={styles.automationOriginText}>{item.message.sharedAuthorName}</Text>
-        </View>
+        />
       ) : null}
       {automationOrigin ? (
         // 自动化任务注入的消息:气泡上方渲来源标签(对齐桌面;手机版暂不做

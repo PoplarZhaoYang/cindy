@@ -10372,7 +10372,8 @@
         "teammate": "夥伴 ID：{{id}}",
         "automation": "自動化 ID：{{id}}",
         "plugin": "插件 ID：{{id}}",
-        "device": "裝置 ID：{{id}}"
+        "device": "裝置 ID：{{id}}",
+        "member": "成員 ID：{{id}}"
       },
       "expandLongMessage": "展開全文",
       "collapseLongMessage": "收起",

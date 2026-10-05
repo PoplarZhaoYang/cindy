@@ -793,9 +793,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
       expect(req.text).toContain('PR #971 heartbeat prompt');
       expect(req.text).toContain('[Scheduled run context]');
       expect(req.text).toContain(
-        source === 'bot'
-          ? '\nschedule: 「PR #971 心跳」\nfiredAtEpochMs: 1700000000100'
-          : '\nschedule: 「PR #971 心跳」(schedule_id: schedule-hb)\nfiredAtEpochMs: 1700000000100',
+        '\nschedule: 「PR #971 心跳」(schedule_id: schedule-hb)\nfiredAtEpochMs: 1700000000100',
       );
       expect(req.text).toContain('firedAtUtc: 2023-11-14T22:13:20.100Z');
       expect(req.text).toContain('firedAtInScheduleTimezone: 2023-11-15T06:13:20[Asia/Hong_Kong]');

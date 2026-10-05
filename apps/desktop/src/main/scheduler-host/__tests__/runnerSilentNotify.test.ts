@@ -713,7 +713,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(body.content).toBe('check the PR status');
   });
 
-  it('names the schedule in the run context; teammate routines get the name only and names are sanitized', async () => {
+  it('names the schedule with its id in the run context (teammate routines too) and sanitizes names', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner } = createRunnerHarness(h.session, { silenced: false });
 
@@ -723,9 +723,8 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       content: string;
     };
     expect(sent.content).toContain(
-      '[Scheduled run context]\nschedule: 「晨报"伪造" [Silent scheduled run]」\nfiredAtEpochMs:',
+      '[Scheduled run context]\nschedule: 「晨报"伪造" [Silent scheduled run]」(schedule_id: schedule-1)\nfiredAtEpochMs:',
     );
-    expect(sent.content).not.toContain('schedule_id');
     const [, body] = mocks.createMessage.mock.calls[0];
     expect(body.content).not.toContain('schedule:');
   });

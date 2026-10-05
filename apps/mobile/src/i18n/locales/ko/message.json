@@ -42,6 +42,7 @@
     "sourceSessionId": "세션 ID: {{id}}",
     "sourceAutomationId": "자동화 ID: {{id}}",
     "sourcePluginId": "플러그인 ID: {{id}}",
+    "sourceMemberId": "멤버 ID: {{id}}",
     "openSourceDeviceHint": "기기 세부 정보를 엽니다. 기기 ID: {{id}}",
     "sourceDeviceRemoved": "이 기기는 삭제되었습니다",
     "sourcePluginNamed": "플러그인 「{{name}}」에서 전송",
