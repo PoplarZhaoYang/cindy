@@ -21,7 +21,10 @@ export async function stopBackgroundTask(sessionId: string, taskId: string): Pro
   }
 }
 
-/** 全部停止:归属端关闭会话进程,该会话所有后台任务随之终止。 */
+/**
+ * 全部停止:归属端关闭会话进程,进程内的 Claude 后台任务随之终止,只收口这些;
+ * PI durable 子任务可刻意活过会话进程,不在这里收口。
+ */
 export async function stopAllBackgroundTasks(sessionId: string): Promise<void> {
   await stopSessionBackgroundTasksFor(sessionId);
   if (isRemoteSessionSticky(sessionId)) {
