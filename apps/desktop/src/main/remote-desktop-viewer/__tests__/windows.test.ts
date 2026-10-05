@@ -186,6 +186,34 @@ it('lets the focused remote keyboard own Cmd/Ctrl+W until focus is released', ()
   expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
   expect(press()).toHaveBeenCalledOnce();
 });
+it.each([
+  [
+    'a renderer crash',
+    (win: any) => win.webContents.emit('render-process-gone', {}, { reason: 'crashed' }),
+  ],
+  [
+    'a main-frame navigation',
+    (win: any) => win.webContents.emit('did-start-navigation', {}, 'about:blank', false, true),
+  ],
+])('restores the local close shortcut after %s retires a captured viewer', (_name, retire) => {
+  const sender: any = { id: 100 };
+  manager = new RemoteDesktopViewerWindows((value) => value === sender);
+  manager.register();
+  manager.open(sender, { deviceId: 'a', name: 'A' });
+  const win = fixture.windows[0];
+  call(REMOTE_VIEWER.READY, win);
+  call(REMOTE_VIEWER.PRESENTED, win);
+  call(REMOTE_VIEWER.INPUT_FOCUS, win, call(REMOTE_VIEWER.STATE, win).generation, true);
+  retire(win);
+  expect(win.webContents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(false);
+  const preventDefault = vi.fn();
+  win.webContents.emit(
+    'before-input-event',
+    { preventDefault },
+    { type: 'keyDown', code: 'KeyW', meta: true },
+  );
+  expect(preventDefault).toHaveBeenCalledOnce();
+});
 it('prewarms without network or focus, reuses the target window and cleans only its lease', async () => {
   const sender: any = { id: 100 };
   manager = new RemoteDesktopViewerWindows((value) => value === sender);

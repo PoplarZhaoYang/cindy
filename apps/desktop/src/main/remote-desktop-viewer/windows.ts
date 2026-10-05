@@ -201,11 +201,16 @@ export class RemoteDesktopViewerWindows {
           void connection.focusChanged();
         });
         // Local navigation/reloads/crashes immediately retire authority, including in-flight starts.
+        // A retired renderer can no longer report focus loss, so its shortcut capture ends too.
+        const retire = () => {
+          this.setInputCaptured(entry, false);
+          connection.deactivate();
+        };
         win.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-          if (isMainFrame && !isInPlace) connection.deactivate();
+          if (isMainFrame && !isInPlace) retire();
         });
-        win.webContents.on('render-process-gone', () => connection.deactivate());
-        win.on('closed', () => connection.deactivate());
+        win.webContents.on('render-process-gone', retire);
+        win.on('closed', retire);
         win.webContents.on('before-input-event', (event, input) => {
           if (
             !entry.inputCaptured &&
