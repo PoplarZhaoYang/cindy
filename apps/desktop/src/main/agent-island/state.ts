@@ -1206,10 +1206,14 @@ function applyDeviceSessionPhase(
       return { changed, event: entering && previous !== null ? 'needs-reply' : null };
     }
     case 'completed': {
-      if (previous === 'completed') return { changed: false, event: null };
+      if (previous === 'completed') {
+        return { changed: mirrorDeviceSessionReply(session, input.detail), event: null };
+      }
       clearDeviceSessionInteraction(session);
       session.running = false;
       session.lastActivityAt = now;
+      // 必须先于 complete:有回复可显示时就不再补「完成」占位。
+      mirrorDeviceSessionReply(session, input.detail);
       // 对方设备已经仲裁过终态,这里不再套本机「报错后的配对 done」保护。
       session.completionAllowedAfterTerminalError = true;
       completeAgentIslandSession(state, session, now, observed
@@ -1235,6 +1239,18 @@ function applyDeviceSessionPhase(
       return { changed: true, event: observed ? 'error' : null };
     }
   }
+}
+
+/**
+ * 设备任务不同步对话,只带对方岛上算好的一行摘要(完成时即最后一条消息)。完成卡片和
+ * 本机任务一样从最后一条回复取文案,所以把摘要记成回复行;没有摘要时才退回「完成」。
+ */
+function mirrorDeviceSessionReply(session: AgentIslandSessionState, detail: string): boolean {
+  const text = normalizeActivityText(detail);
+  const last = session.activityLines.at(-1);
+  if (!text || (last?.kind === 'assistant' && last.text === text)) return false;
+  appendActivityLine(session, 'assistant', text);
+  return true;
 }
 
 function clearDeviceSessionInteraction(session: AgentIslandSessionState): void {
