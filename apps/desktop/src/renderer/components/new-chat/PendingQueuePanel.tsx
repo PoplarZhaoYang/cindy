@@ -147,6 +147,25 @@ function isPendingQueueSteerShortcut(event: ReactKeyboardEvent): boolean {
   );
 }
 
+
+/** 排队来源行的悬停提示:给出来源 ID(对齐已发送消息来源标签的悬停 ID);脱敏来源没有 ID。 */
+function queueRowSourceIdTitle(
+  entry: QueuedMessage,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string | null {
+  const origin = entry.origin;
+  if (origin?.kind === 'scheduler' && origin.scheduleId && !origin.scheduleId.startsWith('hook:')) {
+    return t('chat.userMessage.sourceIds.automation', { id: origin.scheduleId });
+  }
+  if (origin?.kind === 'session' && origin.senderSessionId) {
+    return t('chat.userMessage.sourceIds.session', { id: origin.senderSessionId });
+  }
+  if (entry.sourcePlugin?.pluginId) {
+    return t('chat.userMessage.sourceIds.plugin', { id: entry.sourcePlugin.pluginId });
+  }
+  return null;
+}
+
 export function PendingQueuePanel({
   queue,
   expanded,
@@ -487,6 +506,7 @@ export function PendingQueuePanel({
                     { sender: queueRowSenderLabel },
                   )}
                   className="relative top-px flex min-w-0 flex-1 items-center gap-1.5"
+                  title={queueRowSourceIdTitle(entry, t) ?? undefined}
                 >
                   {rowPresentation.senderBotId ? (
                     <BotAvatar

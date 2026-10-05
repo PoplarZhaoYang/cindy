@@ -60,6 +60,8 @@ export interface MobilePendingSendSource {
   kind: MobilePendingSendSourceKind;
   /** 已本地化的标签,同时用于无障碍播报。 */
   label: string;
+  /** 已本地化的来源 ID(长按显示,对齐已发送消息的来源标签);脱敏来源没有。 */
+  idText?: string;
 }
 
 /** 气泡上的三个队列操作在当前条目上可不可用(由 buildQueueRowPresentation 预先算好)。 */
@@ -233,19 +235,26 @@ export function pendingSendSource(
   if (isHookSchedulerOrigin(origin)) return null;
   if (origin?.kind === 'scheduler') {
     // 共享任务访客拿到的来源可能已脱敏(无 scheduleId):不显示名字。
-    const scheduleName = readNonEmptyString(origin.scheduleId)
-      ? sanitizeSourceName(origin.scheduleName)
-      : undefined;
-    return { kind: 'automation', label: automationOriginLabel({ scheduleName }) };
+    const scheduleId = readNonEmptyString(origin.scheduleId);
+    const scheduleName = scheduleId ? sanitizeSourceName(origin.scheduleName) : undefined;
+    return {
+      kind: 'automation',
+      label: automationOriginLabel({ scheduleName }),
+      ...(scheduleId ? { idText: i18n.t('message.renderer.sourceAutomationId', { id: scheduleId }) } : {}),
+    };
   }
   if (origin?.kind === 'session') {
     const senderBotName = readNonEmptyString(origin.senderBotId)
       ? sanitizeSourceName(origin.senderBotName) ?? sanitizeSourceName(origin.senderBotId)
       : undefined;
     const senderSessionTitle = sanitizeSourceName(origin.senderSessionTitle);
+    const senderSessionId = readNonEmptyString(origin.senderSessionId);
     return {
       kind: senderBotName ? 'teammate' : 'session',
       label: sessionOriginLabel({ senderBotName, senderSessionTitle }),
+      ...(senderSessionId
+        ? { idText: i18n.t('message.renderer.sourceSessionId', { id: senderSessionId }) }
+        : {}),
     };
   }
   if (origin?.kind === 'orca') {
@@ -255,7 +264,13 @@ export function pendingSendSource(
     return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel) };
   }
   const plugin = readMessageSourcePlugin(item);
-  if (plugin) return { kind: 'plugin', label: sourcePluginLabel(plugin) };
+  if (plugin) {
+    return {
+      kind: 'plugin',
+      label: sourcePluginLabel(plugin),
+      idText: i18n.t('message.renderer.sourcePluginId', { id: plugin.pluginId }),
+    };
+  }
   return null;
 }
 

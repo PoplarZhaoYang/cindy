@@ -551,6 +551,16 @@ describe('pending bubble source labels', () => {
       ['plugin', 'plugin', '由插件「日报」发送'],
       ['mine', null, null],
     ]);
+    // 来源 ID 随标签保留(长按显示);脱敏来源与 Orca 没有。
+    expect(Object.fromEntries(items.map((item) => [item.clientId, item.source?.idText ?? null]))).toMatchObject({
+      auto: '自动化 ID：sch-1',
+      'auto-redacted': null,
+      task: '任务 ID：s1',
+      'task-redacted': null,
+      mate: '任务 ID：s2',
+      plugin: '插件 ID：pl-1',
+      mine: null,
+    });
     // Orca 条目显示正文,不显示发给 Agent 的前缀或落库 JSON。
     expect(items.find((item) => item.clientId === 'lead')?.text).toBe('先跑测试');
     expect(items.find((item) => item.clientId === 'worker')?.text).toBe('完成');

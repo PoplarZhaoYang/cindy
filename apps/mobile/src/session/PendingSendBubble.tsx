@@ -302,19 +302,32 @@ export function PendingSendBubble({
         ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
         : t('message.queue.sendingMessage', { text: bubbleLabel });
   const SourceIcon = item.source ? sourceIcon(item.source.kind) : null;
+  const [sourceIdVisible, setSourceIdVisible] = useState(false);
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
       {item.source && SourceIcon ? (
         // 非本人输入的排队条目:气泡上方的来源标签(对齐桌面排队面板与已发送消息的来源标签)。
-        <View
-          accessibilityLabel={item.source.label}
-          accessible
-          style={styles.sourceRow}
-          testID={`pendingSend.source.${item.clientId}`}
-        >
-          <SourceIcon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-          <Text numberOfLines={1} style={styles.sourceText}>{item.source.label}</Text>
+        // 有来源 ID 时长按就地显示(可选中复制),读屏提示读出 ID;脱敏来源保持静态。
+        <View style={styles.sourceStack}>
+          <Pressable
+            accessibilityHint={item.source.idText}
+            accessibilityLabel={item.source.label}
+            accessibilityRole="text"
+            disabled={!item.source.idText}
+            hitSlop={8}
+            onLongPress={item.source.idText ? () => setSourceIdVisible((visible) => !visible) : undefined}
+            style={styles.sourceRow}
+            testID={`pendingSend.source.${item.clientId}`}
+          >
+            <SourceIcon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+            <Text numberOfLines={1} style={styles.sourceText}>{item.source.label}</Text>
+          </Pressable>
+          {sourceIdVisible && item.source.idText ? (
+            <Text selectable style={styles.sourceText} testID={`pendingSend.sourceId.${item.clientId}`}>
+              {item.source.idText}
+            </Text>
+          ) : null}
         </View>
       ) : null}
       <View style={styles.bubbleRow}>
@@ -548,7 +561,8 @@ function ActionPill({
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowWrap: { alignItems: 'flex-end', gap: spacing.sm, width: '100%' },
   // 来源标签:与已发送消息上方的来源标签同款(12/18 三级色)。
-  sourceRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, maxWidth: '86%' },
+  sourceStack: { alignItems: 'flex-end', gap: 2, maxWidth: '86%' },
+  sourceRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
   sourceText: { color: colors.textTertiary, flexShrink: 1, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   bubbleRow: {
     alignItems: 'center',
