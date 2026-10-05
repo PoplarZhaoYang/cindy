@@ -2138,10 +2138,18 @@ export function RemoteDesktopSession({
           epoch: current.lease,
           sequence: message.sequence,
         };
+        // Entering view only sends one release batch: it must reach the host
+        // (which keeps control) even while an older batch is still in flight.
+        const releaseOnly =
+          Array.isArray(message.events) &&
+          message.events.length > 0 &&
+          message.events.every(
+            (event) => isDesktopInput(event) && event.kind === "release",
+          );
         if (
           !current.controlling ||
-          viewOnlyRef.current ||
-          inputBusy.current?.lease === current.lease ||
+          (viewOnlyRef.current && !releaseOnly) ||
+          (!releaseOnly && inputBusy.current?.lease === current.lease) ||
           !Number.isSafeInteger(message.sequence) ||
           !Array.isArray(message.events) ||
           message.events.length > 64 ||
@@ -2151,8 +2159,10 @@ export function RemoteDesktopSession({
           return;
         }
         const batch = { lease: current.lease };
-        inputBusy.current = batch;
-        const ownsBatch = () => active.current === current && inputBusy.current === batch;
+        if (!releaseOnly) inputBusy.current = batch;
+        const ownsBatch = () =>
+          active.current === current &&
+          (releaseOnly || inputBusy.current === batch);
         const events = message.events;
         void (async () => {
           if (
@@ -2160,7 +2170,13 @@ export function RemoteDesktopSession({
             (await nativeViewer.current?.sendInput(message).catch(() => false))
           )
             return;
-          if (!ownsBatch() || !current.controlling) return;
+          // View only may have started while the native attempt was pending.
+          if (
+            !ownsBatch() ||
+            !current.controlling ||
+            (viewOnlyRef.current && !releaseOnly)
+          )
+            return;
           await request({
             op: "input",
             lease: current.lease,
@@ -2174,7 +2190,7 @@ export function RemoteDesktopSession({
           })
           .finally(() => {
             if (!ownsBatch()) return;
-            inputBusy.current = null;
+            if (!releaseOnly) inputBusy.current = null;
             send(ack);
           });
         break;
@@ -2196,11 +2212,12 @@ export function RemoteDesktopSession({
     viewOnlyRef.current = viewOnly;
     setViewOnlySelected(viewOnly);
     if (viewOnly) {
-      // Local only: drop held keys and stop forwarding; the host keeps control.
+      // Local only: stop forwarding and release held keys and buttons on the
+      // host, which keeps control and its input helper.
       heldKeys.current.clear();
       setModifiers([]);
       setKeyboard(false);
-      send({ type: "control", enabled: false });
+      send({ type: "control", enabled: false, release: true });
       return;
     }
     if (current.controlling) {

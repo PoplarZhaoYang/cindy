@@ -1139,13 +1139,15 @@ export class DesktopViewerController {
     if (status === 'live') this.mediaChanging = false;
     this.retryDelay = 1000;
     this.publish({ ready: true, status });
-    this.syncControl();
-    this.applySettings();
-    void this.refreshSafety();
+    // Start auto-unlock before control can trigger the remembered display
+    // change, which waits for it: a locked computer refuses display changes.
     if (!this.unlockAttempted && this.state.caps?.platform === 'darwin') {
       this.unlockAttempted = true;
       this.unlockAttempt = this.credential('unlock').catch(() => {});
     }
+    this.syncControl();
+    this.applySettings();
+    void this.refreshSafety();
   }
   dispose(): void {
     this.cancel();

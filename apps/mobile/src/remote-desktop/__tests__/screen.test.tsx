@@ -4548,6 +4548,7 @@ describe("remote desktop controls", () => {
     ).toEqual({
       type: "control",
       enabled: false,
+      release: true,
     });
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(
@@ -4664,6 +4665,7 @@ describe("remote desktop controls", () => {
     expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
       type: "control",
       enabled: false,
+      release: true,
     });
     expect(button("keyboard").disabled).toBe(true);
     await connect();
@@ -4698,6 +4700,58 @@ describe("remote desktop controls", () => {
       expect(sent()).toContainEqual({ type: "control", enabled: true });
       expect(button("keyboard").disabled).toBe(false);
     });
+    const viewerInput = (sequence: number, events: object[]) =>
+      act(async () =>
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({ type: "input", epoch: "lease", sequence, events }),
+          },
+        }),
+      );
+    it("releases host input on entering view only even with a batch in flight", async () => {
+      autoControl();
+      await connect();
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "input" && args[2][0].sequence === 1
+          ? new Promise(() => {})
+          : original(...args),
+      );
+      await viewerInput(1, [{ kind: "button", button: 0, down: true, x: 0.5, y: 0.5 }]);
+      act(() => button("operations").click());
+      await act(async () => button("viewOnly").click());
+      expect(sent()).toContainEqual({ type: "control", enabled: false, release: true });
+      // The runtime's trailing release reaches the host past the busy batch.
+      await viewerInput(2, [{ kind: "release" }]);
+      expect(requests()).toContainEqual({
+        op: "input",
+        lease: "lease",
+        sequence: 2,
+        events: [{ kind: "release" }],
+      });
+      // Other input stays local while viewing only.
+      await viewerInput(3, [{ kind: "move", x: 0.2, y: 0.2 }]);
+      expect(requests().some((r) => r.op === "input" && r.sequence === 3)).toBe(false);
+    });
+    it("drops a native-pending batch that falls back after view only started", async () => {
+      fixture.nativeMedia = true;
+      act(() => root.render(<RemoteDesktopScreen />));
+      autoControl();
+      await connect();
+      let fallback!: (sent: boolean) => void;
+      fixture.nativeInput.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            fallback = resolve;
+          }),
+      );
+      await viewerInput(1, [{ kind: "move", x: 0.5, y: 0.5 }]);
+      expect(fallback).toBeTypeOf("function");
+      act(() => button("operations").click());
+      await act(async () => button("viewOnly").click());
+      await act(async () => fallback(false));
+      expect(requests().some((r) => r.op === "input" && r.sequence === 1)).toBe(false);
+    });
     it("switches view only locally without asking the host", async () => {
       autoControl();
       await connect();
@@ -4707,7 +4761,7 @@ describe("remote desktop controls", () => {
       await act(async () => button("viewOnly").click());
       expect(button("viewOnly").getAttribute("aria-selected")).toBe("true");
       expect(button("keyboard").disabled).toBe(true);
-      expect(sent()).toContainEqual({ type: "control", enabled: false });
+      expect(sent()).toContainEqual({ type: "control", enabled: false, release: true });
       // Taps no longer reach the computer while viewing only.
       await act(async () =>
         fixture.message!({

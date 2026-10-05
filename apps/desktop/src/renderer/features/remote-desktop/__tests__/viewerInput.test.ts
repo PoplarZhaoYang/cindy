@@ -576,3 +576,33 @@ it('continues edge panning when the first browser frame predates the pointer eve
   vi.advanceTimersByTime(200);
   expect(parseFloat(document.getElementById('image')!.style.left)).toBeLessThan(-500);
 });
+it('still releases host input when a local view-only switch abandons an in-flight batch', () => {
+  viewer.dispose();
+  messages = [];
+  // No automatic ACK: the first batch stays in flight.
+  viewer = mountRemoteDesktopViewer(document, (message) => messages.push(message), {
+    desktop: true,
+    net: REMOTE_DESKTOP_NETWORK,
+    iceServers: [],
+    keyCodes: DESKTOP_KEY_CODES,
+  });
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  pointer('pointerdown');
+  vi.advanceTimersByTime(34);
+  const before = messages.filter((m) => m.type === 'input').length;
+  viewer.receive({ type: 'control', enabled: false, release: true });
+  const after = messages.filter((m) => m.type === 'input');
+  expect(after.length).toBe(before + 1);
+  expect(after.at(-1)?.events).toEqual([{ kind: 'release' }]);
+  // Without the flag (the host revoked control) an in-flight batch still
+  // drops the queued release, as before.
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointermove', 400, 300);
+  vi.advanceTimersByTime(34);
+  const count = messages.filter((m) => m.type === 'input').length;
+  viewer.receive({ type: 'control', enabled: false });
+  expect(messages.filter((m) => m.type === 'input').length).toBe(count);
+});

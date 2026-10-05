@@ -721,3 +721,30 @@ it('needs no separate control request when the host grants it with the lease and
   expect(f.control).not.toHaveBeenCalled();
   expect(snapshot.controlling).toBe(true);
 });
+
+it('waits for auto-unlock to finish before reapplying a remembered resolution', async () => {
+  const unlock = deferred<{
+    available: boolean;
+    autoUnlock: boolean;
+    biometricAvailable: boolean;
+    biometricVerification: boolean;
+  }>();
+  const credential = vi.fn(() => unlock.promise);
+  const f = await fixture(undefined, true, {
+    caps: { platform: 'darwin', autoControl: true },
+    remembered: { kind: 'mode', modeId: '4k', width: 3840, height: 2160 },
+    api: { credential },
+  });
+  present();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(credential).toHaveBeenCalledWith(1, 'unlock', undefined);
+  expect(f.resolution).not.toHaveBeenCalled();
+  unlock.resolve({
+    available: true,
+    autoUnlock: true,
+    biometricAvailable: false,
+    biometricVerification: false,
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.resolution).toHaveBeenCalledExactlyOnceWith('4k');
+});

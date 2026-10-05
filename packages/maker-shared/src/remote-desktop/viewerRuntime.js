@@ -2437,7 +2437,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         image.src = "data:image/jpeg;base64," + message.jpeg;
         break;
       }
-      case "control":
+      case "control": {
+        // A local view-only switch keeps host control, so its release must
+        // still reach the host even if a batch was waiting for its ACK.
+        const releaseHost =
+          control && message.enabled !== true && message.release === true;
         release();
         // A new control intent abandons the previous relay batch. Advance the
         // existing sequence fence so a late old ACK cannot unlock a new batch.
@@ -2446,9 +2450,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         control = message.enabled;
         if (!control) showKeyboard(false);
         pending = [];
+        if (releaseHost) {
+          pending = [{ kind: "release" }];
+          pendingSince = performance.now();
+          flush();
+        }
         updateMouseButtons();
         render();
         break;
+      }
       case "mode":
         release();
         if (message.mode !== "pointer") followRest = null;
