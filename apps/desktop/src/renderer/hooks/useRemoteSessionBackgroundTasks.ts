@@ -78,6 +78,10 @@ export function useRemoteSessionBackgroundTasks(
     EMPTY_STATE,
   );
   const [stopping, setStopping] = useState(false);
+  // 读取序号:定时器不等上一轮返回,慢的旧读取只能被更新的结果取代,不能反过来覆盖;
+  // 停止成功时把已发出的读取整体作废,避免在途旧快照重新点亮已熄灭的提示。
+  const issuedSeqRef = useRef(0);
+  const appliedSeqRef = useRef(0);
 
   useEffect(() => {
     if (!enabled || !sessionId) {
@@ -87,11 +91,13 @@ export function useRemoteSessionBackgroundTasks(
     }
     let disposed = false;
     const read = () => {
+      const seq = ++issuedSeqRef.current;
       void Promise.all([
         sessionBackgroundActivityFor(sessionId),
         listSessionBackgroundTasksFor(sessionId),
       ]).then(([activity, list]) => {
-        if (disposed) return;
+        if (disposed || seq <= appliedSeqRef.current) return;
+        appliedSeqRef.current = seq;
         const next = {
           active: activity?.active === true,
           tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
@@ -131,7 +137,8 @@ export function useRemoteSessionBackgroundTasks(
         const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failed) throw failed.reason;
       }
-      // 成功后立即熄灭;仍有残留的话下一次复查会重新点亮。
+      // 成功后立即熄灭并作废在途读取;仍有残留的话下一次复查会重新点亮。
+      appliedSeqRef.current = issuedSeqRef.current;
       setSnapshot({ ...EMPTY_STATE, sessionId });
     } catch (error) {
       reportBackgroundTaskStopFailure(error, t);

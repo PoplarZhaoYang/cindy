@@ -188,4 +188,48 @@ describe('useRemoteSessionBackgroundTasks', () => {
     expect(result.current.tasks).toHaveLength(2);
     expect(result.current.stopping).toBe(false);
   });
+
+  it('慢的旧读取晚到时不覆盖更新的快照', async () => {
+    let releaseSlow!: (value: { active: boolean }) => void;
+    mocks.activity.mockImplementationOnce(() => new Promise((resolve) => (releaseSlow = resolve)));
+    mocks.activity.mockResolvedValue({ active: false });
+    mocks.list.mockResolvedValue({ tasks: [] });
+    const { result } = renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));
+    await flush();
+    // 第二轮(更新)先返回:无后台任务。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(result.current.active).toBe(false);
+    // 第一轮(更旧)此时才返回「有活动」,必须被丢弃。
+    await act(async () => {
+      releaseSlow({ active: true });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.active).toBe(false);
+  });
+
+  it('「全部停止」成功后,停止前发出的在途读取不会重新点亮提示', async () => {
+    mocks.activity.mockResolvedValue({ active: true });
+    const { result } = renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));
+    await flush();
+    expect(result.current.active).toBe(true);
+
+    let releaseInFlight!: (value: { active: boolean }) => void;
+    mocks.activity.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseInFlight = resolve)),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    await act(async () => {
+      await result.current.stopAll();
+    });
+    expect(result.current.active).toBe(false);
+    await act(async () => {
+      releaseInFlight({ active: true });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.active).toBe(false);
+  });
 });

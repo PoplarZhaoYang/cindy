@@ -584,21 +584,36 @@ export async function sessionBackgroundActivityFor(sessionId: string): Promise<{
 }
 
 /**
- * 精确停止单个后台任务。远程会话的任务真身在被控端,本机调用只会假成功;归属用
- * 粘滞解析(与 Stop gating 同口径),relay 瞬断窗口内不退回本机。错误原样透传:
+ * 停止类操作的执行端:远程 → 被控设备 id(粘滞解析,relay 瞬断窗口内不退回本机);
+ * 本机 → null,但仅当本机库确有该会话。两者都不是即归属未解析(冷启动时远程注册表
+ * 尚未就绪),拒绝执行 —— 本机停止对不存在的会话会幂等「成功」,任务却在被控端继续跑。
+ */
+async function resolveStopOwner(sessionId: string): Promise<string | null> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (deviceId) return deviceId;
+  try {
+    await sessionService.get(sessionId);
+  } catch {
+    throw new Error('[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved');
+  }
+  return null;
+}
+
+/**
+ * 精确停止单个后台任务,在会话归属端执行(见 resolveStopOwner)。错误原样透传:
  * 老被控端回 DEVICE_LINK_CHANNEL_NOT_ALLOWED,调用方据此提示升级。
  */
 export async function stopAgentTaskFor(sessionId: string, taskId: string): Promise<{ ok: true }> {
-  const deviceId = getStickySessionDeviceId(sessionId);
+  const deviceId = await resolveStopOwner(sessionId);
   if (!deviceId) return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
   return invokeRemote(deviceId, 'maker:agent-task:stop', [sessionId, taskId]) as Promise<{
     ok: true;
   }>;
 }
 
-/** 会话级「全部停止」(关闭被控端常驻 agent 进程);路由与错误语义同 stopAgentTaskFor。 */
+/** 会话级「全部停止」(关闭归属端常驻 agent 进程);路由与错误语义同 stopAgentTaskFor。 */
 export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<{ ok: true }> {
-  const deviceId = getStickySessionDeviceId(sessionId);
+  const deviceId = await resolveStopOwner(sessionId);
   if (!deviceId) return window.electronAPI.maker.stopSessionBackgroundTasks(sessionId);
   return invokeRemote(deviceId, 'maker:session-background-tasks:stop', [sessionId]) as Promise<{
     ok: true;
