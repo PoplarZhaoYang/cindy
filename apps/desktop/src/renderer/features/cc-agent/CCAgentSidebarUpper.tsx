@@ -924,7 +924,9 @@ function ExpandedView({
 
       if (action === 'mark-read') {
         const sessionIds = group.sessions.map((session) => session.id);
-        clearSessionAttentionMany(sessionIds);
+        // 远程分组拿不到被控端的 pending-alerts 处置通道，用户显式标已读即按 explicit
+        // 清除（对错误提醒同样生效），并经既有已读回执桥接到所属电脑。
+        clearSessionAttentionMany(sessionIds, deviceId ? { intent: 'explicit' } : undefined);
         if (!deviceId) {
           try {
             const { processed, failed } =
@@ -975,6 +977,10 @@ function ExpandedView({
 
       if (action === 'run' && deviceId) {
         // 远程运行的 fired / session-bound 来自对方电脑，不跟随跳转；新运行随侧栏刷新出现。
+        // 与本机同一个 busy guard：请求返回前重复点击不再发第二次 run-now。
+        const busyKey = `${deviceId}:${scheduleId}`;
+        if (pendingRunNowIdsRef.current.has(busyKey)) return;
+        pendingRunNowIdsRef.current.add(busyKey);
         try {
           await window.electronAPI.deviceLink.invoke(deviceId, 'maker:schedule:run-now', [
             scheduleId,
@@ -983,6 +989,8 @@ function ExpandedView({
           toast.error(
             t('scheduler.toast.runFailed', { error: e instanceof Error ? e.message : String(e) }),
           );
+        } finally {
+          pendingRunNowIdsRef.current.delete(busyKey);
         }
         return;
       }
