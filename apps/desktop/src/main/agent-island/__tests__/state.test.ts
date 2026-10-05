@@ -876,6 +876,19 @@ describe('Agent Island display state', () => {
     expect(afterAssistantDwell.sessions[0]?.compactDetail).toBe('运行测试');
   });
 
+  it('summarizes a completion with the reply even while the user prompt preview dwells', () => {
+    const state = createAgentIslandState();
+    const start = 1_000;
+
+    applyAgentIslandUserPrompt(state, { sessionId: 's1', title: 'Task' }, 'fix the login bug', start);
+    applyAgentIslandEvent(state, { sessionId: 's1' }, finalTextEvent('登录问题已修复。'), start + 100);
+    applyAgentIslandEvent(state, { sessionId: 's1' }, doneEvent(), start + 200);
+
+    const display = buildAgentIslandDisplayState(state, start + 300);
+    expect(display.sessions[0]?.messagePreview?.kind).toBe('user');
+    expect(display.sessions[0]?.compactDetail).toBe('登录问题已修复。');
+  });
+
   it('does not display managed dialogue workspace folders as projects', () => {
     const state = createAgentIslandState();
 

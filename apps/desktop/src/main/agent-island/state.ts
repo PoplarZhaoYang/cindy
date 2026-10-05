@@ -1207,13 +1207,14 @@ function applyDeviceSessionPhase(
     }
     case 'completed': {
       if (previous === 'completed') {
-        return { changed: mirrorDeviceSessionReply(session, input.detail), event: null };
+        return { changed: mirrorDeviceSessionSummary(session, input.detail), event: null };
       }
       clearDeviceSessionInteraction(session);
       session.running = false;
       session.lastActivityAt = now;
-      // 必须先于 complete:有回复可显示时就不再补「完成」占位。
-      mirrorDeviceSessionReply(session, input.detail);
+      // 先换掉上一轮的摘要,且必须先于 complete:有摘要可显示时就不再补「完成」占位。
+      session.activityLines = [];
+      mirrorDeviceSessionSummary(session, input.detail);
       // 对方设备已经仲裁过终态,这里不再套本机「报错后的配对 done」保护。
       session.completionAllowedAfterTerminalError = true;
       completeAgentIslandSession(state, session, now, observed
@@ -1242,14 +1243,14 @@ function applyDeviceSessionPhase(
 }
 
 /**
- * 设备任务不同步对话,只带对方岛上算好的一行摘要(完成时即最后一条消息)。完成卡片和
- * 本机任务一样从最后一条回复取文案,所以把摘要记成回复行;没有摘要时才退回「完成」。
+ * 设备任务不同步对话,只带对方岛上算好的一行摘要,不带消息角色。记成状态行(不冒充
+ * 回复):完成卡片取它当文案,连续更新原地替换;没有摘要时才退回「完成」。
  */
-function mirrorDeviceSessionReply(session: AgentIslandSessionState, detail: string): boolean {
+function mirrorDeviceSessionSummary(session: AgentIslandSessionState, detail: string): boolean {
   const text = normalizeActivityText(detail);
   const last = session.activityLines.at(-1);
-  if (!text || (last?.kind === 'assistant' && last.text === text)) return false;
-  appendActivityLine(session, 'assistant', text);
+  if (!text || (last?.kind === 'status' && last.text === text)) return false;
+  appendActivityLine(session, 'status', text);
   return true;
 }
 
@@ -2401,6 +2402,8 @@ function messagePreviewTextForSession(session: AgentIslandSessionState): string 
   if (session.phase === 'needs-interaction' || session.phase === 'error') return null;
   const line = session.messagePreview?.line;
   if (!line || (line.kind !== 'user' && line.kind !== 'assistant')) return null;
+  // 完成后仍在驻留的用户提问不是这一轮的结果;摘要会同步给其它设备的完成卡片。
+  if (session.phase === 'completed' && line.kind === 'user') return null;
   const text = normalizeActivityText(line.text);
   return text || null;
 }
