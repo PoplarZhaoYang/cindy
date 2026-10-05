@@ -149,6 +149,29 @@ describe('useRemoteSessionBackgroundTasks', () => {
     expect(result.current.active).toBe(false);
   });
 
+  it('同一会话的归属设备变化时清空旧设备快照并重新读取', async () => {
+    mocks.devices = [
+      { deviceId: 'dev-1', connected: true },
+      { deviceId: 'dev-2', connected: true },
+    ];
+    mocks.activity.mockResolvedValue({ active: true });
+    const { result, rerender } = renderHook(
+      ({ dev }) => useRemoteSessionBackgroundTasks('s1', dev, false),
+      { initialProps: { dev: 'dev-1' } },
+    );
+    await flush();
+    expect(result.current.active).toBe(true);
+    const callsBefore = mocks.activity.mock.calls.length;
+
+    mocks.activity.mockResolvedValue({ active: false });
+    rerender({ dev: 'dev-2' });
+    // 新设备的读取返回前不沿用旧设备的状态。
+    expect(result.current.active).toBe(false);
+    await flush();
+    expect(mocks.activity.mock.calls.length).toBe(callsBefore + 1);
+    expect(result.current.active).toBe(false);
+  });
+
   it('设备断连或窗口不可见时不读取', async () => {
     mocks.devices = [{ deviceId: 'dev-1', connected: false }];
     renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));

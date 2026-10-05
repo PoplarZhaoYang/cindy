@@ -78,10 +78,10 @@ export function useRemoteSessionBackgroundTasks(
     visible &&
     !foregroundRunning;
 
-  // 快照带 sessionId:切会话后旧会话的快照不会被当成新会话的状态输出。
-  const [snapshot, setSnapshot] = useState<RemoteBackgroundState & { sessionId?: string }>(
-    EMPTY_STATE,
-  );
+  // 快照带 sessionId + deviceId:切会话或归属设备变化后,旧快照不会被当成当前状态输出。
+  const [snapshot, setSnapshot] = useState<
+    RemoteBackgroundState & { sessionId?: string; deviceId?: string }
+  >(EMPTY_STATE);
   const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
   // 读取序号:定时器不等上一轮返回,慢的旧读取只能被更新的结果取代,不能反过来覆盖;
   // 停止成功时把已发出的读取整体作废,避免在途旧快照重新点亮已熄灭的提示。
@@ -108,7 +108,9 @@ export function useRemoteSessionBackgroundTasks(
           tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
         };
         setSnapshot((prev) =>
-          prev.sessionId === sessionId && sameState(prev, next) ? prev : { ...next, sessionId },
+          prev.sessionId === sessionId && prev.deviceId === deviceId && sameState(prev, next)
+            ? prev
+            : { ...next, sessionId, deviceId },
         );
       });
     };
@@ -118,9 +120,12 @@ export function useRemoteSessionBackgroundTasks(
       disposed = true;
       clearInterval(timer);
     };
-  }, [enabled, sessionId]);
+  }, [enabled, sessionId, deviceId]);
 
-  const current = enabled && snapshot.sessionId === sessionId ? snapshot : EMPTY_STATE;
+  const current =
+    enabled && snapshot.sessionId === sessionId && snapshot.deviceId === deviceId
+      ? snapshot
+      : EMPTY_STATE;
   // stopAll 读 ref:按钮点击时以最新快照为准,避免陈旧闭包。
   const currentRef = useRef(current);
   currentRef.current = current;
@@ -149,7 +154,7 @@ export function useRemoteSessionBackgroundTasks(
       // 成功后立即熄灭并作废在途读取;仍有残留的话下一次复查会重新点亮。
       if (sessionIdRef.current === sessionId) {
         appliedSeqRef.current = issuedSeqRef.current;
-        setSnapshot({ ...EMPTY_STATE, sessionId });
+        setSnapshot({ ...EMPTY_STATE, sessionId, deviceId });
       }
     } catch (error) {
       reportBackgroundTaskStopFailure(error, t);
