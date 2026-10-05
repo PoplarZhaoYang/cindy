@@ -17,7 +17,13 @@
  */
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
-import { isHookSchedulerOrigin, readMessageSourcePlugin, sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import {
+  isHookSchedulerOrigin,
+  readMessageSourceDevice,
+  readMessageSourcePlugin,
+  sanitizeSourceName,
+  type MessageSourceDevice,
+} from '@cindy/maker-shared/message-source';
 import {
   parseChatQuoteSegments,
   stripChatQuoteMarkerLines,
@@ -98,6 +104,8 @@ export interface MobilePendingSendItem {
   hint: string | null;
   /** 非本人手动输入的排队条目的来源标签;本人输入与本地 outbox 为 null。 */
   source?: MobilePendingSendSource | null;
+  /** 手机 / 另一台电脑发来的排队消息的设备来源(气泡按查看设备决定是否显示,与已发送消息同一规则)。 */
+  sourceDevice?: MessageSourceDevice;
 }
 
 export interface MobileMessageListExtraData {
@@ -401,6 +409,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       actions: presentation?.actions ?? null,
       hint: presentation?.hint ?? null,
       source: pendingSendSource(item),
+      ...(readMessageSourceDevice(item) ? { sourceDevice: readMessageSourceDevice(item) } : {}),
     });
   };
 

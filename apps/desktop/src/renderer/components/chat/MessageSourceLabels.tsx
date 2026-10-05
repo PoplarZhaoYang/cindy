@@ -82,6 +82,36 @@ export function MessageSourceDeviceBadge({ device }: { device: MessageSourceDevi
 }
 
 /**
+ * 排队面板的紧凑设备标记（图标 + 设备名，悬停给出完整来源与设备 ID）。规则同
+ * MessageSourceDeviceBadge：查看者就是发送设备时不显示。排队行是单行紧凑布局，只展示、不跳转；
+ * 本人排队消息仍可编辑 / 插话，标记不改变这一点。
+ */
+export function QueueSourceDeviceTag({ device }: { device: MessageSourceDevice }) {
+  const { t } = useTranslation();
+  const authDeviceId = useOptionalAuthDeviceId();
+  const devices = useDeviceLinkDeviceList();
+  if (!shouldShowSourceDeviceForViewer(device, { authDeviceId, devices })) return null;
+  const display = resolveSourceDeviceDisplay(device, devices);
+  const mobile = device.platform === 'mobile';
+  const label = display.name
+    ? t(mobile ? 'chat.userMessage.deviceSentMobileNamed' : 'chat.userMessage.deviceSentDesktopNamed', {
+        name: display.name,
+      })
+    : t(mobile ? 'chat.userMessage.deviceSentMobile' : 'chat.userMessage.deviceSentDesktop');
+  const Icon = mobile ? Smartphone : Monitor;
+  return (
+    <span
+      aria-label={label}
+      className="relative top-px inline-flex min-w-0 max-w-[120px] shrink-0 items-center gap-1 text-12 leading-[1.25] text-[var(--text-secondary)]"
+      title={joinSourceTooltip([label, t('chat.userMessage.sourceIds.device', { id: device.deviceId })])}
+    >
+      <Icon size={11} strokeWidth={1.75} aria-hidden className="shrink-0" />
+      <span className="truncate">{display.name ?? label}</span>
+    </span>
+  );
+}
+
+/**
  * 插件标签：「由插件「名字」发送」。点击打开本机插件详情；远程任务的插件装在那台设备上，
  * 本机同 id 详情不对应，embedded 视图也不拥有路由，两者都只展示。
  */

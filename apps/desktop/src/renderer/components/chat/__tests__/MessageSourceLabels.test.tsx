@@ -30,7 +30,7 @@ vi.mock('@/lib/toast', () => ({ toast: { info: mocks.toastInfo } }));
 
 import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
 import { SHARE_SOURCE_ATTR } from '@/lib/shareConversationImage';
-import { MessageSourceLabels } from '../MessageSourceLabels';
+import { MessageSourceLabels, QueueSourceDeviceTag } from '../MessageSourceLabels';
 
 const phone = { deviceId: 'phone-1', name: 'Snapshot iPhone', platform: 'mobile' as const };
 
@@ -158,3 +158,22 @@ describe('MessageSourceLabels plugin and row', () => {
     expect(container.innerHTML).toBe('');
   });
 });
+
+describe('QueueSourceDeviceTag (pending queue rows)', () => {
+  it('shows the sending device compactly with the full label and id on hover', () => {
+    const { container } = render(<QueueSourceDeviceTag device={phone} />);
+    const tag = container.querySelector('span[aria-label]');
+    expect(tag?.getAttribute('aria-label')).toBe('chat.userMessage.deviceSentMobileNamed:Dash iPhone');
+    expect(tag?.getAttribute('title')).toBe(
+      'chat.userMessage.deviceSentMobileNamed:Dash iPhone\nchat.userMessage.sourceIds.device:phone-1',
+    );
+    expect(tag?.textContent).toBe('Dash iPhone');
+  });
+
+  it('is hidden on the sending device itself', () => {
+    mocks.authDeviceId = 'phone-1';
+    const { container } = render(<QueueSourceDeviceTag device={phone} />);
+    expect(container.textContent).toBe('');
+  });
+});
+

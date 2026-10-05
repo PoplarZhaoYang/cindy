@@ -27,14 +27,19 @@ import {
   Bot,
   Ghost,
   ListEnd,
+  Monitor,
   Paperclip,
   Pencil,
   RotateCcw,
   Send,
+  Smartphone,
   Timer,
   Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
+import { shouldShowSourceDevice } from '@cindy/maker-shared/message-source';
+import { sourceDeviceLabel } from '@/session/messageSourceLabels';
+import { useRemoteDeviceIdentity } from '@/session/remoteSessionStore';
 import {
   getSentAttachmentThumbUri,
   useSentAttachmentThumbsVersion,
@@ -207,7 +212,10 @@ export function PendingSendBubble({
   renderText,
   renderFile,
   screenWidth,
+  viewerDeviceId,
 }: {
+  /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
+  viewerDeviceId?: string | null;
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
   renderText: (text: string, index: number) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
@@ -303,6 +311,14 @@ export function PendingSendBubble({
         : t('message.queue.sendingMessage', { text: bubbleLabel });
   const SourceIcon = item.source ? sourceIcon(item.source.kind) : null;
   const [sourceIdVisible, setSourceIdVisible] = useState(false);
+  const [deviceIdVisible, setDeviceIdVisible] = useState(false);
+  const directory = useRemoteDeviceIdentity();
+  const showDevice = shouldShowSourceDevice(item.sourceDevice, viewerDeviceId);
+  const deviceLabel = showDevice && item.sourceDevice ? sourceDeviceLabel(item.sourceDevice, directory) : null;
+  const deviceIdText = showDevice && item.sourceDevice
+    ? t('message.renderer.sourceDeviceId', { id: item.sourceDevice.deviceId })
+    : null;
+  const DeviceIcon = item.sourceDevice?.platform === 'mobile' ? Smartphone : Monitor;
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
@@ -326,6 +342,28 @@ export function PendingSendBubble({
           {sourceIdVisible && item.source.idText ? (
             <Text selectable style={styles.sourceText} testID={`pendingSend.sourceId.${item.clientId}`}>
               {item.source.idText}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {deviceLabel && deviceIdText ? (
+        // 别的设备发来的本人排队消息:标出设备,长按显示设备 ID;仍可编辑 / 插话。
+        <View style={styles.sourceStack}>
+          <Pressable
+            accessibilityHint={deviceIdText}
+            accessibilityLabel={deviceLabel}
+            accessibilityRole="text"
+            hitSlop={8}
+            onLongPress={() => setDeviceIdVisible((visible) => !visible)}
+            style={styles.sourceRow}
+            testID={`pendingSend.sourceDevice.${item.clientId}`}
+          >
+            <DeviceIcon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+            <Text numberOfLines={1} style={styles.sourceText}>{deviceLabel}</Text>
+          </Pressable>
+          {deviceIdVisible ? (
+            <Text selectable style={styles.sourceText} testID={`pendingSend.sourceDeviceId.${item.clientId}`}>
+              {deviceIdText}
             </Text>
           ) : null}
         </View>

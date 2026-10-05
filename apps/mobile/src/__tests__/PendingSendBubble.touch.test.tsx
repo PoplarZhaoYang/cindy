@@ -23,7 +23,8 @@ vi.mock('react-native', async () => {
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
 vi.mock('lucide-react-native', () => ({ Check: () => null, AlertCircle: () => null, ArrowUp: () => null,
   ListEnd: () => null, Paperclip: () => null, Pencil: () => null, RotateCcw: () => null, Trash2: () => null,
-  Bot: () => null, Ghost: () => null, Send: () => null, Timer: () => null }));
+  Bot: () => null, Ghost: () => null, Send: () => null, Timer: () => null,
+  Monitor: () => null, Smartphone: () => null }));
 vi.mock('@/session/SentInlineAtomBody', () => ({ SentInlineAtomBody: () => null }));
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: () => null,
   useSentAttachmentThumbsVersion: () => 0 }));
@@ -59,11 +60,15 @@ beforeEach(() => {
   host = document.createElement('div'); root = createRoot(host);
 });
 afterEach(() => { act(() => root.unmount()); vi.useRealTimers(); vi.unstubAllGlobals(); });
-function show(overrides: Partial<MobilePendingSendItem> = {}, selectedClientId: string | null = null) {
+function show(
+  overrides: Partial<MobilePendingSendItem> = {},
+  selectedClientId: string | null = null,
+  viewerDeviceId: string | null = null,
+) {
   handlers.clear();
   const actions: PendingSendBubbleActions = { selectedClientId, onSelect: select, onRemove: vi.fn(),
     onBeginEdit: vi.fn(), onSteer: vi.fn(), onRetryOutbox: vi.fn(), onRemoveOutbox: removeOutbox };
-  act(() => root.render(<PendingSendBubble item={{ ...item, ...overrides }} actions={actions}
+  act(() => root.render(<PendingSendBubble item={{ ...item, ...overrides }} actions={actions} viewerDeviceId={viewerDeviceId}
     renderImage={() => null} renderFile={() => null}
     renderText={() => <MessageBodyText testID="link" onPress={openLink}>link</MessageBodyText>} />));
 }
@@ -118,3 +123,14 @@ it('shows the source label above the bubble and announces it with the queued mes
   expect(host.querySelector('[data-testid="pendingSend.source.a"]')).toBeNull();
   expect(handlers.get('pendingSend.badge.queued')?.accessibilityLabel).toBe('message.queue.queuedMessageLabel');
 });
+
+it('labels queued input from another device, hides it on the sending device, and keeps it editable', () => {
+  const sourceDevice = { deviceId: 'phone-a', name: 'iPhone', platform: 'mobile' as const };
+  show({ sourceDevice }, null, 'mac-1');
+  expect(host.querySelector('[data-testid="pendingSend.sourceDevice.a"]')?.textContent).toContain('iPhone');
+  // 测试里 t 原样返回 key:读屏提示是设备 ID 文案。
+  expect(handlers.get('pendingSend.sourceDevice.a')?.accessibilityHint).toBe('message.renderer.sourceDeviceId');
+  show({ sourceDevice }, null, 'phone-a');
+  expect(host.querySelector('[data-testid="pendingSend.sourceDevice.a"]')).toBeNull();
+});
+

@@ -45,6 +45,7 @@ import { BotAvatar } from '@/features/bots/BotAvatar';
 import { useBotProfiles } from '@/features/bots/botStore';
 import { cn } from '@/lib/utils';
 import type { QueuedMessage } from '@/lib/makerChatStore';
+import { QueueSourceDeviceTag } from '@/components/chat/MessageSourceLabels';
 import {
   activatePendingQueueRowFocus,
   activatePendingQueueRowHover,
@@ -568,6 +569,9 @@ export function PendingQueuePanel({
                   </span>
                 </div>
               ) : (
+                <>
+                {/* 手机 / 另一台电脑发来的本人排队消息:与已发送消息同一规则标出设备(查看者即发送设备时不标)。 */}
+                {entry.sourceDevice ? <QueueSourceDeviceTag device={entry.sourceDevice} /> : null}
                 <p
                   className={cn(
                     // top-px: 在居中基础上把文字再压低 1px, 抵消字体 metrics, 与 drag handle 光学对齐
@@ -579,6 +583,7 @@ export function PendingQueuePanel({
                 >
                   {pendingRowContent}
                 </p>
+                </>
               )}
 
               {isPendingEnqueue ? (
