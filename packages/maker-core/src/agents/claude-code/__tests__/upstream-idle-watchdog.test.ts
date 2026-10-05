@@ -25,6 +25,7 @@ import type { AgentDeps } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import type { ToolLoopReviewer } from '../../shared/tool-loop-review.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -57,7 +58,7 @@ function createNoopLogger(): Logger {
   return logger;
 }
 
-function createDeps(): AgentDeps {
+function createDeps(toolLoopReviewer?: ToolLoopReviewer): AgentDeps {
   const auth: AuthAdapter = {
     async getState() {
       return { authenticated: true };
@@ -75,6 +76,7 @@ function createDeps(): AgentDeps {
     runtimeConfig: {},
     binaryPath: process.execPath,
     logger: createNoopLogger(),
+    toolLoopReviewer,
   };
 }
 
@@ -141,7 +143,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream(model = 'claude-opus-4-6') {
+async function startSessionWithStream(model = 'claude-opus-4-6', toolLoopReviewer?: ToolLoopReviewer) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -160,7 +162,7 @@ async function startSessionWithStream(model = 'claude-opus-4-6') {
     return fakeQuery;
   });
 
-  const agent = new ClaudeCodeAgent(createDeps());
+  const agent = new ClaudeCodeAgent(createDeps(toolLoopReviewer));
   const handle = await agent.startSession({
     sessionId: 'session-idle-watchdog',
     model,
@@ -505,6 +507,95 @@ describe('Claude Code tool-loop guard runtime integration', () => {
       expect(toolLoopError(events)).toMatchObject({ data: {
         reason: 'tool_use_loop_detected', loopKind: 'consecutive', loopCount: 4,
       } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it('复核放行时相同调用不中断;复核 stop 后才中断', async () => {
+    const decisions: Array<(decision: 'continue' | 'stop') => void> = [];
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => decisions.push(resolve)));
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const emitSameBash = async (i: number) => {
+      const id = `same-bash-${i}`;
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{
+          type: 'tool_use', id, name: 'Bash', input: { command: 'gh run view 1' },
+        }] },
+      });
+      stream.emit({
+        type: 'user', parent_tool_use_id: null,
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'in_progress' }] },
+      });
+      await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'bash delivered');
+    };
+    try {
+      await handle.send({ type: 'user', content: 'wait for the run' });
+      for (let i = 0; i < 4; i++) await emitSameBash(i);
+      expect(reviewer).toHaveBeenCalledOnce();
+      expect(reviewer.mock.calls[0]?.[0]).toMatchObject({
+        sessionId: 'session-idle-watchdog', agentKind: 'claude-code', model: 'claude-opus-4-6',
+        verdict: { reason: 'consecutive', count: 4, toolName: 'Bash' },
+      });
+      decisions[0]?.('continue');
+      await vi.advanceTimersByTimeAsync(0);
+      for (let i = 4; i < 10; i++) await emitSameBash(i);
+      expect(toolLoopError(events)).toBeUndefined();
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+      for (let i = 10; i < 25; i++) await emitSameBash(i);
+      expect(reviewer).toHaveBeenCalledTimes(2);
+      expect(toolLoopError(events)).toBeUndefined();
+      decisions[1]?.('stop');
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'reviewed loop interrupted');
+      expect(toolLoopError(events)).toMatchObject({ data: {
+        reason: 'tool_use_loop_detected', loopKind: 'consecutive', loopCount: 25,
+      } });
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
+  it('同一 turn 中途切换模型不重置复核次数', async () => {
+    const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    let delivered = 0;
+    const emitBash = async (id: string, command: string) => {
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] },
+      });
+      stream.emit({
+        type: 'user', parent_tool_use_id: null,
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'in_progress' }] },
+      });
+      delivered += 1;
+      await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === delivered, 'bash delivered');
+    };
+    try {
+      await handle.send({ type: 'user', content: 'wait for the runs' });
+      const models = ['claude-opus-5', 'claude-opus-4-6', 'claude-opus-5'];
+      for (let round = 0; round < 3; round++) {
+        for (let i = 0; i < 4; i++) await emitBash(`r${round}-${i}`, `gh run view ${round}`);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reviewer).toHaveBeenCalledTimes(round + 1);
+        await handle.setModel?.(models[round]!);
+      }
+      expect(toolLoopError(events)).toBeUndefined();
+      // 切模型只清检测轨迹;本 turn 已用完 3 次复核,新的疑似直接中断。
+      for (let i = 0; i < 4; i++) await emitBash(`r3-${i}`, 'gh run view 3');
+      await pumpUntil(() => fakeQuery.interrupt.mock.calls.length === 1, 'loop interrupted without a fourth review');
+      expect(reviewer).toHaveBeenCalledTimes(3);
+      expect(toolLoopError(events)).toMatchObject({ data: { reason: 'tool_use_loop_detected', loopCount: 4 } });
     } finally {
       vi.useRealTimers();
       stream.end();
