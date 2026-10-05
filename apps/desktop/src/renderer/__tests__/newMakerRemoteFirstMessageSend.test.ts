@@ -3,15 +3,16 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+// Windows CI 以 CRLF 检出源码;下面的锚点含换行,统一成 LF 再匹配。
 const source = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 const handoffSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'remoteSessionHandoff.ts'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 /**
  * 远程普通首条不能再依赖 SessionView 挂载来补发:用户发送后马上切走,60s 内存 pending
