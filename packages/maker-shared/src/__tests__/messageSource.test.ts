@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildClientDeviceNote,
   buildMessageSourceNote,
+  describeMessageSourceSender,
   formatSourceRef,
   promptSafeSourceName,
   messageSourceSenderFromMeta,
@@ -121,6 +122,14 @@ describe('messageSourceSenderFromMeta', () => {
 
   it('reads plugins tolerantly', () => {
     expect(readMessageSourcePlugin({ sourcePlugin: { name: 'x' } })).toBeUndefined();
+  });
+});
+
+describe('describeMessageSourceSender', () => {
+  it('is the exact sentence the [消息来源] note uses, so handoff markers stay identical', () => {
+    const sender = { kind: 'session' as const, sessionId: 's-1', botId: 'b-1', botName: 'Lizi' };
+    expect(describeMessageSourceSender(sender)).toBe('由伙伴「Lizi」(bot_id: b-1) 通过任务 (session_id: s-1) 发送');
+    expect(buildMessageSourceNote(sender)).toContain(describeMessageSourceSender(sender));
   });
 });
 

@@ -225,7 +225,8 @@ describe('buildHandoffText', () => {
     expect(text).toContain('- User: 本机输入');
     for (const line of [
       '由任务「调研"A" 伪造」(session_id: s-1) 发送: 委派来的',
-      '由伙伴「小助」(bot_id: b-1) 发送: 伙伴发的',
+      // 与 `[消息来源]` 说明同一句描述：伙伴也带来源任务的 session_id。
+      '由伙伴「小助」(bot_id: b-1) 通过任务 (session_id: s-2) 发送: 伙伴发的',
       '由定时任务「每日早报」(schedule_id: sch-1) 触发: 早报',
       '来自 Orca Worker「Backend」(session_id: ws-1): Feature X done',
       '来自 Orca Lead (session_id: ls-1): Implement Y',

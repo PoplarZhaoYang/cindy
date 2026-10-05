@@ -188,27 +188,34 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
   return undefined;
 }
 
-/** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
-export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
-  if (!sender) return null;
+/**
+ * 「谁发的」的一句话描述（不带前缀与结尾）：`[消息来源]` 说明与交接摘要共用，
+ * 两处措辞与 ID 永远一致。例：`由任务「X」(session_id: s) 发送`。
+ */
+export function describeMessageSourceSender(sender: MessageSourceSender): string {
   switch (sender.kind) {
     case 'session': {
       if (sender.botId) {
         const bot = formatSourceRef(sender.botName, 'bot_id', sender.botId);
         const sessionId = sanitizeSourceId(sender.sessionId);
         const via = sessionId ? ` 通过任务 (session_id: ${sessionId})` : '';
-        return `[消息来源] 本条由伙伴${bot}${via} 发送，不是用户本人输入。`;
+        return `由伙伴${bot}${via} 发送`;
       }
       const ref = formatSourceRef(sender.title, 'session_id', sender.sessionId);
-      return ref
-        ? `[消息来源] 本条由任务${ref} 发送，不是用户本人输入。`
-        : '[消息来源] 本条由其他任务发送，不是用户本人输入。';
+      return ref ? `由任务${ref} 发送` : '由其他任务发送';
     }
     case 'plugin':
-      return `[消息来源] 本条由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送，不是用户本人输入。`;
+      return `由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送`;
     case 'shared-member':
-      return `[消息来源] 本条由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送，不是任务所有者本人。`;
+      return `由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送`;
   }
+}
+
+/** `[消息来源]` 说明；本机用户亲手输入返回 null。 */
+export function buildMessageSourceNote(sender: MessageSourceSender | undefined): string | null {
+  if (!sender) return null;
+  const notOwner = sender.kind === 'shared-member' ? '不是任务所有者本人' : '不是用户本人输入';
+  return `[消息来源] 本条${describeMessageSourceSender(sender)}，${notOwner}。`;
 }
 
 const CLIENT_NOTE_PREAMBLE = '[客户端说明] 系统追加的环境说明，不是用户消息，不要回应或复述。';

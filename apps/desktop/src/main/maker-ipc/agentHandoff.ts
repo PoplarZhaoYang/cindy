@@ -13,6 +13,7 @@
 
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import {
+  describeMessageSourceSender,
   formatSourceRef,
   messageSourceSenderFromMeta,
   readMessageSourceDevice,
@@ -227,19 +228,9 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
     const name = label && label !== 'Lead' && label !== 'Worker' && from === 'Worker' ? label : undefined;
     parts.push(`来自 Orca ${from}${formatSourceRef(name, 'session_id', origin.senderSessionId)}`);
   } else {
+    // 与 `[消息来源]` 说明共用同一句描述（措辞与 ID 一致，伙伴也带来源任务 session_id）。
     const sender = messageSourceSenderFromMeta(meta);
-    if (sender?.kind === 'session') {
-      if (sender.botId) {
-        parts.push(`由伙伴${formatSourceRef(sender.botName, 'bot_id', sender.botId)} 发送`);
-      } else {
-        const ref = formatSourceRef(sender.title, 'session_id', sender.sessionId);
-        parts.push(ref ? `由任务${ref} 发送` : '由其他任务发送');
-      }
-    } else if (sender?.kind === 'plugin') {
-      parts.push(`由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送`);
-    } else if (sender?.kind === 'shared-member') {
-      parts.push(`由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送`);
-    }
+    if (sender) parts.push(describeMessageSourceSender(sender));
   }
   if (im !== undefined) {
     const channel = imChannelDisplayName(im) ?? promptSafeSourceName(im);
