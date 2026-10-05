@@ -729,6 +729,25 @@ describe('ToolLoopGuard pacing and final limits', () => {
     expect(captured).toBe(`${'ok '.repeat(1330)}…(+${output.length - 3990} chars)`);
   });
 
+  it('drops the whole line cut by the capture limit, including quoted values', () => {
+    const guard = new ToolLoopGuard();
+    const head = `${'ok '.repeat(1320)}\n`;
+    const output = `${head}tool login --token "correct horse battery staple and more words"\nnext line`;
+    feed(guard, '1', 'exec', { cmd: 'env' }, output);
+    expect(guard.recentEvidence()[0]?.output).toBe(`${head}…(+${output.length - head.length} chars)`);
+  });
+
+  it('drops an unterminated quoted value when the cut has no newline', () => {
+    const guard = new ToolLoopGuard();
+    const head = `${'ok '.repeat(1320)}tool login --token `;
+    const output = `${head}"correct horse battery staple and more words"`;
+    feed(guard, '1', 'exec', { cmd: 'env' }, output);
+    const captured = guard.recentEvidence()[0]?.output ?? '';
+    expect(captured).not.toContain('horse');
+    expect(captured).not.toContain('correct');
+    expect(captured).toBe(`${head}…(+${output.length - head.length} chars)`);
+  });
+
   it('keeps structured input as a bounded copy instead of serializing it', () => {
     const guard = new ToolLoopGuard();
     const input = { cmd: 'tool login --token "tok live value"', body: 'y'.repeat(5_000), nested: { a: [1, { b: 'c' }] } };

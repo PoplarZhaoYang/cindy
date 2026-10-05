@@ -614,10 +614,21 @@ function captureEvidenceValue(value: unknown, depth: number): unknown {
 /** 截取点之前可能被切断的令牌片段:字母数字与令牌常见符号的连续串。 */
 const TRAILING_TOKEN_FRAGMENT_RE = /[A-Za-z0-9_\-+/=.:@%~]+$/;
 
+/**
+ * 截取点可能落在凭证中间,残缺的凭证任何脱敏器都认不出,一律保守丢弃:
+ * 有换行时丢掉被截断的整行(凭证以行为界:赋值、参数、引号串);没有换行时丢掉末尾
+ * 连续串,若还剩未闭合的引号,从该引号起全部丢掉。
+ */
 function captureEvidence(text: string): string {
   if (text.length <= EVIDENCE_CAPTURE_LIMIT) return text;
-  // 截取点可能落在凭证中间,残缺前缀任何脱敏器都认不出:连同其所在的整段连续串一起丢掉。
-  const kept = text.slice(0, EVIDENCE_CAPTURE_LIMIT).replace(TRAILING_TOKEN_FRAGMENT_RE, '');
+  const cut = text.slice(0, EVIDENCE_CAPTURE_LIMIT);
+  const lastNewline = cut.lastIndexOf('\n');
+  let kept = lastNewline >= 0 ? cut.slice(0, lastNewline + 1) : cut.replace(TRAILING_TOKEN_FRAGMENT_RE, '');
+  if (lastNewline < 0) {
+    for (const quote of ['"', "'"]) {
+      if ((kept.split(quote).length - 1) % 2 === 1) kept = kept.slice(0, kept.lastIndexOf(quote));
+    }
+  }
   return `${kept}…(+${text.length - kept.length} chars)`;
 }
 
