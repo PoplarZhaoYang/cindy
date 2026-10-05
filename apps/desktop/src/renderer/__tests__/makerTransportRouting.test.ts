@@ -551,6 +551,24 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('后台任务停止:本机查询在途期间远程注册表完成水合 → 仍走远程,不落到同 id 本机会话', async () => {
+    const { makerSpies, localSessions, invoke } = stubElectron();
+    const stopAgentTask = vi.fn().mockResolvedValue({ ok: true });
+    Object.assign(makerSpies, { stopAgentTask });
+    invoke.mockResolvedValue({ ok: true });
+    const { stopAgentTaskFor } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    // 恢复 / 复制的本机库含同 id 会话;查询落地前远程注册表完成水合。
+    localSessions.get.mockImplementation(async () => {
+      remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('dup')]);
+      return { id: 'dup' };
+    });
+
+    await stopAgentTaskFor('dup', 't1');
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:agent-task:stop', ['dup', 't1']);
+    expect(stopAgentTask).not.toHaveBeenCalled();
+  });
+
   // issue #1170:协同入口的项目级 collab 开关此前一律查控制端本机 —— 拿被控端的路径查
   // 自己的 fs,读到的是控制端自己的用户级开关,与被控端 main 的权威授权可能相反。
   it('pluginEnableStateFor:传了 deviceId 就隧道查被控端;没传才查本机', async () => {

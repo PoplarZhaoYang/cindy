@@ -596,7 +596,9 @@ async function resolveStopOwner(sessionId: string): Promise<string | null> {
   } catch {
     throw new Error('[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved');
   }
-  return null;
+  // 本机查询在途期间远程注册表可能完成水合(恢复 / 复制的本机库可含同 id 会话):
+  // 查询落地后再核验一次,远程归属优先,停止不落到同 id 的本机会话。
+  return getStickySessionDeviceId(sessionId) ?? null;
 }
 
 /**
