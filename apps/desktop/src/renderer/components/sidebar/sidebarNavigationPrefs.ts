@@ -32,8 +32,9 @@ export const DEFAULT_SIDEBAR_NAVIGATION_VISIBLE: readonly SidebarNavigationItemI
  * Plugins with a main view join the same order as `app:<ghostId>`. Two settings
  * apply to them: the plugin's own "show in sidebar" switch (per-account main-view
  * store) decides whether it appears anywhere in the sidebar, More included; this
- * module only decides where — top level, or More when listed in `appsInMore`.
- * Entries never placed follow the built-ins.
+ * module only decides where. Plugins default to More; `appsAtTop` lists the ones
+ * placed at the top level (checked in Customize, or already in the sidebar when this
+ * first ran for the owner). Entries never placed in the order follow the built-ins.
  */
 export type SidebarNavigationAppEntryId = `app:${string}`;
 export type SidebarNavigationEntryId = SidebarNavigationItemId | SidebarNavigationAppEntryId;
@@ -94,25 +95,25 @@ export interface SidebarNavigationPrefs {
   order: SidebarNavigationEntryId[];
   /** Built-in entries shown at the top level; the rest live in More. */
   visible: SidebarNavigationItemId[];
-  /** Plugin main views unchecked in Customize: still in the sidebar, but under More. */
-  appsInMore: SidebarNavigationAppEntryId[];
+  /** Plugin main views placed at the top level; every other sidebar plugin sits in More. */
+  appsAtTop: SidebarNavigationAppEntryId[];
 }
 
-export type SidebarNavigationPrefsInput = Omit<SidebarNavigationPrefs, 'appsInMore'> & {
-  appsInMore?: SidebarNavigationAppEntryId[];
+export type SidebarNavigationPrefsInput = Omit<SidebarNavigationPrefs, 'appsAtTop'> & {
+  appsAtTop?: SidebarNavigationAppEntryId[];
 };
 
 /** Only explicit differences from the current product defaults are persisted. */
 interface SidebarNavigationOverride {
   order?: SidebarNavigationEntryId[];
-  /** Built-ins in either direction; plugin entries only ever as `false` (moved to More). */
+  /** Built-ins in either direction; plugin entries only ever as `true` (at the top level). */
   visibility?: Partial<Record<SidebarNavigationEntryId, boolean>>;
 }
 
 const defaultPrefs = (): SidebarNavigationPrefs => ({
   order: [...SIDEBAR_NAVIGATION_ITEMS],
   visible: [...DEFAULT_SIDEBAR_NAVIGATION_VISIBLE],
-  appsInMore: [],
+  appsAtTop: [],
 });
 const DEFAULT_SERVER_SNAPSHOT = defaultPrefs();
 
@@ -152,12 +153,12 @@ function validAppEntries(value: unknown): SidebarNavigationAppEntryId[] {
 function normalize(value: unknown): SidebarNavigationPrefs {
   const fallback = defaultPrefs();
   if (!value || typeof value !== 'object') return fallback;
-  const candidate = value as { order?: unknown; visible?: unknown; appsInMore?: unknown };
+  const candidate = value as { order?: unknown; visible?: unknown; appsAtTop?: unknown };
   const order = validOrder(candidate.order);
   return {
     order: [...order, ...fallback.order.filter((id) => !order.includes(id))],
     visible: Array.isArray(candidate.visible) ? validIds(candidate.visible) : fallback.visible,
-    appsInMore: validAppEntries(candidate.appsInMore),
+    appsAtTop: validAppEntries(candidate.appsAtTop),
   };
 }
 
@@ -175,7 +176,7 @@ function applyOverride(value: unknown): SidebarNavigationPrefs {
         ? selected
         : DEFAULT_SIDEBAR_NAVIGATION_VISIBLE.includes(id);
     }),
-    appsInMore: validAppEntries(Object.keys(visibility)).filter((id) => visibility[id] === false),
+    appsAtTop: validAppEntries(Object.keys(visibility)).filter((id) => visibility[id] === true),
   };
 }
 
@@ -193,7 +194,7 @@ function toOverride(prefs: SidebarNavigationPrefs): SidebarNavigationOverride {
     const selected = prefs.visible.includes(id);
     if (selected !== defaults.visible.includes(id)) visibility[id] = selected;
   }
-  for (const id of prefs.appsInMore) visibility[id] = false;
+  for (const id of prefs.appsAtTop) visibility[id] = true;
   if (Object.keys(visibility).length) override.visibility = visibility;
   return override;
 }
@@ -320,9 +321,10 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * Place plugins that enter the sidebar for the first time into More and flag them
- * as new. The first run for an owner only records what is already there, so
- * existing entries keep their place after an upgrade. Idempotent.
+ * Track plugins entering the sidebar so new ones carry a New tag. They need no
+ * placement write: plugins default to More. The first run for an owner keeps the
+ * plugins already in the sidebar at the top level, so nothing moves on upgrade.
+ * Idempotent.
  */
 export function reconcileSidebarAppArrivals(
   owner: string,
@@ -336,6 +338,16 @@ export function reconcileSidebarAppArrivals(
   if (!rosterReady) return;
   const record = arrivals[owner];
   if (!record) {
+    if (ghostIds.length > 0) {
+      const prefs = getSidebarNavigationPrefs(owner);
+      const kept = setSidebarNavigationPrefs(owner, {
+        ...prefs,
+        appsAtTop: [...new Set([...prefs.appsAtTop, ...ghostIds.map(appEntryId)])],
+      });
+      // Without the stored top-level placement a restart would move these plugins
+      // into More; leave the first run to be retried instead of recording it.
+      if (!kept) return;
+    }
     writeArrivals({ ...arrivals, [owner]: { known: [...ghostIds], unseen: [] } });
     return;
   }
@@ -343,17 +355,6 @@ export function reconcileSidebarAppArrivals(
   // A new plugin removed or switched off before it was seen is no longer news.
   const unseen = record.unseen.filter((id) => ghostIds.includes(id));
   if (arrived.length === 0 && unseen.length === record.unseen.length) return;
-  if (arrived.length > 0) {
-    const prefs = getSidebarNavigationPrefs(owner);
-    const placed = setSidebarNavigationPrefs(owner, {
-      ...prefs,
-      appsInMore: [...new Set([...prefs.appsInMore, ...arrived.map(appEntryId)])],
-    });
-    // Only mark arrivals known once their More placement is stored; otherwise a
-    // restart would show them at the top level and never treat them as new again.
-    // The next reconcile retries the whole step.
-    if (!placed) return;
-  }
   writeArrivals({
     ...arrivals,
     [owner]: { known: [...record.known, ...arrived], unseen: [...unseen, ...arrived] },

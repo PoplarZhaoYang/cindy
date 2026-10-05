@@ -15,7 +15,6 @@ import {
   SIDEBAR_NAVIGATION_ITEMS,
   SIDEBAR_NAVIGATION_ITEM_ICONS,
   appEntryId,
-  getSidebarKnownApps,
   getSidebarNavigationPrefs,
   ghostIdOfEntry,
   isBuiltInEntry,
@@ -37,8 +36,8 @@ interface CustomizeDraft {
   order: SidebarNavigationEntryId[];
   /** Built-in entries shown at the top level. */
   visible: ReadonlySet<SidebarNavigationItemId>;
-  /** Plugin main views moved into More; unlisted plugins sit at the top level. */
-  appsInMore: ReadonlySet<SidebarNavigationAppEntryId>;
+  /** Plugin main views placed at the top level; the rest sit in More (their default). */
+  appsAtTop: ReadonlySet<SidebarNavigationAppEntryId>;
 }
 
 /**
@@ -56,7 +55,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   const [initial] = useState<CustomizeDraft>(() => ({
     order: resolveSidebarNavigationOrder(prefs.order, appIds),
     visible: new Set(prefs.visible),
-    appsInMore: new Set(prefs.appsInMore),
+    appsAtTop: new Set(prefs.appsAtTop),
   }));
   const [draft, setDraft] = useState<CustomizeDraft>(initial);
   const reducedMotion = useReducedMotion();
@@ -67,7 +66,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   const checkedIn = (state: CustomizeDraft, id: SidebarNavigationEntryId) =>
     isBuiltInEntry(id)
       ? state.visible.has(id)
-      : !state.appsInMore.has(id as SidebarNavigationAppEntryId);
+      : state.appsAtTop.has(id as SidebarNavigationAppEntryId);
   const isChecked = (id: SidebarNavigationEntryId) => checkedIn(draft, id);
   const labelFor = (id: SidebarNavigationEntryId) => {
     const ghostId = ghostIdOfEntry(id);
@@ -91,10 +90,10 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
         return { ...current, visible };
       }
       const appId = id as SidebarNavigationAppEntryId;
-      const appsInMore = new Set(current.appsInMore);
-      if (appsInMore.has(appId)) appsInMore.delete(appId);
-      else appsInMore.add(appId);
-      return { ...current, appsInMore };
+      const appsAtTop = new Set(current.appsAtTop);
+      if (appsAtTop.has(appId)) appsAtTop.delete(appId);
+      else appsAtTop.add(appId);
+      return { ...current, appsAtTop };
     });
   };
   const move = (source: SidebarNavigationEntryId, target: SidebarNavigationEntryId) => {
@@ -117,22 +116,16 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
   };
   const save = () => {
     if (resetting) {
-      // The default order leaves every plugin after the built-ins, so future defaults still apply.
-      // Plugins default to More, like a new arrival: those listed here follow the draft
-      // (they may be re-checked after resetting), and plugins whose own sidebar switch is
-      // off right now also go to More, so switching one back on never lands it at the top.
-      const listed = new Set(appIds.map(appEntryId));
-      const offPanel = [
-        ...getSidebarKnownApps(dataOwnerId).map(appEntryId),
-        ...getSidebarNavigationPrefs(dataOwnerId).appsInMore,
-      ].filter((id) => !listed.has(id));
+      // Resetting drops every override, so future defaults keep applying: plugins fall
+      // back to More, including ones whose own sidebar switch is off right now. Only
+      // entries checked again after resetting are kept at the top level.
       // A reorder made after resetting is kept; an untouched reset stores the bare default.
       const resetOrder = resolveSidebarNavigationOrder(SIDEBAR_NAVIGATION_ITEMS, appIds);
       const reordered = orderedItems.some((id, index) => id !== resetOrder[index]);
       setSidebarNavigationPrefs(dataOwnerId, {
         order: reordered ? orderedItems : [...SIDEBAR_NAVIGATION_ITEMS],
         visible: SIDEBAR_NAVIGATION_ITEMS.filter((id) => draft.visible.has(id)),
-        appsInMore: [...new Set([...draft.appsInMore, ...offPanel])],
+        appsAtTop: [...draft.appsAtTop],
       });
       onDone();
       return;
@@ -143,7 +136,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
     const latestState: CustomizeDraft = {
       order: latest.order,
       visible: new Set(latest.visible),
-      appsInMore: new Set(latest.appsInMore),
+      appsAtTop: new Set(latest.appsAtTop),
     };
     const resolve = (id: SidebarNavigationEntryId) =>
       checkedIn(draft, id) !== checkedIn(initial, id)
@@ -154,14 +147,14 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
     const orderChanged = draft.order !== initial.order;
     // Plugins absent from the panel (sidebar switch off) keep whatever was saved for them.
     const appEntries = new Set<SidebarNavigationAppEntryId>([
-      ...latest.appsInMore,
+      ...latest.appsAtTop,
       ...appIds.map(appEntryId),
     ]);
     setSidebarNavigationPrefs(dataOwnerId, {
       // Plugins missing from the panel keep their saved place inside the new order.
       order: orderChanged ? mergeAbsentOrderEntries(orderedItems, latest.order) : latest.order,
       visible: SIDEBAR_NAVIGATION_ITEMS.filter(resolve),
-      appsInMore: [...appEntries].filter((id) => !resolve(id)),
+      appsAtTop: [...appEntries].filter(resolve),
     });
     onDone();
   };
@@ -266,7 +259,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
             order: resolveSidebarNavigationOrder(SIDEBAR_NAVIGATION_ITEMS, appIds),
             visible: new Set(DEFAULT_SIDEBAR_NAVIGATION_VISIBLE),
             // Plugins default to More, the same place a newly arrived plugin starts.
-            appsInMore: new Set(appIds.map(appEntryId)),
+            appsAtTop: new Set(),
           });
           setResetting(true);
         }}

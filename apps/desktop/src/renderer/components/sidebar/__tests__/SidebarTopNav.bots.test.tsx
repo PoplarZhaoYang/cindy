@@ -58,6 +58,12 @@ vi.mock('@/features/cc-agent/sidebar/conversationSearchContext', () => ({
 }));
 
 afterEach(() => { cleanup(); publishNavigationAttention({ tasks: 0, teammates: 0 }); });
+
+/** Pretend the owner's first run already happened, so plugins keep their default (More). */
+function seedKnownPlugins(ids: string[]) {
+  localStorage.setItem('sidebar-navigation:apps:v1', JSON.stringify({ [OWNER]: { known: ids, unseen: [] } }));
+  navigationTesting.resetArrivals();
+}
 beforeEach(() => {
   searchMock.query = '';
   searchMock.lockedProjectKey = null;
@@ -270,14 +276,10 @@ describe('Sidebar teammate return action', () => {
     openMore();
     expect(screen.queryByRole('menuitem', { name: /站点/ })).toBeNull();
   });
-  it('moves a plugin unchecked in Customize into More and opens its page', () => {
+  it('keeps a plugin without a top-level placement in More and opens its page', () => {
+    seedKnownPlugins(['xd-sites']);
     mainViewsMock.routeCapable = [SITES];
     mainViewsMock.sidebarVisible = [SITES];
-    setSidebarNavigationPrefs(OWNER, {
-      order: ['automations', 'plugins', 'bots', 'search'],
-      visible: ['automations', 'plugins', 'bots', 'search'],
-      appsInMore: ['app:xd-sites'],
-    });
     render(<Harness initialPath="/cc-agent" />);
     expect(screen.queryByRole('button', { name: '站点' })).toBeNull();
     openMore();
@@ -299,18 +301,14 @@ describe('Sidebar teammate return action', () => {
     act(() => setSidebarNavigationPrefs(OWNER, {
       order: ['automations', 'plugins', 'bots', 'search'],
       visible: ['automations', 'plugins', 'bots', 'search'],
-      appsInMore: ['app:xd-sites'],
+      appsAtTop: [],
     }));
     expect(screen.queryByRole('button', { name: '站点' })).toBeNull();
   });
   it('keeps the plugin manage action on its More item', () => {
+    seedKnownPlugins(['xd-sites']);
     mainViewsMock.routeCapable = [SITES];
     mainViewsMock.sidebarVisible = [SITES];
-    setSidebarNavigationPrefs(OWNER, {
-      order: ['automations', 'plugins', 'bots', 'search'],
-      visible: ['automations', 'plugins', 'bots', 'search'],
-      appsInMore: ['app:xd-sites'],
-    });
     render(<Harness initialPath="/cc-agent" />);
     openMore();
     const item = screen.getByRole('menuitem', { name: /站点/ });
@@ -494,12 +492,13 @@ describe('Narrow rail navigation', () => {
   it('lays out plugin main views in the saved order and keeps hidden ones in More', () => {
     const other: MainViewMock = { ghostId: 'other', title: 'Other', icon: 'globe', manifest: { name: 'Other' } };
     const off: MainViewMock = { ghostId: 'off', title: 'Off', icon: 'globe', manifest: { name: 'Off' } };
+    seedKnownPlugins(['xd-sites', 'other']);
     mainViewsMock.routeCapable = [SITES, other, off];
     mainViewsMock.sidebarVisible = [SITES, other];
     setSidebarNavigationPrefs(OWNER, {
       order: ['app:xd-sites', 'automations', 'plugins', 'bots', 'search', 'app:other', 'app:off'],
       visible: ['automations', 'plugins', 'bots', 'search'],
-      appsInMore: ['app:other'],
+      appsAtTop: ['app:xd-sites'],
     });
     renderRail();
     const sites = screen.getByRole('button', { name: '站点' });
@@ -584,7 +583,7 @@ describe('Plugins joining the sidebar', () => {
     renderNav();
     expect(screen.getByRole('button', { name: '站点' })).toBeTruthy();
     expect(screen.queryByText('sidebar.navigation.new')).toBeNull();
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
   });
 
   it('places a newly arrived plugin in More and flags it until More has been opened', () => {
@@ -601,7 +600,8 @@ describe('Plugins joining the sidebar', () => {
       </MainViewHistoryProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Newcomer' })).toBeNull();
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:newcomer']);
+    // The newcomer needs no placement write: plugins default to More.
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
     const more = screen.getByRole('button', { name: 'sidebar.navigation.more · sidebar.navigation.new' });
     expect(within(more).getByText('sidebar.navigation.new')).toBeTruthy();
 
@@ -628,7 +628,7 @@ describe('Plugins joining the sidebar', () => {
       </MainViewHistoryProvider>,
     );
     expect(screen.getByRole('button', { name: '站点' })).toBeTruthy();
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
   });
 
   it('marks the narrow rail More button while a new plugin waits there', () => {
@@ -672,6 +672,31 @@ describe('Plugins joining the sidebar', () => {
     mainViewsMock.sidebarVisible = [SITES];
     renderNav();
     expect(localStorage.getItem('sidebar-navigation:apps:v1')).toBeNull();
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual([]);
+  });
+
+  it('starts a fresh Customize draft when the account changes while it is open', () => {
+    setSidebarNavigationPrefs('owner-2', {
+      order: ['automations', 'plugins', 'bots', 'search'],
+      visible: ['automations', 'search'],
+    });
+    const view = renderNav();
+    openMore();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.navigation.customize.title' }));
+    // Account A unchecks Plugins in the draft, then the account switches before Done.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.plugins' }));
+    authMock.owner = 'owner-2';
+    view.rerender(
+      <MainViewHistoryProvider>
+        <MemoryRouter initialEntries={['/cc-agent']}>
+          <SidebarTopNav section="all" />
+        </MemoryRouter>
+      </MainViewHistoryProvider>,
+    );
+    expect(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.bots' }).getAttribute('aria-checked'))
+      .toBe('false');
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
+    expect(getSidebarNavigationPrefs('owner-2').visible).toEqual(['automations', 'search']);
+    expect(getSidebarNavigationPrefs(OWNER).visible).toEqual(['automations', 'plugins', 'bots', 'search']);
   });
 });

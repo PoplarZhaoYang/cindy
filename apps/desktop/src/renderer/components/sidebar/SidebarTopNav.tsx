@@ -208,7 +208,7 @@ function useSidebarNavigationEntries(): {
   const order = resolveSidebarNavigationOrder(prefs.order, sidebarVisible.map((item) => item.ghostId));
   const isVisible = (id: SidebarNavigationEntryId) => ghostIdOfEntry(id) === null
     ? prefs.visible.includes(id as SidebarNavigationItemId)
-    : !prefs.appsInMore.includes(id as SidebarNavigationAppEntryId);
+    : prefs.appsAtTop.includes(id as SidebarNavigationAppEntryId);
   const appFor = (id: SidebarNavigationEntryId) => {
     const ghostId = ghostIdOfEntry(id);
     return ghostId === null ? undefined : apps.get(ghostId);
@@ -586,7 +586,11 @@ export function SidebarTopNav({
     return (
       <>
         {customizing ? (
-          <SidebarNavigationCustomize onDone={() => setCustomizing(false)} />
+          <SidebarNavigationCustomize
+            // A draft belongs to one account; switching accounts starts a fresh one.
+            key={dataOwnerId ?? ''}
+            onDone={() => setCustomizing(false)}
+          />
         ) : !showSearch ? (
           <div className="flex flex-col gap-0.5 pr-3 pl-3">
             {orderedNavigationRows}
@@ -646,7 +650,11 @@ export function SidebarTopNav({
       )}
       {showScrollable &&
         (customizing ? (
-          <SidebarNavigationCustomize onDone={() => setCustomizing(false)} />
+          <SidebarNavigationCustomize
+            // A draft belongs to one account; switching accounts starts a fresh one.
+            key={dataOwnerId ?? ''}
+            onDone={() => setCustomizing(false)}
+          />
         ) : (
           orderedNavigationRows
         ))}

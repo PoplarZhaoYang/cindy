@@ -137,7 +137,7 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs(OWNER)).toEqual({
       order: ['plugins', 'automations', 'bots', 'search'],
       visible: ['automations', 'plugins'],
-      appsInMore: [],
+      appsAtTop: [],
     });
   });
 
@@ -163,7 +163,7 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs(OWNER)).toEqual({
       order: [...defaults().order],
       visible: [...defaults().visible],
-      appsInMore: [],
+      appsAtTop: [],
     });
     expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({});
   });
@@ -180,7 +180,7 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs(OWNER)).toEqual({
       order: ['plugins', 'automations', 'bots', 'search'],
       visible: ['automations', 'bots', 'search'],
-      appsInMore: [],
+      appsAtTop: [],
     });
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     expect(order()).not.toContain('sidebar.navigation.items.issues');
@@ -198,12 +198,17 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs(OWNER)).toEqual({
       order: [...defaults().order],
       visible: ['automations', 'plugins', 'bots'],
-      appsInMore: [],
+      appsAtTop: [],
     });
   });
   it('lists sidebar plugins and saves unchecking as a move into More', () => {
     mainViewsMock.routeCapable = [SITES];
     mainViewsMock.sidebarVisible = [SITES];
+    setSidebarNavigationPrefs(OWNER, {
+      order: ['automations', 'plugins', 'bots', 'search'],
+      visible: ['automations', 'plugins', 'bots', 'search'],
+      appsAtTop: ['app:xd-sites'],
+    });
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     expect(order()).toEqual([
       'sidebar.navigation.items.automations',
@@ -218,14 +223,12 @@ describe('sidebar navigation customization', () => {
     expect(sites.getAttribute('aria-checked')).toBe('false');
     fireEvent.keyDown(
       screen.getByRole('button', { name: 'sidebar.navigation.customize.reorder: 站点' }),
-      {
-        key: 'ArrowUp',
-      },
+      { key: 'ArrowUp' },
     );
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
     // Unchecking only moves the plugin into More; its own sidebar switch is untouched.
     expect(visibilityMock.write).not.toHaveBeenCalled();
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual([]);
     expect(getSidebarNavigationPrefs(OWNER).order).toEqual([
       'automations',
       'plugins',
@@ -235,34 +238,37 @@ describe('sidebar navigation customization', () => {
     ]);
   });
 
+  it('shows a sidebar plugin without a placement unchecked, as it sits in More', () => {
+    mainViewsMock.routeCapable = [SITES];
+    mainViewsMock.sidebarVisible = [SITES];
+    render(<SidebarNavigationCustomize onDone={() => {}} />);
+    expect(screen.getByRole('checkbox', { name: '站点' }).getAttribute('aria-checked')).toBe(
+      'false',
+    );
+  });
+
   it('leaves out plugins switched off in their own settings and keeps their saved place', () => {
     mainViewsMock.routeCapable = [SITES];
     setSidebarNavigationPrefs(OWNER, {
       order: ['automations', 'plugins', 'bots', 'search'],
       visible: ['automations', 'plugins', 'bots', 'search'],
-      appsInMore: ['app:xd-sites'],
+      appsAtTop: ['app:xd-sites'],
     });
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     expect(screen.queryByRole('checkbox', { name: '站点' })).toBeNull();
     fireEvent.click(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.bots' }));
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
   });
 
-  it('puts every plugin into More on reset, including ones switched off for now', () => {
+  it('drops every plugin placement on reset, including ones switched off for now', () => {
     const off = { ghostId: 'off', title: 'Off', icon: 'globe' as const };
-    localStorage.setItem(
-      'sidebar-navigation:apps:v1',
-      JSON.stringify({
-        'owner-1': { known: ['xd-sites', 'off'], unseen: [] },
-      }),
-    );
-    navigationTesting.resetArrivals();
     mainViewsMock.routeCapable = [SITES, off];
     mainViewsMock.sidebarVisible = [SITES];
     setSidebarNavigationPrefs(OWNER, {
       order: ['app:xd-sites', 'automations', 'plugins', 'bots', 'search'],
       visible: ['automations', 'plugins'],
+      appsAtTop: ['app:xd-sites', 'app:off'],
     });
     render(<SidebarNavigationCustomize onDone={() => {}} />);
     expect(screen.getByRole('checkbox', { name: '站点' }).getAttribute('aria-checked')).toBe(
@@ -276,8 +282,10 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs(OWNER)).toEqual({
       order: ['automations', 'plugins', 'bots', 'search'],
       visible: ['automations', 'plugins', 'bots', 'search'],
-      appsInMore: ['app:xd-sites', 'app:off'],
+      appsAtTop: [],
     });
+    // No overrides remain, so later product defaults keep applying.
+    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({});
   });
 
   it('keeps a plugin re-checked after reset at the top level', () => {
@@ -287,8 +295,7 @@ describe('sidebar navigation customization', () => {
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.reset' }));
     fireEvent.click(screen.getByRole('checkbox', { name: '站点' }));
     fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
-    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({});
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
   });
 
   it('toggles from anywhere in the row except the drag handle', () => {
@@ -329,7 +336,7 @@ describe('sidebar navigation customization', () => {
     expect(getSidebarNavigationPrefs('owner-2')).toEqual({
       order: [...defaults().order],
       visible: [...defaults().visible],
-      appsInMore: [],
+      appsAtTop: [],
     });
     expect(localStorage.getItem('sidebar-navigation:v2.owner.owner-2')).toBeNull();
     // A fresh window reads each account's layout back from its own key.
@@ -408,20 +415,22 @@ describe('sidebar navigation customization', () => {
   it('records nothing until the installed roster is known', () => {
     reconcileSidebarAppArrivals(OWNER, [], false);
     expect(localStorage.getItem('sidebar-navigation:apps:v1')).toBeNull();
-    // The real roster arriving afterwards is the first run: nothing moves into More.
+    // The real roster arriving afterwards is the first run: existing plugins stay at the top.
     reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
     expect(getSidebarKnownApps(OWNER)).toEqual(['xd-sites']);
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual(['app:xd-sites']);
   });
 
   it('starts the first sidebar plugin in More after an empty but known baseline', () => {
     reconcileSidebarAppArrivals(OWNER, [], true);
     expect(getSidebarKnownApps(OWNER)).toEqual([]);
     reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
+    // No placement is written: plugins default to More.
+    expect(getSidebarNavigationPrefs(OWNER).appsAtTop).toEqual([]);
+    expect(getSidebarKnownApps(OWNER)).toEqual(['xd-sites']);
   });
-  it('leaves an arrival retryable when its More placement cannot be stored', () => {
-    reconcileSidebarAppArrivals(OWNER, [], true);
+
+  it('retries the first run when the top-level placement of existing plugins cannot be stored', () => {
     const originalSetItem = Storage.prototype.setItem;
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
       this: Storage,
@@ -432,11 +441,13 @@ describe('sidebar navigation customization', () => {
       originalSetItem.call(this, key, value);
     });
     reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
-    expect(getSidebarKnownApps(OWNER)).toEqual([]);
+    expect(localStorage.getItem('sidebar-navigation:apps:v1')).toBeNull();
     setItem.mockRestore();
-    // Once storage accepts the placement, the same arrival is recorded.
+    // Once storage accepts the placement, the same first run is recorded.
     reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
     expect(getSidebarKnownApps(OWNER)).toEqual(['xd-sites']);
-    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
+    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!).visibility).toEqual({
+      'app:xd-sites': true,
+    });
   });
 });
