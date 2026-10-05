@@ -57,6 +57,8 @@ export interface ToolLoopMonitorOptions {
  */
 export class ToolLoopMonitor {
   private review: AbortController | null = null;
+  /** 进行中复核所针对的调用集合;新结果的调用不在其中即视为模式已被替换。 */
+  private reviewedPattern: ReadonlySet<string> | null = null;
   private readonly budget: ToolLoopReviewBudget;
 
   constructor(
@@ -77,11 +79,13 @@ export class ToolLoopMonitor {
     toolResultBatchId?: string,
   ): ToolLoopGuardVerdict {
     const verdict = this.guard.onToolResult(toolUseId, output, isError, toolResultBatchId);
-    if (verdict.kind !== 'hard') {
-      // 新结果已不再疑似:被复核的模式已打破,迟到的结论不适用于后续调用。
-      if (this.guard.lastResultObserved) this.cancelReview();
-      return verdict;
+    // 被复核的模式已打破(新结果不再疑似)或被替换(新调用不属于被复核的调用集合):
+    // 迟到的结论不适用于后续调用。等待/轮询工具与未配对结果不算。
+    if (this.review && this.guard.lastResultObserved && (verdict.kind !== 'hard'
+      || !this.reviewedPattern?.has(this.guard.lastResultCallFingerprint ?? ''))) {
+      this.cancelReview();
     }
+    if (verdict.kind !== 'hard') return verdict;
     if (verdict.final || !this.opts.reviewer) {
       this.cancelReview();
       return verdict;
@@ -105,11 +109,13 @@ export class ToolLoopMonitor {
   private cancelReview(): void {
     this.review?.abort();
     this.review = null;
+    this.reviewedPattern = null;
   }
 
   private startReview(verdict: HardToolLoopVerdict, reviewer: ToolLoopReviewer): void {
     const controller = new AbortController();
     this.review = controller;
+    this.reviewedPattern = this.guard.lastSuspectPattern;
     this.budget.used += 1;
     const request: ToolLoopReviewRequest = {
       ...this.opts.context(),
@@ -130,6 +136,7 @@ export class ToolLoopMonitor {
       clearTimeout(timer);
       if (this.review !== controller) return;
       this.review = null;
+      this.reviewedPattern = null;
       controller.abort();
       const decision: ToolLoopReviewDecision = outcome === 'continue' ? 'continue' : 'stop';
       this.opts.logger.info('tool loop review settled', {

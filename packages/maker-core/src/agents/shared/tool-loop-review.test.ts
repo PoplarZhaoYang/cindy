@@ -134,6 +134,23 @@ describe('ToolLoopMonitor', () => {
     expect(t.stops).toEqual([]);
   });
 
+  it('discards a pending review once a different call replaces the flagged pattern', async () => {
+    const { reviewer, pending } = deferredReviewer();
+    const t = setup(reviewer);
+    // 同一 Read、输出各不相同:第 12 次由窗口层判 pingpong 并发起复核。
+    t.repeatTimes(12, true);
+    expect(reviewer).toHaveBeenCalledTimes(1);
+    // 一次成功的编辑:窗口仍只有两种调用(仍 hard),但已不是被复核的模式。
+    t.monitor.onToolUse('edit', 'Edit', { file_path: 'a.ts', old_string: 'a', new_string: 'b' });
+    t.monitor.onToolResult('edit', 'updated');
+    expect(pending[0]?.signal.aborted).toBe(true);
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.stops).toEqual([]);
+    // 新模式另行复核。
+    expect(reviewer).toHaveBeenCalledTimes(2);
+  });
+
   it('ignores review results after dispose or a new turn', async () => {
     const { reviewer, pending } = deferredReviewer();
     const t = setup(reviewer);

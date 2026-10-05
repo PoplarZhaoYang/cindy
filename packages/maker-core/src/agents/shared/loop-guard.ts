@@ -276,6 +276,10 @@ export class ToolLoopGuard {
   private pendingToolUses = new Map<string, PendingToolUse>();
   /** 最近一次 onToolResult 是否真正参与了判定(未配对结果与等待/轮询工具不算)。 */
   private lastResultObservedValue = false;
+  /** 最近一次被纳入判定的调用指纹(name+input)。 */
+  private lastResultCallFingerprintValue: string | null = null;
+  /** 最近一次疑似判定所指的调用集合(name+input 指纹),供复核判断模式是否已被替换。 */
+  private lastSuspectPatternValue: ReadonlySet<string> = new Set();
 
   // 节奏判据与复核材料
   private lastOrdinaryStartedAt: number | null = null;
@@ -335,6 +339,16 @@ export class ToolLoopGuard {
     return this.lastResultObservedValue;
   }
 
+  /** 最近一次被纳入判定的调用指纹;复核期间不在被复核模式内即说明模式已被替换。 */
+  get lastResultCallFingerprint(): string | null {
+    return this.lastResultCallFingerprintValue;
+  }
+
+  /** 最近一次疑似判定涉及的调用集合。 */
+  get lastSuspectPattern(): ReadonlySet<string> {
+    return this.lastSuspectPatternValue;
+  }
+
   /** 最近的普通调用摘要(旧→新),供辅助模型复核。 */
   recentEvidence(): readonly ToolLoopEvidence[] {
     return [...this.evidence];
@@ -362,6 +376,7 @@ export class ToolLoopGuard {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
     this.lastResultObservedValue = false;
+    this.lastResultCallFingerprintValue = null;
     if (!toolUse) return { kind: 'ok' };
     if (isPollingTool(toolUse.name, toolUse.input, isError)) return { kind: 'ok' };
     this.lastResultObservedValue = true;
@@ -371,6 +386,8 @@ export class ToolLoopGuard {
     this.lastOrdinaryStartedAt = Math.max(this.lastOrdinaryStartedAt ?? toolUse.startedAt, toolUse.startedAt);
     this.recordEvidence(toolUse, output, isError);
     const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
+    const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
+    this.lastResultCallFingerprintValue = callFingerprint;
     // 复核放行额度按普通结果计,节奏轮询同样消耗。
     const inGrace = this.suspicionGraceResults > 0;
     if (inGrace) this.suspicionGraceResults -= 1;
@@ -381,8 +398,11 @@ export class ToolLoopGuard {
       this.observeStreak(fullFingerprint, false);
       return this.finalVerdict(toolUse.name);
     }
-    const suspect = (verdict: ToolLoopGuardVerdict): ToolLoopGuardVerdict =>
-      inGrace ? { kind: 'ok' } : verdict;
+    const suspect = (verdict: ToolLoopGuardVerdict, pattern: Iterable<string>): ToolLoopGuardVerdict => {
+      if (inGrace) return { kind: 'ok' };
+      this.lastSuspectPatternValue = new Set(pattern);
+      return verdict;
+    };
 
     // 第 4 层: 同工具同类契约错误连续出现(input 各不相同也计)。放在 1-3 层之前:
     // 它的阈值(3)低于第 1 层(4),同 input 的重复契约错误也应更早止损。
@@ -410,7 +430,7 @@ export class ToolLoopGuard {
               toolName: toolUse.name,
               contractCategory,
               final: false,
-            });
+            }, [callFingerprint]);
           }
         }
       }
@@ -430,7 +450,7 @@ export class ToolLoopGuard {
             toolName: toolUse.name,
             contractCategory,
             final: false,
-          });
+          }, [callFingerprint]);
         }
       } else {
         this.lastContractKey = null;
@@ -471,11 +491,10 @@ export class ToolLoopGuard {
         count: this.consecutiveStreak,
         toolName: toolUse.name,
         final: false,
-      });
+      }, [callFingerprint]);
     }
 
     // 第 2/3 层: name+input 滑动窗口多样性坍缩(指纹不含 output)
-    const callFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, null);
     this.callWindow.push(callFingerprint);
     const bufferSize = Math.max(this.windowSize, this.rotationWindowSize);
     if (this.callWindow.length > bufferSize) this.callWindow.shift();
@@ -491,7 +510,7 @@ export class ToolLoopGuard {
           count: recent.length,
           toolName: toolUse.name,
           final: false,
-        });
+        }, recent);
       }
     }
 
@@ -506,7 +525,7 @@ export class ToolLoopGuard {
           count: recent.length,
           toolName: toolUse.name,
           final: false,
-        });
+        }, recent);
       }
     }
 
