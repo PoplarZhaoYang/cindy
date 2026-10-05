@@ -70,6 +70,9 @@ export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void 
   remoteProjectsStore.pinSessionOrigin(p.deviceId, p.remoteSessionId);
   // 刚提交的远程任务在对端 isRunning 回流前先按运行中排序,避免先沉底再跳顶。
   markSessionStarting(p.remoteSessionId);
+  // 首条已在交接途中:被控端收下之前的列表回流里 userSendAt 仍为空,不能让会话先掉进
+  // 项目外的草稿区再跳回项目。必须先于临时行与回流登记。
+  remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);
   // ② 临时行:让 SessionView 的 delayed-create 交接不必等权威快照。
   if (p.workDir) {
     remoteProjectsStore.mergeDeviceSessions(p.deviceId, p.deviceName, [

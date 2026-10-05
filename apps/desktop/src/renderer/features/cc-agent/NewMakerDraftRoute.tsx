@@ -117,6 +117,7 @@ import {
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
 import {
+  deliverRecoverableHandoff,
   rememberRecoverableHandoff,
   setPending,
   setPendingGoal,
@@ -3735,6 +3736,86 @@ export function NewMakerDraftRoute() {
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
             }
+            // 远程普通首条在草稿路由直接交给 makerChatStore 的远程发件队列,不再绑在
+            // SessionView hydrate 上:队列由 store 驱动、不随视图卸载停止,发送后立刻切走
+            // 也会送达(手机端 newSessionCreation 同口径)。旧做法把首条放进 60s 的内存
+            // pending 等视图来取,用户切走超过 60s 首条就丢了,对端只剩一个空的未命名任务。
+            // 仍交给 SessionView 的只有两类(识别窗口与本机分支一致):
+            //  · 开了协同 —— 首轮必须排在被控端起 Worker 之后,等待与输入锁都在视图里;
+            //  · 斜杠命令首条 —— 需要 SessionView 的完整命令分派。
+            const remoteSendWorkingDir = created?.workDir ?? remoteWorkingDir;
+            const remoteSlashFirst =
+              /^\/(\S+)(?:\s+(.*))?$/s.test(message) ||
+              (capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message));
+            if (!shouldEnableCollab && !remoteSlashFirst && remoteSendWorkingDir) {
+              // 视图还没 hydrate 被控端的行:createOpts 读 store 里的运行时,先按刚提交的
+              // args 确定性 seed(本机首条同款)。
+              makerChatStore.setSessionRuntime(remoteSessionId, {
+                agentKind: createArgs.agentKind,
+                fastMode: createArgs.fastMode,
+                sessionProviderId: createArgs.providerId ?? null,
+              });
+              const preNavDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);
+              const preNavDraftDoc = opts?.recoveryDraftDoc ?? preNavDraft?.text ?? null;
+              const preNavBrowserComments = rewriteBrowserCommentsFromRehomedFiles(
+                preNavDraft?.browserComments,
+                rehydratedFiles,
+              );
+              // 远程发送受理即返回 true(只登记发件队列,不等隧道),所以这里 await 不会卡住
+              // 新建页;受理后副本即可丢弃 —— 之后的投递失败由下面的回调把正文放回输入框。
+              // 已过提交点:抛错也只退回视图交接,不能落到外层「创建失败」提示。
+              const accepted = await deliverRecoverableHandoff(remoteSessionId, () =>
+                makerChatStore.sendMessage(
+                  remoteSessionId,
+                  message,
+                  createArgs.model,
+                  createArgs.effort,
+                  createArgs.permissionMode,
+                  remoteSendWorkingDir,
+                  rehydratedFiles,
+                  mentions,
+                  {
+                    ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
+                    ...(opts?.agentReferences?.length
+                      ? { agentReferences: opts.agentReferences }
+                      : {}),
+                    ...(opts?.pastedTextRanges?.length
+                      ? { pastedTextRanges: opts.pastedTextRanges }
+                      : {}),
+                    ...(opts?.slashCommandRanges !== undefined
+                      ? { slashCommandRanges: opts.slashCommandRanges }
+                      : {}),
+                    onRemoteOptimisticFailure: (clientId) => {
+                      // FIFO 插回没送达的首条,不覆盖用户之后在该任务输入框里写的内容;
+                      // 撤回两层叠加层,空会话照实回到草稿区、标题回落到权威值。
+                      restoreRemoteOptimisticDraft(remoteSessionId, {
+                        clientId,
+                        text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
+                        attachments: excludeCommentScreenshots(
+                          rehydratedFiles,
+                          preNavBrowserComments,
+                        ),
+                        browserComments: preNavBrowserComments,
+                      });
+                      remoteProjectsStore.clearPendingTitlePreview(remoteSessionId);
+                      remoteProjectsStore.clearPendingFirstSend(remoteSessionId);
+                    },
+                  },
+                ),
+              ).catch((err: unknown) => {
+                log.warn('[draft send] remote first send threw; handing off to SessionView', err);
+                return false;
+              });
+              if (accepted) {
+                opts?.onAccepted?.();
+                clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
+                attachmentState.clearFiles();
+                resetDraftWorkspaceAfterSend();
+                navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
+                return;
+              }
+              // 没受理(归属切换 / 会话已删等):退回下面的视图交接,与改动前行为一致。
+            }
             setPending(remoteSessionId, {
               text: message,
               files: rehydratedFiles,
@@ -4310,7 +4391,11 @@ export function NewMakerDraftRoute() {
           if (remoteOptimisticTitleSessionId) {
             remoteProjectsStore.clearPendingTitlePreview(remoteOptimisticTitleSessionId);
           }
-          if (markedStartingSessionId) clearSessionStarting(markedStartingSessionId);
+          if (markedStartingSessionId) {
+            clearSessionStarting(markedStartingSessionId);
+            // 远程交接没完成:首条发送叠加层同样撤回(本机会话不在叠加层里,调用为空操作)。
+            remoteProjectsStore.clearPendingFirstSend(markedStartingSessionId);
+          }
           if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           log.error('[draft send]', err);
           toast.error(
