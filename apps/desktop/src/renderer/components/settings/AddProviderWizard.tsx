@@ -112,6 +112,8 @@ function presetRuntimeBaseUrl(
   for (const [sourceAgent, endpoint] of Object.entries(edited)) {
     const source = preset.runtimes[sourceAgent as AgentKind];
     if (!source || !endpoint) continue;
+    // 默认地址相同的运行时指向同一服务(如本机 llama.cpp 的 Codex / Pi),未单独编辑时跟随已编辑的那个。
+    if (source.baseUrl === runtime.baseUrl) return endpoint.trim();
     const bindings = providerEndpointBindings(source.baseUrl, endpoint.trim());
     if (bindings && source.baseUrl.includes('{')) {
       return bindProviderEndpoint(runtime.baseUrl, bindings, endpoint.trim());

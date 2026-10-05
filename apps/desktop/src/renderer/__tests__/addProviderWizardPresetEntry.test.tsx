@@ -351,6 +351,23 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(window.electronAPI.maker.llamaCppInstall).not.toHaveBeenCalled();
     expect(window.electronAPI.maker.llamaCppStart).not.toHaveBeenCalled();
   });
+  it('keeps the Codex and Pi addresses of an existing llama.cpp server in sync until one is edited separately', async () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({ ok: true, models: [{ id: 'qwen3-8b', name: 'qwen3-8b' }] });
+    renderWizard('llamacpp');
+    const [first] = await screen.findAllByDisplayValue('http://127.0.0.1:8080/v1');
+    fireEvent.change(first!, { target: { value: 'http://127.0.0.1:8081/v1' } });
+    expect(screen.getAllByDisplayValue('http://127.0.0.1:8081/v1').length).toBeGreaterThan(1);
+    expect(screen.queryAllByDisplayValue('http://127.0.0.1:8080/v1')).toHaveLength(0);
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('qwen3-8b'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(Object.values(config.runtimes).map(rt => rt?.baseUrl)).toEqual(Object.keys(config.runtimes).map(() => 'http://127.0.0.1:8081/v1'));
+    expect(config.runtimes.pi?.baseUrl).toBe('http://127.0.0.1:8081/v1');
+  });
   it('connects an existing llama.cpp server from the preset deep link without touching the managed runtime', async () => {
     const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'llamacpp')!;
     vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
