@@ -334,6 +334,55 @@ it.each([
   expect(toolbar.getByText(label)).toBeDefined();
 });
 
+it('marks an active privacy screen in the toolbar without a persistent banner', async () => {
+  await i18n.changeLanguage('zh-CN');
+  Object.assign(window, {
+    electronAPI: {
+      remoteDesktopViewer: {
+        onActive: () => () => {},
+        onLocale: () => () => {},
+        onCloseRequested: () => () => {},
+        state: async () => ({ generation: 1 }),
+        rendererReady: async () => {},
+        presentationReady: async () => {},
+      },
+    },
+  });
+  render(<RemoteDesktopViewerWindow />);
+  await act(async () =>
+    lifecycle.update?.({
+      preferences: {
+        audio: true,
+        privacyScreen: true,
+        hostMute: false,
+        clipboardSync: false,
+        lockOnExit: false,
+      },
+      safety: { privacyActive: true, notice: null, clipboardProgress: null },
+      receiveRate: null,
+      closing: false,
+      credential: null,
+      credentialBusy: false,
+      credentialNotice: null,
+      target: null,
+      ready: true,
+      controlling: true,
+      controlPending: false,
+      status: 'live',
+      error: null,
+      caps: null,
+      displayId: 'one',
+      transport: 'direct',
+      latency: null,
+      settings: { fps: 30, quality: 'auto', audio: false },
+    }),
+  );
+  expect(screen.queryByText(i18n.t('remoteDesktop.privacyActive'))).toBeNull();
+  expect(
+    screen.getByRole('button', { name: '安全' }).querySelector('.remote-viewer-active-dot'),
+  ).not.toBeNull();
+});
+
 it('updates translated controls without ending or recreating the viewer connection', async () => {
   await i18n.changeLanguage('en');
   const listeners = new Set<(locale: string) => void>();

@@ -680,15 +680,9 @@ export function RemoteDesktopViewerWindow() {
             </div>
           )}
         {isFullscreen && network && <div className="remote-viewer-network-overlay">{network}</div>}
-        {(notice || state?.safety.notice || state?.safety.privacyActive) && (
+        {(notice || state?.safety.notice) && (
           <div className="remote-viewer-feedback" role="status">
-            {state?.safety.privacyActive && <Shield size={14} aria-hidden="true" />}
-            <span>
-              {notice ??
-                (state?.safety.notice
-                  ? t(`remoteDesktop.${state.safety.notice}`)
-                  : t('remoteDesktop.privacyActive'))}
-            </span>
+            <span>{notice ?? t(`remoteDesktop.${state?.safety.notice}`)}</span>
             {state?.safety.notice && (
               <Button
                 variant="secondary"
