@@ -227,23 +227,15 @@ async function resolveChatName(feishuIm: FeishuIM, chatId: string): Promise<stri
   return name;
 }
 
-const CHAT_NAME_NOTE_TIMEOUT_MS = 2_000;
-
-/** 渠道说明里的群名是锦上添花: 失败或慢于 2s 就只写 chat_id, 不拖慢本条消息。 */
-async function resolveChatNameForNote(feishuIm: FeishuIM, chatId: string): Promise<string | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      resolveChatName(feishuIm, chatId),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), CHAT_NAME_NOTE_TIMEOUT_MS);
-      }),
-    ]);
-  } catch {
-    return null;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+/**
+ * 渠道说明里的群名是锦上添花: 只用已缓存的群名, 绝不等待网络。未缓存时后台预取,
+ * 本条只写 chat_id, 之后的消息就带上群名。
+ */
+function cachedChatNameForNote(feishuIm: FeishuIM, chatId: string): string | null {
+  const cached = chatNames.get(chatId);
+  if (cached !== undefined) return cached;
+  void resolveChatName(feishuIm, chatId).catch(() => undefined);
+  return null;
 }
 
 export function buildFeishuAdapter(
@@ -375,7 +367,7 @@ export function buildFeishuAdapter(
     channelNoteSourceFor: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
       if (!lane) return { chatKind: 'direct', ...(event.chatId ? { chatId: event.chatId } : {}) };
-      const chatName = await resolveChatNameForNote(feishuIm, lane.chatId);
+      const chatName = cachedChatNameForNote(feishuIm, lane.chatId);
       return {
         chatKind: 'group',
         chatId: lane.chatId,

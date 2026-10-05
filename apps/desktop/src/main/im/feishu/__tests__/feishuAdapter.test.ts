@@ -625,10 +625,23 @@ describe('feishu group lane adapter hooks', () => {
         groupEvent({ senderId: 'ou_owner', chatId: 'oc_p2p', speaker: undefined }),
       ),
     ).toEqual({ chatKind: 'direct', chatId: 'oc_p2p' });
+    // 群名只用缓存、绝不等待网络: 首条只写 chat_id 并后台预取, 之后的消息带上群名。
     getChatName.mockResolvedValueOnce('产品群');
-    expect(
-      await adapter.channelNoteSourceFor?.(groupEvent({ senderId: 'g/oc_note1/omt_t1', chatId: 'oc_note1' })),
-    ).toEqual({ chatKind: 'group', chatId: 'oc_note1', chatName: '产品群', senderId: 'ou_owner' });
+    const note1 = groupEvent({ senderId: 'g/oc_note1/omt_t1', chatId: 'oc_note1' });
+    expect(await adapter.channelNoteSourceFor?.(note1)).toEqual({
+      chatKind: 'group',
+      chatId: 'oc_note1',
+      senderId: 'ou_owner',
+    });
+    await vi.waitFor(() => expect(getChatName).toHaveBeenCalledWith('oc_note1'));
+    await Promise.resolve();
+    expect(await adapter.channelNoteSourceFor?.(note1)).toEqual({
+      chatKind: 'group',
+      chatId: 'oc_note1',
+      chatName: '产品群',
+      senderId: 'ou_owner',
+    });
+    // 预取失败不影响本条, 也不抛错。
     getChatName.mockRejectedValueOnce(new Error('no permission'));
     expect(
       await adapter.channelNoteSourceFor?.(groupEvent({ senderId: 'g/oc_note2', chatId: 'oc_note2' })),

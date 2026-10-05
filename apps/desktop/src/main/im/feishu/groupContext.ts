@@ -137,7 +137,7 @@ export function formatHistoryTime(ms: number): string {
 /**
  * 渲染一条历史消息为上下文行(带时间, 附件给占位标注, 内容经 fence 中和)。
  * senderId 传入时在名字后写 `(user_id: …)` —— 只用于最终给模型的前缀;
- * 相关性判断、注入扫描与字符预算都用不带 id 的行。
+ * 相关性判断与注入扫描用不带 id 的行, 字符预算按带 id 的上界估算。
  */
 function renderHistoryLine(m: FeishuRecentChatMessage, senderId?: string): string {
   const name = sanitizeDisplayText(m.senderName) || (m.senderIsBot ? 'bot' : 'user');
@@ -293,7 +293,10 @@ export async function buildFeishuGroupContext(args: {
   let totalChars = 0;
   let truncated = false;
   for (let i = all.length - 1; i >= 0; i--) {
-    const lineLen = renderHistoryLine(all[i]).length;
+    // 按最终给模型的行计预算: 每行都按带 user_id 估算(实际只在首次出现/同名时带),
+    // 宁可少取几条, 也不让追加的 id 把前缀撑过上限。
+    const budgetId = all[i].senderIsBot ? undefined : safeOpenId(all[i].senderOpenId);
+    const lineLen = renderHistoryLine(all[i], budgetId).length;
     if (totalChars + lineLen > GROUP_CONTEXT_MAX_CHARS) {
       truncated = true;
       break;
