@@ -2398,12 +2398,24 @@ function compactDetailForSession(session: AgentIslandSessionState): string {
   return detail ? truncateInlineText(detail, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH) : '';
 }
 
+/**
+ * 同步给其它设备的完成摘要:只取最后一条回复。驻留中的用户提问、「完成」占位和工具状态
+ * 都不算结果;没有回复时给空串,由接收端用自己的语言显示「完成」。
+ */
+export function completedReplySummary(
+  snapshot: Pick<AgentIslandSessionSnapshot, 'activityLines'>,
+): string {
+  const reply = snapshot.activityLines
+    .slice()
+    .reverse()
+    .find((line) => line.kind === 'assistant');
+  return reply ? truncateInlineText(reply.text, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH) : '';
+}
+
 function messagePreviewTextForSession(session: AgentIslandSessionState): string | null {
   if (session.phase === 'needs-interaction' || session.phase === 'error') return null;
   const line = session.messagePreview?.line;
   if (!line || (line.kind !== 'user' && line.kind !== 'assistant')) return null;
-  // 完成后仍在驻留的用户提问不是这一轮的结果;摘要会同步给其它设备的完成卡片。
-  if (session.phase === 'completed' && line.kind === 'user') return null;
   const text = normalizeActivityText(line.text);
   return text || null;
 }

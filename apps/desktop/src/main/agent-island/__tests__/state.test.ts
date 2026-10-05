@@ -17,6 +17,7 @@ import {
   buildAgentIslandDisplayState,
   buildAllSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
+  completedReplySummary,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
@@ -876,17 +877,27 @@ describe('Agent Island display state', () => {
     expect(afterAssistantDwell.sessions[0]?.compactDetail).toBe('运行测试');
   });
 
-  it('summarizes a completion with the reply even while the user prompt preview dwells', () => {
+  it('summarizes a completion for other devices with the last reply only', () => {
     const state = createAgentIslandState();
+    setAgentIslandStrings(state, { ...DEFAULT_AGENT_ISLAND_STRINGS, done: '完成' });
     const start = 1_000;
 
-    applyAgentIslandUserPrompt(state, { sessionId: 's1', title: 'Task' }, 'fix the login bug', start);
-    applyAgentIslandEvent(state, { sessionId: 's1' }, finalTextEvent('登录问题已修复。'), start + 100);
-    applyAgentIslandEvent(state, { sessionId: 's1' }, doneEvent(), start + 200);
+    // 用户提问预览仍在驻留时完成:取回复,不取提问。
+    applyAgentIslandUserPrompt(state, { sessionId: 'reply', title: 'Task' }, 'fix the login bug', start);
+    applyAgentIslandEvent(state, { sessionId: 'reply' }, finalTextEvent('登录问题已修复。'), start + 100);
+    applyAgentIslandEvent(state, { sessionId: 'reply' }, doneEvent(), start + 200);
+    // 没有回复:不把本机语言的占位当摘要发出去。
+    applyAgentIslandUserPrompt(state, { sessionId: 'silent', title: 'Task' }, 'run it', start);
+    applyAgentIslandEvent(state, { sessionId: 'silent' }, doneEvent(), start + 200);
 
-    const display = buildAgentIslandDisplayState(state, start + 300);
-    expect(display.sessions[0]?.messagePreview?.kind).toBe('user');
-    expect(display.sessions[0]?.compactDetail).toBe('登录问题已修复。');
+    const sessions = buildAgentIslandDisplayState(state, start + 300).sessions;
+    const reply = sessions.find((session) => session.sessionId === 'reply');
+    const silent = sessions.find((session) => session.sessionId === 'silent');
+    expect(reply?.messagePreview?.kind).toBe('user');
+    expect(reply?.compactDetail).toBe('fix the login bug');
+    expect(reply && completedReplySummary(reply)).toBe('登录问题已修复。');
+    expect(silent?.activityLines.at(-1)?.text).toBe('完成');
+    expect(silent && completedReplySummary(silent)).toBe('');
   });
 
   it('does not display managed dialogue workspace folders as projects', () => {
