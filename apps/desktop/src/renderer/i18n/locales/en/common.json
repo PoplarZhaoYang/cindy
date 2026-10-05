@@ -9898,7 +9898,7 @@
       "stopBashTitle": "Stop the background tasks still running in this session (keeps the session process)",
       "stopping": "Stopping…",
       "remoteStopUnsupported": "The {{appName}} version on the remote computer is too old to stop background tasks from here. Update it and try again",
-      "remoteStopDisconnected": "The remote computer isn't connected, so the background task wasn't stopped. Try again once it reconnects"
+      "remoteStopUnreachable": "The remote computer isn't responding right now, so the background task wasn't stopped. Try again later"
     },
     "interruptedBanner": {
       "text": "This task was interrupted because the app exited while it was running.",

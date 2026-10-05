@@ -20,15 +20,16 @@ describe('reportBackgroundTaskStopFailure', () => {
     expect(warning).toHaveBeenCalledWith('chat.backgroundActivity.remoteStopUnsupported');
   });
 
-  it('远程电脑未连接 / 超时 / 归属未解析时提示等连接恢复后重试', () => {
+  it('远程电脑未连接 / 超时 / 繁忙 / 归属未解析时提示稍后重试', () => {
     for (const message of [
       '[DEVICE_LINK_NOT_CONNECTED] Background task ownership is unresolved',
       '[DEVICE_LINK_TIMEOUT] invoke timed out',
       '[DEVICE_OFFLINE] target offline',
+      '[DEVICE_LINK_BUSY] invoke scheduler is saturated',
     ]) {
       warning.mockClear();
       reportBackgroundTaskStopFailure(new Error(message), t);
-      expect(warning).toHaveBeenCalledWith('chat.backgroundActivity.remoteStopDisconnected');
+      expect(warning).toHaveBeenCalledWith('chat.backgroundActivity.remoteStopUnreachable');
     }
   });
 

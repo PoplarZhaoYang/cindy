@@ -9876,7 +9876,7 @@
       "stopBashTitle": "停止该任务仍在运行的后台作业（不关闭会话进程）",
       "stopping": "停止中…",
       "remoteStopUnsupported": "远程电脑上的 {{appName}} 版本过旧，暂不支持在这里停止后台任务，请升级后重试",
-      "remoteStopDisconnected": "远程电脑当前未连接，后台任务没有停止，请等连接恢复后重试"
+      "remoteStopUnreachable": "远程电脑暂时无法响应，后台任务没有停止，请稍后重试"
     },
     "interruptedBanner": {
       "text": "任务执行到一半时应用退出，已被中断。",
