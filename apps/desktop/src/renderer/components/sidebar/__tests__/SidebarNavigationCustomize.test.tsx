@@ -420,4 +420,23 @@ describe('sidebar navigation customization', () => {
     reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
     expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
   });
+  it('leaves an arrival retryable when its More placement cannot be stored', () => {
+    reconcileSidebarAppArrivals(OWNER, [], true);
+    const originalSetItem = Storage.prototype.setItem;
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ) {
+      if (key.startsWith('sidebar-navigation:v2.owner.')) throw new Error('refused');
+      originalSetItem.call(this, key, value);
+    });
+    reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
+    expect(getSidebarKnownApps(OWNER)).toEqual([]);
+    setItem.mockRestore();
+    // Once storage accepts the placement, the same arrival is recorded.
+    reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
+    expect(getSidebarKnownApps(OWNER)).toEqual(['xd-sites']);
+    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
+  });
 });

@@ -240,16 +240,18 @@ export function subscribeSidebarNavigationPrefs(listener: () => void): () => voi
   return () => listeners.delete(listener);
 }
 
+/** Returns whether the preferences reached storage, not just this window's cache. */
 export function setSidebarNavigationPrefs(
   owner: string | null,
   prefs: SidebarNavigationPrefsInput,
-): void {
-  if (!owner) return;
+): boolean {
+  if (!owner) return false;
   const next = normalize(prefs);
   // Keep this window consistent even if the owner guard or storage refuses the write.
   cache.set(owner, next);
-  writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(toOverride(next)));
+  const persisted = writeSidebarOwnerStorage(STORAGE_KEY, owner, JSON.stringify(toOverride(next)));
   listeners.forEach((listener) => listener());
+  return persisted;
 }
 
 export function useSidebarNavigationPrefs(owner: string | null): SidebarNavigationPrefs {
@@ -343,10 +345,14 @@ export function reconcileSidebarAppArrivals(
   if (arrived.length === 0 && unseen.length === record.unseen.length) return;
   if (arrived.length > 0) {
     const prefs = getSidebarNavigationPrefs(owner);
-    setSidebarNavigationPrefs(owner, {
+    const placed = setSidebarNavigationPrefs(owner, {
       ...prefs,
       appsInMore: [...new Set([...prefs.appsInMore, ...arrived.map(appEntryId)])],
     });
+    // Only mark arrivals known once their More placement is stored; otherwise a
+    // restart would show them at the top level and never treat them as new again.
+    // The next reconcile retries the whole step.
+    if (!placed) return;
   }
   writeArrivals({
     ...arrivals,
