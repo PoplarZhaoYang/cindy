@@ -22,6 +22,7 @@ vi.mock('../remote-deps.js', () => ({ getRemoteFileBrowser: vi.fn() }));
 
 import { downloadChatEntry, type ChatDownloadDeps } from '../chat-download';
 import { packDirectory } from '../dir-archive';
+import { isWorkdirRoot } from '../../../shared/workdirPath';
 
 let tmp: string;
 let downloads: string;
@@ -198,6 +199,25 @@ describe('downloadChatEntry', () => {
     expect(deps.fetchFile).not.toHaveBeenCalled();
   });
 
+  it('Windows 被控端:写法不同的工作目录本身也按目录下载', async () => {
+    const deviceOp = vi.fn(async (_id: string, args: Record<string, unknown>) => {
+      if (args.op === 'caps') return { ok: true, dirExport: true };
+      return { ok: false, message: 'stop here' };
+    });
+    const deps = makeDeps({ deviceOp: deviceOp as ChatDownloadDeps['deviceOp'] });
+    await downloadChatEntry(
+      { origin: device, workdir: 'C:/Repo', absPath: 'c:\\repo\\' },
+      () => undefined,
+      deps,
+    );
+    expect(deviceOp).toHaveBeenCalledWith('dev-1', {
+      op: 'exportDirStart',
+      workdir: 'C:/Repo',
+      relPath: '',
+    });
+    expect(deps.fetchFile).not.toHaveBeenCalled();
+  });
+
   it('文件夹(device):中途失败时放弃已推来但没取走的分段', async () => {
     const part = (n: number) => ({ ref: `peer-${n}`, size: 10, sha256: String(n).repeat(64) });
     const deviceOp = vi.fn(async (_id: string, args: Record<string, unknown>) => {
@@ -349,5 +369,16 @@ describe('downloadChatEntry', () => {
     );
     expect(res).toMatchObject({ ok: false, code: 'FETCH_FAILED' });
     expect(await fsp.readdir(downloads)).toEqual([]);
+  });
+});
+
+describe('isWorkdirRoot', () => {
+  it('按 toWorkdirRel 同一套归一判断是否为工作目录本身', () => {
+    expect(isWorkdirRoot('/w/proj', '/w/proj/')).toBe(true);
+    expect(isWorkdirRoot('/w/proj/', '/w/./proj')).toBe(true);
+    expect(isWorkdirRoot('/w/proj', '/w/proj/a')).toBe(false);
+    expect(isWorkdirRoot('C:/Repo', 'c:\\repo\\')).toBe(true);
+    expect(isWorkdirRoot('C:\\Repo', 'C:/Repo/sub')).toBe(false);
+    expect(isWorkdirRoot('/w/proj', 'C:/w/proj')).toBe(false);
   });
 });

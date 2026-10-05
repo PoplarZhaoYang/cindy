@@ -21,6 +21,7 @@ import { assertDiskCapacity } from '../task-migration/resources.js';
 import { receiveParts } from '../task-migration/transferParts.js';
 import type { ChatFileDeps, ChatFileFetchArgs, ChatFileFetchResult } from './chat-file.js';
 import { toWorkdirRel } from './chat-file.js';
+import { isWorkdirRoot } from '../../shared/workdirPath.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { extractDirectoryArchive } from './dir-archive.js';
 import type { DirExportStatus } from './dir-export.js';
@@ -298,8 +299,7 @@ export async function downloadChatEntry(
     return { ok: false, code: 'BAD_ARGS' };
   }
   // 引用的正好是工作目录本身时按目录下载(toWorkdirRel 对根返回 null)。
-  const trim = (p: string) => p.replace(/[\\/]+$/, '');
-  const isRoot = trim(absPath) === trim(workdir);
+  const isRoot = isWorkdirRoot(workdir, absPath);
   const relPath = isRoot ? '' : toWorkdirRel(workdir, absPath);
   let isDirectory = isRoot;
   if (relPath) {

@@ -47,3 +47,15 @@ export function toWorkdirRel(workdir: string, absPath: string): string | null {
   const rel = a.slice(w.length + 1);
   return rel.length > 0 ? rel : null;
 }
+
+/** absPath 是否就是 workdir 本身(按 toWorkdirRel 同一套归一:`.` 段、尾分隔符,
+ *  Windows 风格还归一分隔符并大小写不敏感)。 */
+export function isWorkdirRoot(workdir: string, absPath: string): boolean {
+  if (!workdir || !absPath) return false;
+  if (workdir.startsWith('/')) {
+    return absPath.startsWith('/') && dropDotSegments(absPath) === dropDotSegments(workdir);
+  }
+  if (!WIN_ABS_RE.test(workdir) || !WIN_ABS_RE.test(absPath)) return false;
+  const norm = (p: string) => dropDotSegments(p.replace(/\\/g, '/')).toLowerCase();
+  return norm(absPath) === norm(workdir);
+}
