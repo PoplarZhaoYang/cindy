@@ -497,7 +497,9 @@ export function dismissRecoveredPrecreatedSession(record: { sessionId: string; d
   if (tasks.has(record.sessionId)) return;
   if (remoteSessionStore.getSessionDeviceId(record.sessionId) !== record.deviceId) return;
   const row = remoteSessionStore.getSessions().find((session) => session.id === record.sessionId);
-  if (!row?.pendingLocalCreation) return;
+  // The host cancellation ACK proves this identity cannot become a live task.
+  // Cold outbox hydration and cached rows need not carry pendingLocalCreation.
+  if (!row) return;
   remoteSessionStore.applySessionPatch(record.deviceId, record.sessionId, { status: 'deleted' });
   remoteSessionStore.setInputProjectionOptimistically(record.sessionId, null);
   remoteSessionStore.clearPendingTitlePreview(record.sessionId);

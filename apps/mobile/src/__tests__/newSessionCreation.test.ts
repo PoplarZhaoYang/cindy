@@ -8,7 +8,12 @@
  *  - retry(同 id 幂等)与 dismiss(返回编辑)收口。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
+import { isDurableOutboxSettled, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { buildOutboxItem, outboxItemAttachments } from '@/session/sessionOutbox';
 
 const recoveryStorage = vi.hoisted(() => new Map<string, string>());
 const persistCancelledDraft = vi.hoisted(() => vi.fn(async () => {}));
@@ -64,6 +69,41 @@ const DRAFT: NewSessionDraft = {
   fastMode: false,
   firstMessage: 'hello world',
 };
+
+// Execute the bridge's actual refresh callback with the real session store.
+// This includes hydration, cancellation cleanup and message-work lease release.
+const bridgeSource = ts.createSourceFile('MobileOutboxBridge.tsx', readFileSync(resolve(
+  process.cwd(), 'src/session/MobileOutboxBridge.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let refreshSource = '';
+function findRefresh(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(bridgeSource) === 'refreshLeases') {
+    refreshSource = node.initializer!.getText(bridgeSource);
+  }
+  ts.forEachChild(node, findRefresh);
+}
+findRefresh(bridgeSource);
+if (!refreshSource) throw new Error('Missing outbox lease refresh callback');
+function outboxLeaseHarness(initial: DurableOutboxRecord[]) {
+  let records = initial;
+  const leases = new Map<string, ReturnType<typeof remoteSessionStore.acquireSessionMessageWork>>();
+  const bindings = { isCurrent: () => true, mobileDurableOutbox: { getSnapshot: () => records },
+    isDurableOutboxSettled, remoteSessionStore, sessionFromCreateResult, outboxItemAttachments,
+    dismissRecoveredPrecreatedSession, leases,
+    leaseKey: (record: DurableOutboxRecord) => JSON.stringify([record.deviceId, record.item.sessionId]) };
+  const compiled = ts.transpileModule(`function create(bindings) {
+    const { ${Object.keys(bindings).join(', ')} } = bindings;
+    return ${refreshSource};
+  }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const create = new Function(`${compiled}; return create;`)() as (values: typeof bindings) => () => void;
+  return { refresh: create(bindings), leases, setRecords: (next: DurableOutboxRecord[]) => { records = next; } };
+}
+function recoveryOutboxRecord(sessionId: string): DurableOutboxRecord {
+  return { version: 1, accountId: 'owner-a', deviceId: 'dev-1', createdAt: 1, state: 'failed', uploads: [],
+    creation: { draft: DRAFT, deviceName: 'PC', planModeArm: false, restorePermissionMode: null },
+    item: buildOutboxItem({ clientId: `message-${sessionId}`, sessionId, text: DRAFT.firstMessage,
+      quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
+      permissionModeAtSend: DRAFT.permissionMode, readyAttachments: [], readyPreviews: [], claimedUploads: [] }) };
+}
 
 interface MakerMock {
   createSession: ReturnType<typeof vi.fn>;
@@ -859,16 +899,55 @@ describe('newSessionCreation pipeline', () => {
     dismissNewSessionCreation(record.sessionId);
   });
 
-  it('hides only a cancelled synthetic row on the matching device', () => {
-    const row = { ...sessionFromCreateResult({ sessionId: 'orphan' }, DRAFT), pendingLocalCreation: true };
+  it.each([true, false, undefined])('removes the host-confirmed cancelled row on the matching device (pendingLocalCreation=%s)', (pendingLocalCreation) => {
+    const row = { ...sessionFromCreateResult({ sessionId: 'orphan' }, DRAFT), pendingLocalCreation };
     remoteSessionStore.upsertDeviceSession('dev-1', 'PC', row);
     dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'other-device' });
     expect(remoteSessionStore.getSessions()).toHaveLength(1);
     dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'dev-1' });
     expect(remoteSessionStore.getSessions()).toHaveLength(0);
-    remoteSessionStore.upsertDeviceSession('dev-1', 'PC', { ...row, pendingLocalCreation: false });
-    dismissRecoveredPrecreatedSession({ sessionId: 'orphan', deviceId: 'dev-1' });
-    expect(remoteSessionStore.getSessions()).toHaveLength(1);
+  });
+
+  it('does not dismiss a row still owned by a live creation pipeline', async () => {
+    const maker = makeMaker({ createSession: vi.fn(async () => { throw new Error('failed startup'); }) });
+    startNewSessionCreation(makeParams('s1', maker));
+    dismissRecoveredPrecreatedSession({ sessionId: 's1', deviceId: 'dev-1' });
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 's1')).toBeDefined();
+    expect(getNewSessionCreationTask('s1')).not.toBeNull();
+    await flushPipeline();
+    dismissNewSessionCreation('s1');
+  });
+
+  it('removes a cold-hydrated cancelled row and releases only its lease without resurrecting it', () => {
+    const orphan = recoveryOutboxRecord('cold-orphan');
+    const other = recoveryOutboxRecord('other-draft');
+    const bridge = outboxLeaseHarness([orphan, other]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().find((row) => row.id === 'cold-orphan')?.pendingLocalCreation).toBeUndefined();
+    expect(bridge.leases.size).toBe(2);
+    const releaseOrphan = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'cold-orphan']))!, 'release');
+    const releaseOther = vi.spyOn(bridge.leases.get(JSON.stringify(['dev-1', 'other-draft']))!, 'release');
+    const cancelled = { ...orphan, suspended: true, creation: { ...orphan.creation!, cancelled: true as const } };
+    bridge.setRecords([cancelled, other]);
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().map((row) => row.id)).toEqual(['other-draft']);
+    expect(releaseOrphan).toHaveBeenCalledOnce();
+    expect(releaseOther).not.toHaveBeenCalled();
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions().map((row) => row.id)).toEqual(['other-draft']);
+    expect(cancelled.item.text).toBe(DRAFT.firstMessage);
+    expect(cancelled.creation.cancelled).toBe(true);
+    bridge.setRecords([]);
+    bridge.refresh();
+  });
+
+  it('does not materialize an already cancelled draft on cold startup', () => {
+    const orphan = recoveryOutboxRecord('cancelled-before-restart');
+    const bridge = outboxLeaseHarness([{ ...orphan, creation: { ...orphan.creation!, cancelled: true } }]);
+    bridge.refresh();
+    bridge.refresh();
+    expect(remoteSessionStore.getSessions()).toEqual([]);
+    expect(bridge.leases.size).toBe(0);
   });
 
   it.each([
