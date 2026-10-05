@@ -915,23 +915,39 @@ function ExpandedView({
 
   const handleScheduleAction = useCallback(
     async (group: AutomationSessionGroup, action: AutomationScheduleAction) => {
+      // 远程分组的操作发到任务所属电脑执行；本机分组仍走本机 IPC。
+      const deviceId = group.deviceLinkDeviceId;
+      const invokeSchedule = <T,>(channel: string, localCall: () => Promise<T>, id: string) =>
+        deviceId
+          ? (window.electronAPI.deviceLink.invoke(deviceId, channel, [id]) as Promise<T>)
+          : localCall();
+
       if (action === 'mark-read') {
         const sessionIds = group.sessions.map((session) => session.id);
         clearSessionAttentionMany(sessionIds);
-        try {
-          const { processed, failed } =
-            await window.electronAPI.localDb.sessions.dismissPendingAlerts(sessionIds);
-          clearSessionAttentionMany(processed, { intent: 'explicit' });
-          if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
-        } catch (e) {
-          log.warn('dismiss pending alerts failed', e);
+        if (!deviceId) {
+          try {
+            const { processed, failed } =
+              await window.electronAPI.localDb.sessions.dismissPendingAlerts(sessionIds);
+            clearSessionAttentionMany(processed, { intent: 'explicit' });
+            if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+          } catch (e) {
+            log.warn('dismiss pending alerts failed', e);
+          }
+          void refreshPendingAlerts();
         }
-        void refreshPendingAlerts();
         const unreadRunIds = sessionIds.flatMap(
-          (sessionId) => scheduleSessionIndex.get(sessionId)?.unreadRunIds ?? [],
+          (sessionId) =>
+            (deviceId
+              ? remoteProjectsStore.getSessionScheduleInfo(sessionId)
+              : scheduleSessionIndex.get(sessionId)
+            )?.unreadRunIds ?? [],
         );
         if (unreadRunIds.length > 0) {
-          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(unreadRunIds);
+          const { processed, failed, firstError } = await markScheduleRunsReadAndSync(
+            unreadRunIds,
+            deviceId,
+          );
           if (processed.length > 0) {
             toast.success(t('ccAgent.layout.markedAsRead', { count: processed.length }));
           }
@@ -949,9 +965,25 @@ function ExpandedView({
       if (!group.scheduleId) return;
       const scheduleId = group.scheduleId;
       const scheduleName = group.title;
+      // 编辑页与删除确认（连同会话清理）只服务本机任务；远程分组不提供这两个入口。
+      if (deviceId && (action === 'edit' || action === 'delete')) return;
 
       if (action === 'edit') {
         navigate(`/cc-agent/scheduled?focus=${encodeURIComponent(scheduleId)}&edit=${Date.now()}`);
+        return;
+      }
+
+      if (action === 'run' && deviceId) {
+        // 远程运行的 fired / session-bound 来自对方电脑，不跟随跳转；新运行随侧栏刷新出现。
+        try {
+          await window.electronAPI.deviceLink.invoke(deviceId, 'maker:schedule:run-now', [
+            scheduleId,
+          ]);
+        } catch (e) {
+          toast.error(
+            t('scheduler.toast.runFailed', { error: e instanceof Error ? e.message : String(e) }),
+          );
+        }
         return;
       }
 
@@ -1025,13 +1057,19 @@ function ExpandedView({
       if (action === 'toggle-pause') {
         try {
           if (group.scheduleStatus === 'paused') {
-            await window.electronAPI.maker.schedule.resume(scheduleId);
+            await invokeSchedule(
+              'maker:schedule:resume',
+              () => window.electronAPI.maker.schedule.resume(scheduleId),
+              scheduleId,
+            );
             return;
           }
           if (group.scheduleStatus === 'expired') return;
-          const inflight = await window.electronAPI.maker.schedule
-            .getInflightCount(scheduleId)
-            .catch(() => 0);
+          const inflight = await invokeSchedule(
+            'maker:schedule:get-inflight-count',
+            () => window.electronAPI.maker.schedule.getInflightCount(scheduleId),
+            scheduleId,
+          ).catch(() => 0);
           if (inflight > 0) {
             const ok = await confirmDialog({
               title: t('scheduler.confirm.pause.title', { name: scheduleName }),
@@ -1041,7 +1079,11 @@ function ExpandedView({
             });
             if (!ok) return;
           }
-          await window.electronAPI.maker.schedule.pause(scheduleId);
+          await invokeSchedule(
+            'maker:schedule:pause',
+            () => window.electronAPI.maker.schedule.pause(scheduleId),
+            scheduleId,
+          );
         } catch (e) {
           toast.error(
             t('scheduler.toast.actionFailed', {
@@ -1147,6 +1189,15 @@ function ExpandedView({
     }
     return next;
   }, [scheduleSessionIndex, remoteScheduleIndex]);
+  // 自动化分组按任务所属电脑取索引：远程会话用该设备镜像的状态、下次运行与操作身份，
+  // 本机会话仍以本机索引为准（session id 全局唯一，两份不会互相覆盖真实条目）。
+  const automationGroupingIndex = useMemo(
+    () =>
+      remoteScheduleIndex.size === 0
+        ? scheduleSessionIndex
+        : new Map([...remoteScheduleIndex, ...scheduleSessionIndex]),
+    [scheduleSessionIndex, remoteScheduleIndex],
+  );
   const sidebarNotifications = useMemo(() => {
     if (unreadScheduleSessionIds.size === 0) return notifications;
     return new Set([...notifications, ...unreadScheduleSessionIds]);
@@ -3739,7 +3790,7 @@ function ExpandedView({
                       runningSessionIds={displayRunningSessionIds}
                       attachedSessionIds={attachedSessionIds}
                       notifications={sidebarNotifications}
-                      scheduleSessionIndex={scheduleSessionIndex}
+                      scheduleSessionIndex={automationGroupingIndex}
                       selectedSessionIds={selectedSessionIds}
                       disableSessionCollapse={false}
                       onToggle={collapse.toggle}
@@ -3795,7 +3846,7 @@ function ExpandedView({
                   runningSessionIds={displayRunningSessionIds}
                   attachedSessionIds={attachedSessionIds}
                   notifications={sidebarNotifications}
-                  scheduleSessionIndex={scheduleSessionIndex}
+                  scheduleSessionIndex={automationGroupingIndex}
                   selectedSessionIds={selectedSessionIds}
                   onSessionClick={handleSessionClick}
                   onAction={handleActionClick}
@@ -3893,7 +3944,7 @@ function ExpandedView({
         runningSessionIds={displayRunningSessionIds}
         attachedSessionIds={attachedSessionIds}
         notifications={sidebarNotifications}
-        scheduleSessionIndex={scheduleSessionIndex}
+        scheduleSessionIndex={automationGroupingIndex}
         selectedSessionIds={selectedSessionIds}
         onSessionClick={handleSessionClick}
         onAction={handleActionClick}
