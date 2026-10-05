@@ -344,6 +344,16 @@ export class ToolLoopGuard {
     return this.lastResultCallFingerprintValue;
   }
 
+  /**
+   * 调用开始时的 name+input 指纹,供复核在调用开始即判断模式是否被替换;等待/轮询工具
+   * 与无名调用返回 null(不打破模式)。纯计算,不改任何判定状态。
+   */
+  callFingerprintAtStart(toolName: unknown, input: unknown): string | null {
+    if (typeof toolName !== 'string' || toolName.length === 0) return null;
+    if (isPollingTool(toolName, input, false)) return null;
+    return fingerprintToolCall(toolName, input, null);
+  }
+
   /** 最近一次疑似判定涉及的调用集合。 */
   get lastSuspectPattern(): ReadonlySet<string> {
     return this.lastSuspectPatternValue;

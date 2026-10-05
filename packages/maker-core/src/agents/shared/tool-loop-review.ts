@@ -70,6 +70,10 @@ export class ToolLoopMonitor {
 
   onToolUse(toolUseId: string, toolName: unknown, input: unknown): void {
     this.guard.onToolUse(toolUseId, toolName, input);
+    // 模式在新调用开始时就可能被替换(长时调用的结果可能晚于复核结论到达)。
+    if (!this.review) return;
+    const fingerprint = this.guard.callFingerprintAtStart(toolName, input);
+    if (fingerprint !== null && !this.reviewedPattern?.has(fingerprint)) this.cancelReview();
   }
 
   onToolResult(

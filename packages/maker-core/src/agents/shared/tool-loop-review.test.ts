@@ -151,6 +151,22 @@ describe('ToolLoopMonitor', () => {
     expect(reviewer).toHaveBeenCalledTimes(2);
   });
 
+  it('discards a pending review as soon as a replacement call starts', async () => {
+    const { reviewer, pending } = deferredReviewer();
+    const t = setup(reviewer);
+    t.repeatTimes(4);
+    // 同一被复核调用再次开始、等待工具开始:都不打破模式。
+    t.monitor.onToolUse('again', 'read', { path: 'same.ts' });
+    t.monitor.onToolUse('wait', 'TaskOutput', { task_id: 'x' });
+    expect(pending[0]?.signal.aborted).toBe(false);
+    // 一个不同的长时调用刚开始、结果未到:复核即作废。
+    t.monitor.onToolUse('build', 'exec', { cmd: 'pnpm build' });
+    expect(pending[0]?.signal.aborted).toBe(true);
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.stops).toEqual([]);
+  });
+
   it('ignores review results after dispose or a new turn', async () => {
     const { reviewer, pending } = deferredReviewer();
     const t = setup(reviewer);
