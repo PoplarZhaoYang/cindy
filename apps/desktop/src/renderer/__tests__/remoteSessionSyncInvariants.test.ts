@@ -174,7 +174,11 @@ describe('CCAgentSessionView 接线不变式', () => {
   it('双时间戳中断候选必须等 main 真值确认,未确认不当作中断证据(#4513)', () => {
     // 视图侧:候选出现(activeTurnStartedAt 变化)时向 main 回填一次权威运行态,
     // main 说在飞则与 isRunning/remoteTurnActive 同样锁存 ack。
-    expect(sessionViewSrc).toContain('getSessionTurnActive(sessionId)');
+    expect(sessionViewSrc).toContain('getSessionTurnActiveOn(sessionId, turnActiveDeviceId)');
+    // 远程会话的真值问被控端:控制端本机 main 没有这个 turn,永远答 false。
+    expect(sessionViewSrc).toContain(
+      'const turnActiveDeviceId = remoteDeviceId ?? session?.deviceLinkDeviceId ?? null;',
+    );
     // 真值绑定所属会话:路由复用切会话时旧 true 不得锁存新会话的 ack(P1)。
     expect(sessionViewSrc).toContain('mainTurnActiveForSession');
     expect(sessionViewSrc).toContain(

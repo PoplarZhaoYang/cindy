@@ -360,6 +360,7 @@ import type { ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 // (本机走本地 maker,远程 device-link 会话走隧道)。
 import {
   ackInterruptedTurnFor,
+  getSessionTurnActiveOn,
   goalApiFor,
   makerApiFor,
   orcaWorkflowsFor,
@@ -2373,11 +2374,14 @@ export function CCAgentSessionView({
   // 真值必须绑定所属会话:路由复用本组件(无 key 的 :sessionId 路由),A(在飞)→B(真中断)
   // 切会话时旧 true 若直接锁存 ack,会把 B 的横幅永久抑制(P1)。查询 effect 切会话先置
   // null,但锁存 effect 同批次仍能读到旧快照 —— 因此锁存与判定都只认同会话的真值。
+  // device-link 远程会话的真值问被控端(时间戳也来自被控端):控制端本机 main 没有这个
+  // turn,永远答 false,控制端重启后活动镜像回放前会把被控端在跑的任务误判成中断。
   const [mainTurnActive, setMainTurnActive] = useState<{
     sessionId: string;
     inTurn: boolean;
   } | null>(null);
   const activeTurnStartedAt = session?.activeTurnStartedAt ?? null;
+  const turnActiveDeviceId = remoteDeviceId ?? session?.deviceLinkDeviceId ?? null;
   useEffect(() => {
     if (!sessionId || activeTurnStartedAt == null) {
       setMainTurnActive(null);
@@ -2385,19 +2389,19 @@ export function CCAgentSessionView({
     }
     let cancelled = false;
     setMainTurnActive(null);
-    window.electronAPI.maker
-      .getSessionTurnActive(sessionId)
-      .then((result) => {
-        if (!cancelled) setMainTurnActive({ sessionId, inTurn: result?.inTurn === true });
+    getSessionTurnActiveOn(sessionId, turnActiveDeviceId)
+      .then((inTurn) => {
+        if (!cancelled) setMainTurnActive({ sessionId, inTurn });
       })
       .catch(() => {
         // 查询失败按未确认处理:宁可漏显横幅,不把在飞 turn 误判成中断。
+        // 远程会话被控端离线 / 隧道不通时同样落在这里。
         if (!cancelled) setMainTurnActive(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionId, activeTurnStartedAt]);
+  }, [sessionId, activeTurnStartedAt, turnActiveDeviceId]);
   // 同会话真值:只认归属当前 sessionId 的查询结果,旧会话残留的 true 不得锁存
   // 新会话的 ack(路由复用切会话 P1)。sessionId 变化时查询 effect 先置 null,
   // 但同批次的锁存 effect 仍能读到旧快照 —— 这里按 sessionId 过滤兜底。
