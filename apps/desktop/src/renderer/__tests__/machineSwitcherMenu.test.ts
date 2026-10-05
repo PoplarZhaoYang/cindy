@@ -451,6 +451,8 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     expect(sidebarUpperSource).toContain(
       'const deviceGroupingAvailable = (remoteDeviceIndex?.size ?? 0) > 0;',
     );
+    // 读取中 / 失败的远程设备空段头不算已有内容,不能遮掉整屏加载与失败提示。
+    expect(sidebarUpperSource).toContain('hasSettledOnlineDeviceSection(');
     expect(projectsSectionSource).toContain('hasRemoteDevices={deviceGroupingAvailable}');
     expect(projectsSectionSource).not.toContain('hasRemoteMachines');
     expect(sidebarUpperSource).toContain("if (device.status === 'rejected') continue;");
