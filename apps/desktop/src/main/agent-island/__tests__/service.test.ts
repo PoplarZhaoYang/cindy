@@ -6113,3 +6113,74 @@ describe('会话关闭原因决定条目去留', () => {
     }
   });
 });
+
+describe('Agent Island device sessions', () => {
+  function deviceSession(
+    phase: 'running' | 'needs-interaction' | 'completed' | 'error',
+    sessionId = 'remote-1',
+  ) {
+    return {
+      sessionId,
+      deviceId: 'device-a',
+      deviceName: 'Studio Mac',
+      title: 'Fix login',
+      workingDir: '/Users/me/code/cindy',
+      workspaceKind: 'project',
+      agentKind: 'codex',
+      phase,
+      detail: '',
+    };
+  }
+
+  it('stays silent for first-seen remote tasks and sounds on observed completion', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+      onDeviceSessionEvent,
+    });
+    syncEnabledForTest(service, publish);
+
+    service.setDeviceSessions([deviceSession('running'), deviceSession('completed', 'remote-2')]);
+    expect(publish).toHaveBeenCalled();
+    expect(playSound).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed'), deviceSession('completed', 'remote-2')]);
+    expect(playSound).toHaveBeenCalledWith(DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds.complete);
+    // 岛面开启时由岛展示,不再另发桌面通知。
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
+    // 不进入本机活动快照,也就不会被 relay 回推给控制端。
+    expect(service.getSessionActivitySnapshots()).toEqual([]);
+    expect(mocks.tapWindowBroadcast).not.toHaveBeenCalledWith(
+      SESSION_ACTIVITY_CHANNEL,
+      expect.objectContaining({ sessionId: 'remote-1' }),
+    );
+  });
+
+  it('hands observed transitions to desktop notifications when the island is off', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const onDeviceSessionEvent = vi.fn();
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+      onDeviceSessionEvent,
+    });
+    service.setEnabled(false);
+
+    service.setDeviceSessions([deviceSession('running')]);
+    expect(onDeviceSessionEvent).not.toHaveBeenCalled();
+
+    service.setDeviceSessions([deviceSession('completed')]);
+    expect(onDeviceSessionEvent).toHaveBeenCalledTimes(1);
+    expect(onDeviceSessionEvent).toHaveBeenCalledWith({
+      sessionId: 'remote-1',
+      title: 'Fix login',
+      deviceName: 'Studio Mac',
+      kind: 'done',
+    });
+  });
+});

@@ -1125,6 +1125,7 @@ type AgentIslandMascotSkin = import('../shared/agentIsland').AgentIslandMascotSk
 type AgentIslandSoundChoice = import('../shared/agentIsland').AgentIslandSoundChoice;
 type AgentIslandSoundSettings = import('../shared/agentIsland').AgentIslandSoundSettings;
 type AgentIslandSessionActivity = import('../shared/agentIsland').AgentIslandSessionActivity;
+type AgentIslandRemoteSessionInput = import('../shared/agentIsland').AgentIslandRemoteSessionInput;
 
 /** 会话内 /goal 状态扁平 payload(main goal-host → renderer)。 */
 interface GoalStatusPayload {
@@ -2109,6 +2110,7 @@ interface ElectronAPI {
   agentIsland: {
     setVisibleSession: (sessionId: string | string[] | null) => Promise<{ ok: true }>;
     setEnabled: (enabled: boolean) => Promise<{ ok: true }>;
+    setRemoteSessions: (sessions: AgentIslandRemoteSessionInput[]) => Promise<{ ok: true }>;
     setSoundSettings: (settings: AgentIslandSoundSettings) => Promise<{ ok: true }>;
     setMascotSkin: (skin: AgentIslandMascotSkin) => Promise<{ ok: true }>;
     setDisplayTarget: (target: AgentIslandDisplayTarget) => Promise<{ ok: true }>;

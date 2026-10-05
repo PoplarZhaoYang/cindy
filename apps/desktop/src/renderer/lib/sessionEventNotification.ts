@@ -71,6 +71,13 @@ export function sendSessionEventNotification(
   sessionId: string,
   title: string,
   kind: SessionEventNotificationKind,
+  options: {
+    /**
+     * 其它设备的任务传 false:它的桌面通知 / 灵动岛由 main 按「任务范围」统一发
+     * (agentIslandRemoteSessions),这里再弹会重复。
+     */
+    desktop?: boolean;
+  } = {},
 ): void {
   // The user is already looking at Cindy. In-app attention remains available,
   // but an OS/external notification would be duplicate noise.
@@ -83,7 +90,7 @@ export function sendSessionEventNotification(
     title,
     kind,
     channels: {
-      desktop: getNotificationsEnabled() && !islandActive,
+      desktop: options.desktop !== false && getNotificationsEnabled() && !islandActive,
       feishu: getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.

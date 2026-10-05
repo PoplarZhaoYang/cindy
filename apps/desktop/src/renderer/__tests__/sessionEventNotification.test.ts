@@ -75,6 +75,18 @@ describe('shared session event notifications', () => {
     );
   });
 
+  it('leaves the desktop toast of a remote device task to the main-process scope filter', () => {
+    gates.feishu = true;
+
+    sendSessionEventNotification('remote-1', 'Fix login', 'done', { desktop: false });
+
+    expect(showSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: { desktop: false, feishu: true, mobile: true },
+      }),
+    );
+  });
+
   it('does not send external notifications while the user is already looking at Cindy', () => {
     vi.mocked(document.hasFocus).mockReturnValue(true);
 

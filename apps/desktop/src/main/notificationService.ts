@@ -163,12 +163,34 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
  */
 export function showDesktopSessionEvent(
   getWindow: () => BrowserWindow | null,
-  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & { body?: string; teammate?: boolean },
+  payload: Pick<ShowSessionEventPayload, 'sessionId' | 'title' | 'kind'> & {
+    body?: string;
+    teammate?: boolean;
+    /** 其它设备的任务传 false:未读归属那台设备,本机 Dock 角标不跟着记。 */
+    markAttention?: boolean;
+  },
 ): boolean {
   const { sessionId, title, kind } = payload;
-  if (sessionId) markSessionNeedsAttention(sessionId);
+  if (sessionId && payload.markAttention !== false) markSessionNeedsAttention(sessionId);
   const safeTitle = title?.trim() || sessionId.slice(0, 8) || getSessionNotificationUntitled();
   return showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId), payload.body, payload.teammate);
+}
+
+/**
+ * 其它设备(device-link)任务的桌面通知,只在本机灵动岛关闭时由岛服务转交过来。
+ * 正文没有本机记录可读,沿用各 kind 的通用文案;未读归属那台设备,不记本机角标。
+ */
+export function showDeviceSessionDesktopEvent(
+  getWindow: () => BrowserWindow | null,
+  event: { sessionId: string; title: string | null; deviceName: string | null; kind: SessionEventKind },
+): void {
+  if (!desktopNotificationsEnabled) return;
+  showDesktopSessionEvent(getWindow, {
+    sessionId: event.sessionId,
+    title: [event.title ?? getSessionNotificationUntitled(), event.deviceName].filter(Boolean).join(' · '),
+    kind: event.kind,
+    markAttention: false,
+  });
 }
 
 export interface NotificationServiceDeps {
