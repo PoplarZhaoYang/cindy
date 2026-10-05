@@ -569,6 +569,43 @@ export function listSessionBackgroundTasksFor(
 }
 
 /**
+ * 会话后台活动快照(只读,best-effort):「turn 已结束但子进程仍在调模型」的信号
+ * 由被控端 loopback proxy 观察,远程会话必须隧道读(控制端本机查恒为 false)。
+ * 隧道失败一律按无活动降级,与 listSessionBackgroundTasksFor 同口径。
+ */
+export async function sessionBackgroundActivityFor(sessionId: string): Promise<{ active: boolean }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return window.electronAPI.maker.getSessionBackgroundActivity(sessionId);
+  return (
+    invokeRemote(deviceId, 'maker:session-background-activity', [sessionId]) as Promise<{
+      active: boolean;
+    }>
+  ).catch(() => ({ active: false }));
+}
+
+/**
+ * 精确停止单个后台任务。远程会话的任务真身在被控端,本机调用只会假成功;归属用
+ * 粘滞解析(与 Stop gating 同口径),relay 瞬断窗口内不退回本机。错误原样透传:
+ * 老被控端回 DEVICE_LINK_CHANNEL_NOT_ALLOWED,调用方据此提示升级。
+ */
+export async function stopAgentTaskFor(sessionId: string, taskId: string): Promise<{ ok: true }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return window.electronAPI.maker.stopAgentTask(sessionId, taskId);
+  return invokeRemote(deviceId, 'maker:agent-task:stop', [sessionId, taskId]) as Promise<{
+    ok: true;
+  }>;
+}
+
+/** 会话级「全部停止」(关闭被控端常驻 agent 进程);路由与错误语义同 stopAgentTaskFor。 */
+export async function stopSessionBackgroundTasksFor(sessionId: string): Promise<{ ok: true }> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) return window.electronAPI.maker.stopSessionBackgroundTasks(sessionId);
+  return invokeRemote(deviceId, 'maker:session-background-tasks:stop', [sessionId]) as Promise<{
+    ok: true;
+  }>;
+}
+
+/**
  * 订阅形态会话「本会话价值」历史汇总:远程走隧道(否则查控制端空库恒为 0,底部 $ chip
  * 的历史初值永远缺失)。归属用粘滞解析(relay 瞬时重连清空注册表的窗口内不误判为本机,
  * 与 goal/learn 链路同款);老被控端无此 channel → CHANNEL_NOT_ALLOWED,调用方 catch

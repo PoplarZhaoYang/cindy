@@ -48,10 +48,25 @@ vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
   getWorkflowProgressForMock: vi.fn().mockResolvedValue(null),
 }));
+const { stopAgentTaskForMock, reportStopFailureMock } = vi.hoisted(() => ({
+  // 默认按本机路由:落到 window.electronAPI.maker.stopAgentTask(与真实实现的本机分支一致)。
+  stopAgentTaskForMock: vi.fn((sessionId: string, taskId: string) =>
+    (
+      window as unknown as {
+        electronAPI: { maker: { stopAgentTask: (s: string, t: string) => Promise<unknown> } };
+      }
+    ).electronAPI.maker.stopAgentTask(sessionId, taskId),
+  ),
+  reportStopFailureMock: vi.fn(),
+}));
 vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
   getWorkflowProgressFor: getWorkflowProgressForMock,
   readBackgroundTaskOutputTailFor: vi.fn().mockResolvedValue({ ok: false, reason: 'unavailable' }),
+  stopAgentTaskFor: stopAgentTaskForMock,
+}));
+vi.mock('@/lib/backgroundTaskStopFailure', () => ({
+  reportBackgroundTaskStopFailure: reportStopFailureMock,
 }));
 
 import { AgentTaskCard } from '@/components/chat/AgentTaskCard';
@@ -374,6 +389,32 @@ describe('AgentTaskCard', () => {
     } finally {
       delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     }
+  });
+
+  it('routes stop through the session-owner transport and reports failures (remote tasks included)', async () => {
+    const failure = new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] maker:agent-task:stop');
+    stopAgentTaskForMock.mockRejectedValueOnce(failure);
+    reportStopFailureMock.mockClear();
+    const { container } = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'remote-session',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-remote',
+          status: 'running',
+          taskType: 'local_bash',
+        },
+      }),
+    );
+    const btn = stopButton(container);
+    expect(btn).not.toBeNull();
+    await act(async () => {
+      btn!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(stopAgentTaskForMock).toHaveBeenCalledWith('remote-session', 'bash-remote');
+    expect(reportStopFailureMock).toHaveBeenCalledWith(failure, expect.any(Function));
   });
 
   it.each(['cc', 'codex'] as const)(
