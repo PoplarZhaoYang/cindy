@@ -163,14 +163,12 @@ describe('downloadChatEntry', () => {
 
   it('文件:复制进下载文件夹失败时不留半截文件', async () => {
     const deps = makeDeps({
-      fetchFile: vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          cachePath: path.join(tmp, 'gone.bin'),
-          stale: false,
-          size: 4,
-        }),
+      fetchFile: vi.fn().mockResolvedValue({
+        ok: true,
+        cachePath: path.join(tmp, 'gone.bin'),
+        stale: false,
+        size: 4,
+      }),
     });
     const res = await downloadChatEntry(
       { origin: device, workdir: '/w', absPath: '/w/report.txt' },
@@ -286,6 +284,48 @@ describe('downloadChatEntry', () => {
     expect(await fsp.readFile(path.join(downloads, 'dist', 'Contents', 'a.txt'), 'utf8')).toBe(
       'hello',
     );
+  });
+
+  it('文件夹(ssh):通道异常关闭(无退出码)即使收到过内容也判失败', async () => {
+    const archive = await buildTar();
+    const deps = makeDeps({
+      sshStat: vi.fn().mockResolvedValue({ type: 'directory', size: 0, mtimeMs: 1 }),
+      sshTar: vi.fn(async () => {
+        const stream = new PassThrough();
+        stream.end(archive);
+        return { stream, done: Promise.resolve(null), stderr: () => '', kill: vi.fn() };
+      }),
+    });
+    const res = await downloadChatEntry(
+      { origin: ssh, workdir: '/home/u/proj', absPath: '/home/u/proj/dist' },
+      () => undefined,
+      deps,
+    );
+    expect(res).toMatchObject({ ok: false, code: 'FETCH_FAILED' });
+    expect(await fsp.readdir(downloads)).toEqual([]);
+  });
+
+  it('发起方消失(abort)后停止轮询,不落盘', async () => {
+    const abort = new AbortController();
+    let polls = 0;
+    const deps = makeDeps({
+      deviceStat: vi.fn().mockResolvedValue({ type: 'directory', size: 0, mtimeMs: 1 }),
+      deviceOp: vi.fn(async (_id: string, args: Record<string, unknown>) => {
+        if (args.op === 'caps') return { ok: true, dirExport: true };
+        if (args.op === 'exportDirStart') return { ok: true, transferId: 't1' };
+        if (++polls === 2) abort.abort();
+        return { ok: true, state: 'packing', packed: 1, sent: 0, total: 0, skipped: 0, parts: [] };
+      }) as ChatDownloadDeps['deviceOp'],
+    });
+    const res = await downloadChatEntry(
+      { origin: device, workdir: '/w', absPath: '/w/Game.app' },
+      () => undefined,
+      deps,
+      abort.signal,
+    );
+    expect(res).toMatchObject({ ok: false });
+    expect(polls).toBe(2);
+    expect(await fsp.readdir(downloads)).toEqual([]);
   });
 
   it('文件夹(ssh):tar 失败且没有任何输出 → FETCH_FAILED', async () => {

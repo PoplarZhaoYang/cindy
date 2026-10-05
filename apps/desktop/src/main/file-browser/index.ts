@@ -47,6 +47,7 @@ import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { discardPeerAttachment, takePeerAttachment } from '../device-link/peerAttachmentStore.js';
 import { parseRemoteAttachmentRef } from '../device-link/remoteAttachment.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import {
   fetchRemoteFileToCache,
   findStaleCached,
@@ -581,7 +582,14 @@ export function registerFileBrowserIpc(): void {
   ipcMain.handle(
     FILE_BROWSER_INVOKE.CHAT_FILE_DOWNLOAD,
     async (event, args: ChatFileFetchArgs & { requestId?: unknown }) => {
+      // 会把远端内容写进用户的下载文件夹:只接受 Cindy 自有页面发起(与 HTML 预览同一判据)。
+      assertTrustedAppRendererEvent(event);
       const wc = event.sender;
+      // 发起窗口关闭或渲染进程崩溃时中止:停止轮询 / 关闭 SSH 流,不再落盘。
+      const abort = new AbortController();
+      const onGone = () => abort.abort();
+      wc.once('destroyed', onGone);
+      wc.once('render-process-gone', onGone);
       let lastPush = 0;
       // 进度带上发起方的请求 id:同一路径同时有取回 / 下载时 renderer 不串线。
       const requestId =
@@ -606,7 +614,11 @@ export function registerFileBrowserIpc(): void {
           }
         },
         chatDownloadDeps,
-      );
+        abort.signal,
+      ).finally(() => {
+        wc.removeListener('destroyed', onGone);
+        wc.removeListener('render-process-gone', onGone);
+      });
       if (!result.ok) {
         log.warn('chat-file download failed', {
           code: result.code,

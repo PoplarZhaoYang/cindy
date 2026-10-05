@@ -49,6 +49,11 @@ export interface SshTarStream {
   kill(): void;
 }
 
+/** 发起方已消失(窗口关闭 / 渲染进程崩溃):停止轮询与传输,不再落盘。 */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+}
+
 export interface ChatDownloadDeps extends Pick<ChatFileDeps, 'sshStat' | 'deviceStat'> {
   downloadsDir(): string;
   fetchFile(args: ChatFileFetchArgs, onProgress: FetchProgressFn): Promise<ChatFileFetchResult>;
@@ -150,6 +155,7 @@ async function downloadDeviceDirectory(
   root: string,
   onProgress: ChatDownloadProgress,
   deps: ChatDownloadDeps,
+  signal?: AbortSignal,
 ): Promise<number> {
   const caps = await deps
     .deviceOp<{ dirExport?: boolean }>(deviceId, { op: 'caps', workdir })
@@ -174,6 +180,7 @@ async function downloadDeviceDirectory(
       remember,
       onProgress,
       deps,
+      signal,
     );
     const file = parseExportedFile(status.file);
     if (!file) throw new Error('invalid exported file');
@@ -181,12 +188,14 @@ async function downloadDeviceDirectory(
     const archive = path.join(staging, 'archive.tar');
     let received = 0;
     await receiveParts(file, archive, async (part, destination) => {
+      throwIfAborted(signal);
       await deps.receivePart(deviceId, part, destination, (bytes) =>
         onProgress(received + bytes, file.size, 'download'),
       );
       taken.add(part.ref);
       received += part.size;
     });
+    throwIfAborted(signal);
     onProgress(0, file.size, 'extract');
     await assertDiskCapacity([{ path: staging, bytes: file.size }]);
     return (await extractDirectoryArchive(createReadStream(archive), root)) + status.skipped;
@@ -205,9 +214,12 @@ async function waitDirExport(
   remember: (parts: unknown) => void,
   onProgress: ChatDownloadProgress,
   deps: ChatDownloadDeps,
+  signal?: AbortSignal,
 ): Promise<DirExportStatus> {
   for (let transient = 0; ;) {
     await new Promise((r) => setTimeout(r, deps.pollMs ?? POLL_MS));
+    // 停止轮询后,被控端 2 分钟内自行中止打包 / 推送。
+    throwIfAborted(signal);
     let status: (DirExportStatus & { ok: boolean }) | undefined;
     try {
       status = await deps.deviceOp(deviceId, { op: 'exportDirStatus', workdir, transferId });
@@ -233,8 +245,12 @@ async function downloadSshDirectory(
   root: string,
   onProgress: ChatDownloadProgress,
   deps: ChatDownloadDeps,
+  signal?: AbortSignal,
 ): Promise<number> {
+  throwIfAborted(signal);
   const tar = await deps.sshTar(hostId, absDir);
+  const onAbort = () => tar.stream.destroy(new Error('DOWNLOAD_CANCELLED'));
+  signal?.addEventListener('abort', onAbort, { once: true });
   let received = 0;
   const count = new Transform({
     transform(chunk: Buffer, _enc, done) {
@@ -249,12 +265,17 @@ async function downloadSshDirectory(
   } catch (err) {
     tar.kill();
     throw err;
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
   }
   const code = await tar.done;
   if (code === 0) return skipped;
-  // tar 读不了个别文件时仍会写出其余内容并以非零退出;一个字节都没有才算失败
-  // (目录不存在、没装 tar、通道断开)。
-  if (received === 0) throw new Error(`remote tar failed (${code}): ${tar.stderr()}`);
+  // 没有退出码 = 通道异常关闭(断线等):流可能恰好停在条目边界、解包不报错,但内容
+  // 缺了未知部分,一律失败。tar 读不了个别文件时仍写出其余内容并以非零退出码结束,
+  // 只要收到过内容就按「部分跳过」处理;一个字节都没有(目录不存在、没装 tar)才算失败。
+  if (code === null || received === 0) {
+    throw new Error(`remote tar failed (${code}): ${tar.stderr()}`);
+  }
   return skipped + 1;
 }
 
@@ -263,6 +284,7 @@ export async function downloadChatEntry(
   args: ChatFileFetchArgs,
   onProgress: ChatDownloadProgress,
   deps: ChatDownloadDeps,
+  signal?: AbortSignal,
 ): Promise<ChatDownloadResult> {
   const { origin, workdir, absPath } = args ?? ({} as ChatFileFetchArgs);
   if (
@@ -301,6 +323,7 @@ export async function downloadChatEntry(
         onProgress(received, total, phase ?? 'download'),
       );
       if (!fetched.ok) return fetched;
+      throwIfAborted(signal);
       await fsp.mkdir(downloads, { recursive: true });
       staging = await fsp.mkdtemp(path.join(downloads, '.cindy-download-'));
       const copy = path.join(staging, 'file');
@@ -320,6 +343,7 @@ export async function downloadChatEntry(
             root,
             onProgress,
             deps,
+            signal,
           )
         : await downloadDeviceDirectory(
             origin.deviceId,
@@ -329,7 +353,9 @@ export async function downloadChatEntry(
             root,
             onProgress,
             deps,
+            signal,
           );
+    throwIfAborted(signal);
     const target = await placeEntry(root, downloads, name, true);
     return { ok: true, path: target, stale: false, skipped };
   } catch (err) {
