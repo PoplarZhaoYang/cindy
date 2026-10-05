@@ -111,7 +111,7 @@ describe('applyListBackspace on a real editor', () => {
     expect(docText(ed)).toBe('1. test\n');
     // 光标在空行行首(pos 1 + "1. test"(7) + br(1))
     expect(ed.state.selection.from).toBe(9);
-    // 空行上再按一次不再拦截,交给默认退格回到上一行。
+    // 空行上再按一次不再拦截,交给浏览器原生退格删掉 hardBreak 回到上一行。
     expect(applyListBackspace(ed.view)).toBe(false);
   });
 
