@@ -280,6 +280,7 @@ import {
   consumePending,
   consumePendingGoal,
   deliverRecoverableHandoff,
+  hasPending,
   takeRecoverableHandoff,
   type RecoverableHandoffKind,
 } from '@/state/pendingFirstMessage';
@@ -4355,9 +4356,13 @@ export function CCAgentSessionView({
   // pending 里,等 session 完全 hydrate 后再由 maybeDispatchDesktopSlashCommand /
   // sendMessage 消费。本机普通文本已在草稿路由发出。一次性消费 + ref guard,防
   // StrictMode 双 mount / 重渲染时重复发送。
+  // 远程交接不等历史首拉:对端任务刚建好、历史必然为空,首拉却要再经隧道往返一次,
+  // 期间视图一直空白。远程发送走乐观发件箱,首拉晚到时按 clientId 与乐观消息合并,
+  // 与已有远程任务在历史加载中发送是同一条路径。
   const pendingConsumedRef = useRef(false);
   useEffect(() => {
-    if (!sessionId || !historyLoaded || !session) return;
+    if (!sessionId || !session) return;
+    if (!historyLoaded && !(remoteDeviceId && hasPending(sessionId))) return;
     const workingDir = session.workingDir;
     if (!workingDir) return;
     if (pendingConsumedRef.current) return;
@@ -4375,7 +4380,7 @@ export function CCAgentSessionView({
       // 建好、用户输入还只在内存里」的窗口跟着一次可能 30s 的隧道往返一起变长(见
       // remoteCollabHandoff 文件头)。开不起来时如实提示并照单会话继续。
       // 副本已在草稿路由登记 pending 的同一刻落下(见那里的注释),这里不再重复落 ——
-      // 落在这里等于要求 effect 先跑起来,而这条 effect 要等 historyLoaded。
+      // 落在这里等于要求 effect 先跑起来,而这条 effect 要等 session 行与 workDir 就绪。
       //
       // 锁要覆盖**整条交接**(消费 pending → 首轮发出),不能只包住开协同那段 await:
       // 解锁后到 sendMessage 之间还有一次 await(命令派发),那个窗口里用户补发的消息
@@ -4511,6 +4516,7 @@ export function CCAgentSessionView({
   }, [
     historyLoaded,
     maybeDispatchDesktopSlashCommand,
+    remoteDeviceId,
     restoreRecoverableHandoff,
     requestFollowLatest,
     sendMessage,
