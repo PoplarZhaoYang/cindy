@@ -58,6 +58,20 @@ describe('NewMakerDraftRoute remote first-message send', () => {
     expect(seedBlock).toContain('sessionProviderId: createArgs.providerId ?? null');
   });
 
+  it('registers the session topic subscription in the outbox preflight, not before navigate', () => {
+    const preflight = source.indexOf('beforeEnqueue: async () => {', remoteSend);
+    const subscribe = source.indexOf(
+      'await window.electronAPI.deviceLink.subscribe(deviceId, [',
+      preflight,
+    );
+    expect(preflight).toBeGreaterThan(remoteSend);
+    expect(preflight).toBeLessThan(remoteNavigate);
+    expect(subscribe).toBeGreaterThan(preflight);
+    expect(source.slice(subscribe, subscribe + 160)).toContain('`session:${remoteSessionId}`');
+    // 订阅不得挡在 navigate 前面以 await 的形式出现在发送调用之外。
+    expect(source.slice(remoteFence, remoteSend)).not.toContain('deviceLink.subscribe(');
+  });
+
   it('restores an undelivered first message and withdraws both sidebar overlays', () => {
     const failure = source.indexOf('onRemoteOptimisticFailure: (clientId) => {', remoteSend);
     const block = source.slice(failure, remotePending);

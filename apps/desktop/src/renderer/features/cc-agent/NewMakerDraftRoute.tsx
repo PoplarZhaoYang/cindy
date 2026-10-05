@@ -3793,6 +3793,22 @@ export function NewMakerDraftRoute() {
                     ...(opts?.slashCommandRanges !== undefined
                       ? { slashCommandRanges: opts.slashCommandRanges }
                       : {}),
+                    // 订阅屏障:首轮的 maker:event / status / input push 必须有订阅者。视图引擎
+                    // 的订阅随 SessionView mount 才建立,首条又不再等视图,所以在发件队列的
+                    // preflight 里先显式 await 一次 session:<id> 订阅的注册 ack(新建目标交接
+                    // 同款;同窗口重复 subscribe 幂等,生命周期仍归视图引擎)。放在 preflight
+                    // 而非 navigate 之前:隧道往返不挡新建页,首条也已在队列里,切走不丢。
+                    // 订阅失败不拦首条:最坏退回到视图挂载后按历史补齐。
+                    beforeEnqueue: async () => {
+                      try {
+                        await window.electronAPI.deviceLink.subscribe(deviceId, [
+                          `session:${remoteSessionId}`,
+                        ]);
+                      } catch (err) {
+                        log.warn('[draft send] subscribe before remote first send failed', err);
+                      }
+                      return true;
+                    },
                     onRemoteOptimisticFailure: (clientId) => {
                       // FIFO 插回没送达的首条,不覆盖用户之后在该任务输入框里写的内容;
                       // 撤回两层叠加层,空会话照实回到草稿区、标题回落到权威值。
