@@ -73,10 +73,10 @@ export function sendSessionEventNotification(
   kind: SessionEventNotificationKind,
   options: {
     /**
-     * 其它设备的任务传 false:它的桌面通知 / 灵动岛由 main 按「任务范围」统一发
-     * (agentIslandRemoteSessions),这里再弹会重复。
+     * 其它设备的任务:桌面通知 / 灵动岛由 main 按「任务范围」统一发
+     * (agentIslandRemoteSessions),这里不再弹;未读归属那台设备,不记本机 Dock 角标。
      */
-    desktop?: boolean;
+    remoteDevice?: boolean;
   } = {},
 ): void {
   // The user is already looking at Cindy. In-app attention remains available,
@@ -84,13 +84,15 @@ export function sendSessionEventNotification(
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
   const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
-  void window.electronAPI.notificationMarkSessionAttention(sessionId);
+  const remoteDevice = options.remoteDevice === true;
+  if (!remoteDevice) void window.electronAPI.notificationMarkSessionAttention(sessionId);
   void window.electronAPI.notificationShowSessionEvent({
     sessionId,
     title,
     kind,
+    ...(remoteDevice ? { markAttention: false } : {}),
     channels: {
-      desktop: options.desktop !== false && getNotificationsEnabled() && !islandActive,
+      desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
       feishu: getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.

@@ -1191,6 +1191,9 @@ function applyDeviceSessionPhase(
         if (previous !== null) {
           deferActiveTransientReveal(state, 'queued');
           requestAttentionReveal(state, session, now, AGENT_ISLAND_REVEAL_DWELL_MS);
+        } else {
+          // 首次出现时已在等待:按「已收起」挂进列表,不自动展开交互卡。
+          session.interactionRevealDismissed = true;
         }
       }
       const changed = entering

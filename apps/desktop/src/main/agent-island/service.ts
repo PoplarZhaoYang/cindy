@@ -1635,7 +1635,7 @@ export class AgentIslandService {
     const now = Date.now();
     if (!this.enabledSynced) {
       this.mutedCompletionSoundSessionIds.clear();
-      this.baselineSoundSessionIds.clear();
+      // 开关尚未同步时没有上一帧可比:首次出现的设备任务保留静音,等第一次真正 publish。
       this.clearStreamingPreviewPublishTimer();
       this.clearPublishTimer();
       return;

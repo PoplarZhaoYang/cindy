@@ -86,6 +86,8 @@ interface ShowSessionEventPayload {
    * 发送侧的防打扰(远程正在看该会话 / 短窗去重)在 device-link 模块内收口。
    */
   channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+  /** 其它设备的任务传 false:未读归属那台设备,不记本机 Dock 角标。 */
+  markAttention?: boolean;
 }
 
 /**
@@ -222,6 +224,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       // 去重与「被远程观看则不推」收口。
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels } = payload;
+      const markAttention = payload.markAttention !== false;
       const generation = getMobileNotifyGeneration();
       // Capture at IPC arrival, not after the asynchronous preview: a newer
       // turn can begin while the current completion waits on persistence.
@@ -233,11 +236,11 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const safeTitle = title.trim() || sessionId.slice(0, 8);
       const wantDesktop = channels?.desktop ?? true;
       const wantFeishu = channels?.feishu === true;
-      markSessionNeedsAttention(sessionId);
+      if (markAttention) markSessionNeedsAttention(sessionId);
 
       // Action/error desktop notices have no transcript preview and must be immediate.
       if (wantDesktop && kind !== 'done') {
-        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind });
+        showDesktopSessionEvent(getWindow, { sessionId, title: safeTitle, kind, markAttention });
       }
       // Content is read from main's transcript. Bound only enrichment, not delivery;
       // a timeout is not a dedupe window and never causes a second late toast.
@@ -320,7 +323,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
         if (wantDesktop && kind === 'done' && !wasReplyNotified(desktopKey, eventId)) {
           try {
             const accepted = showDesktopSessionEvent(getWindow, {
-              sessionId, title: notificationTitle, kind, teammate,
+              sessionId, title: notificationTitle, kind, teammate, markAttention,
               body: teammate ? notificationPreview(detail ?? '') || fallbackBody : undefined,
             });
             if (accepted) {
@@ -390,7 +393,8 @@ function assertValidSessionEventPayload(
     p.title.length > SESSION_TITLE_MAX_LENGTH ||
     typeof p.kind !== 'string' ||
     !SESSION_EVENT_KINDS.has(p.kind) ||
-    (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null))
+    (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
+    (p.markAttention !== undefined && typeof p.markAttention !== 'boolean')
   ) {
     throw new TypeError('invalid session event payload');
   }

@@ -57,6 +57,21 @@ describe('Agent Island device sessions', () => {
     ]);
   });
 
+  it('lists a first-seen waiting remote task without expanding its card', () => {
+    const state = createAgentIslandState();
+    syncAgentIslandDeviceSessions(
+      state,
+      [remote('needs-interaction', { interactionKind: 'ask_user_question' })],
+      1_000,
+    );
+
+    const display = buildAgentIslandDisplayState(state, 1_000);
+    expect(display.mode).toBe('compact');
+    expect(display.sessions).toEqual([
+      expect.objectContaining({ sessionId: 'remote-1', phase: 'needs-interaction', attention: true }),
+    ]);
+  });
+
   it('reveals and reports observed transitions', () => {
     const state = createAgentIslandState();
     syncAgentIslandDeviceSessions(state, [remote('running', { detail: 'Reading files' })], 1_000);
