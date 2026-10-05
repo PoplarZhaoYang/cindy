@@ -53,6 +53,27 @@ export function isBuiltInEntry(id: SidebarNavigationEntryId): id is SidebarNavig
   return SIDEBAR_NAVIGATION_ITEMS.includes(id as SidebarNavigationItemId);
 }
 
+/**
+ * Keep entries missing from an edited order (plugins whose own sidebar switch is
+ * off right now) at their previous place: each one goes back right after the entry
+ * that preceded it before, or first when nothing did.
+ */
+export function mergeAbsentOrderEntries(
+  edited: readonly SidebarNavigationEntryId[],
+  previous: readonly SidebarNavigationEntryId[],
+): SidebarNavigationEntryId[] {
+  const merged = [...edited];
+  previous.forEach((id, index) => {
+    if (merged.includes(id)) return;
+    const anchor = previous
+      .slice(0, index)
+      .reverse()
+      .find((before) => merged.includes(before));
+    merged.splice(anchor === undefined ? 0 : merged.indexOf(anchor) + 1, 0, id);
+  });
+  return merged;
+}
+
 /** Saved order restricted to entries that exist now; unplaced plugins follow in their given order. */
 export function resolveSidebarNavigationOrder(
   order: readonly SidebarNavigationEntryId[],
@@ -302,6 +323,10 @@ if (typeof window !== 'undefined') {
  * existing entries keep their place after an upgrade. Idempotent.
  */
 export function reconcileSidebarAppArrivals(owner: string, ghostIds: readonly string[]): void {
+  // Main reports an empty roster while an account switch settles or before plugins
+  // load, so an empty list is never evidence: neither record a baseline from it nor
+  // treat the plugins that appear afterwards as new arrivals.
+  if (ghostIds.length === 0) return;
   const record = arrivals[owner];
   if (!record) {
     writeArrivals({ ...arrivals, [owner]: { known: [...ghostIds], unseen: [] } });

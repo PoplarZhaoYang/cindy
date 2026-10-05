@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SidebarNavigationCustomize } from '../SidebarNavigationCustomize';
 import {
   __testing as navigationTesting,
+  getSidebarKnownApps,
+  mergeAbsentOrderEntries,
+  reconcileSidebarAppArrivals,
   getSidebarNavigationPrefs,
   setSidebarNavigationPrefs,
 } from '../sidebarNavigationPrefs';
@@ -335,5 +338,80 @@ describe('sidebar navigation customization', () => {
     // Without an account the defaults apply and nothing is written.
     setSidebarNavigationPrefs(null, { order: [...defaults().order], visible: [] });
     expect(getSidebarNavigationPrefs(null).visible).toEqual([...defaults().visible]);
+  });
+  it('keeps a switched-off plugin at its place when other entries are reordered', () => {
+    mainViewsMock.routeCapable = [SITES];
+    setSidebarNavigationPrefs(OWNER, {
+      order: ['automations', 'app:xd-sites', 'plugins', 'bots', 'search'],
+      visible: ['automations', 'plugins', 'bots', 'search'],
+    });
+    render(<SidebarNavigationCustomize onDone={() => {}} />);
+    expect(order()).not.toContain('站点');
+    act(() => sortableMock.props!.onReorder(['plugins', 'automations', 'bots', 'search']));
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
+    expect(getSidebarNavigationPrefs(OWNER).order).toEqual([
+      'plugins',
+      'automations',
+      'app:xd-sites',
+      'bots',
+      'search',
+    ]);
+  });
+
+  it('keeps a plugin switched off in another window at its place on save', () => {
+    mainViewsMock.routeCapable = [SITES];
+    mainViewsMock.sidebarVisible = [SITES];
+    setSidebarNavigationPrefs(OWNER, {
+      order: ['app:xd-sites', 'automations', 'plugins', 'bots', 'search'],
+      visible: ['automations', 'plugins', 'bots', 'search'],
+    });
+    const view = render(<SidebarNavigationCustomize onDone={() => {}} />);
+    mainViewsMock.sidebarVisible = [];
+    view.rerender(<SidebarNavigationCustomize onDone={() => {}} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'sidebar.navigation.items.bots' }));
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
+    expect(getSidebarNavigationPrefs(OWNER).order).toEqual([
+      'app:xd-sites',
+      'automations',
+      'plugins',
+      'bots',
+      'search',
+    ]);
+  });
+
+  it('keeps a reorder made after choosing reset', () => {
+    setSidebarNavigationPrefs(OWNER, {
+      order: ['search', 'bots', 'plugins', 'automations'],
+      visible: ['search'],
+    });
+    render(<SidebarNavigationCustomize onDone={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.reset' }));
+    act(() => sortableMock.props!.onReorder(['bots', 'automations', 'plugins', 'search']));
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.navigation.customize.done' }));
+    expect(getSidebarNavigationPrefs(OWNER).order).toEqual([
+      'bots',
+      'automations',
+      'plugins',
+      'search',
+    ]);
+  });
+
+  it('places entries missing from an edited order after their previous neighbour', () => {
+    expect(
+      mergeAbsentOrderEntries(
+        ['plugins', 'automations', 'search'],
+        ['app:first', 'automations', 'app:mid', 'plugins', 'search', 'app:last'],
+      ),
+    ).toEqual(['app:first', 'plugins', 'automations', 'app:mid', 'search', 'app:last']);
+  });
+
+  it('never records a plugin baseline from an empty roster', () => {
+    reconcileSidebarAppArrivals(OWNER, []);
+    expect(getSidebarKnownApps(OWNER)).toEqual([]);
+    expect(localStorage.getItem('sidebar-navigation:apps:v1')).toBeNull();
+    // The real roster arriving afterwards is the first run: nothing moves into More.
+    reconcileSidebarAppArrivals(OWNER, ['xd-sites']);
+    expect(getSidebarKnownApps(OWNER)).toEqual(['xd-sites']);
+    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
   });
 });

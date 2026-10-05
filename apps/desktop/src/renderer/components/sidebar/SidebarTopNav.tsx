@@ -601,13 +601,13 @@ export function SidebarTopNav({
             >
               {searchRow}
             </div>
-            {!pinSearch && (
-              <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
-                {rowsAfterSearch}
-                {restoreRow}
-                {customizeRow}
-              </div>
-            )}
+            {/* Entries after Search stay reachable while a query is pinned; the
+                results follow them instead of replacing them. */}
+            <div className="-mt-1.5 flex flex-col gap-0.5 pr-3 pl-3">
+              {rowsAfterSearch}
+              {restoreRow}
+              {customizeRow}
+            </div>
           </>
         )}
       </>

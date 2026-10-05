@@ -19,6 +19,7 @@ import {
   getSidebarNavigationPrefs,
   ghostIdOfEntry,
   isBuiltInEntry,
+  mergeAbsentOrderEntries,
   resolveSidebarNavigationOrder,
   setSidebarNavigationPrefs,
   type SidebarNavigationAppEntryId,
@@ -125,8 +126,11 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
         ...getSidebarKnownApps(dataOwnerId).map(appEntryId),
         ...getSidebarNavigationPrefs(dataOwnerId).appsInMore,
       ].filter((id) => !listed.has(id));
+      // A reorder made after resetting is kept; an untouched reset stores the bare default.
+      const resetOrder = resolveSidebarNavigationOrder(SIDEBAR_NAVIGATION_ITEMS, appIds);
+      const reordered = orderedItems.some((id, index) => id !== resetOrder[index]);
       setSidebarNavigationPrefs(dataOwnerId, {
-        order: [...SIDEBAR_NAVIGATION_ITEMS],
+        order: reordered ? orderedItems : [...SIDEBAR_NAVIGATION_ITEMS],
         visible: SIDEBAR_NAVIGATION_ITEMS.filter((id) => draft.visible.has(id)),
         appsInMore: [...new Set([...draft.appsInMore, ...offPanel])],
       });
@@ -145,16 +149,17 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
       checkedIn(draft, id) !== checkedIn(initial, id)
         ? checkedIn(draft, id)
         : checkedIn(latestState, id);
-    const orderChanged =
-      orderedItems.length !== initial.order.length ||
-      orderedItems.some((id, index) => id !== initial.order[index]);
+    // Only a drag or arrow move replaces the order; plugins switching on or off in the
+    // meantime merely change which entries are listed.
+    const orderChanged = draft.order !== initial.order;
     // Plugins absent from the panel (sidebar switch off) keep whatever was saved for them.
     const appEntries = new Set<SidebarNavigationAppEntryId>([
       ...latest.appsInMore,
       ...appIds.map(appEntryId),
     ]);
     setSidebarNavigationPrefs(dataOwnerId, {
-      order: orderChanged ? orderedItems : latest.order,
+      // Plugins missing from the panel keep their saved place inside the new order.
+      order: orderChanged ? mergeAbsentOrderEntries(orderedItems, latest.order) : latest.order,
       visible: SIDEBAR_NAVIGATION_ITEMS.filter(resolve),
       appsInMore: [...appEntries].filter((id) => !resolve(id)),
     });

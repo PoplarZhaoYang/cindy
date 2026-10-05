@@ -220,10 +220,25 @@ describe('Sidebar teammate return action', () => {
     searchMock.query = 'needle';
     view.rerender(<Harness initialPath="/cc-agent" />);
     expect(screen.getByRole('button', { name: 'Search row' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'sidebar.navigation.more' })).toBeNull();
+    // More stays reachable while the query is pinned.
+    expect(screen.getByRole('button', { name: 'sidebar.navigation.more' })).toBeTruthy();
     searchMock.query = '';
     view.rerender(<Harness initialPath="/cc-agent" />);
     expect(screen.queryByRole('button', { name: 'Search row' })).toBeNull();
+  });
+
+  it('keeps entries after a mid-list Search reachable while a query is pinned', () => {
+    setSidebarNavigationPrefs(OWNER, {
+      order: ['automations', 'search', 'plugins', 'bots'],
+      visible: ['automations', 'search', 'plugins', 'bots'],
+    });
+    searchMock.query = 'needle';
+    render(<Harness initialPath="/cc-agent" />);
+    const search = screen.getByRole('button', { name: 'Search row' });
+    const plugins = screen.getByRole('button', { name: 'sidebar.tabs.plugins' });
+    expect(search.compareDocumentPosition(plugins) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('button', { name: '伙伴' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'sidebar.navigation.more' })).toBeTruthy();
   });
 
   it('keeps a hidden Search accessible for a project-scoped search', () => {
