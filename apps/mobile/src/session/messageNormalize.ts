@@ -1075,6 +1075,9 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
   const origin = readRecord(message.agentMeta?.origin);
   if (!origin || origin.kind !== 'scheduler') return {};
   const scheduleId = readString(origin.scheduleId);
+  // Hook 渠道消息复用 scheduler 形态(scheduleId 为 `hook:<连接>`),不是自动化:不出自动化标签
+  // (有 hookSource 时由渠道卡片表明来源)。
+  if (scheduleId?.startsWith('hook:')) return {};
   if (!scheduleId) return { automationOrigin: {} };
   const scheduleName = readString(origin.scheduleName);
   return {

@@ -210,7 +210,15 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
   if (!meta) return null;
   const parts: string[] = [];
   const origin = asRecord(meta.origin);
-  if (origin?.kind === 'scheduler') {
+  const im = asRecord(meta.imSource)?.im ?? asRecord(meta.hookSource)?.im;
+  // Hook 渠道消息复用 scheduler 形态（scheduleId 为 `hook:<连接>`），是真人从渠道发来的，
+  // 不是定时触发：只写渠道（下方 im）；缺渠道信息的旧行写成外部渠道。
+  const isHookOrigin = origin?.kind === 'scheduler'
+    && typeof origin.scheduleId === 'string'
+    && origin.scheduleId.startsWith('hook:');
+  if (isHookOrigin) {
+    if (im === undefined) parts.push('来自外部渠道');
+  } else if (origin?.kind === 'scheduler') {
     parts.push(`由定时任务${formatSourceRef(origin.scheduleName, 'schedule_id', origin.scheduleId)} 触发`);
   } else if (origin?.kind === 'orca') {
     const from = orcaSourceOf(message.content) === 'lead' ? 'Lead' : 'Worker';
@@ -233,7 +241,6 @@ export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'c
       parts.push(`由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送`);
     }
   }
-  const im = asRecord(meta.imSource)?.im ?? asRecord(meta.hookSource)?.im;
   if (im !== undefined) {
     const channel = imChannelDisplayName(im) ?? sanitizeSourceName(im);
     if (channel) parts.push(`来自${/^[A-Za-z]/.test(channel) ? ` ${channel}` : channel}`);

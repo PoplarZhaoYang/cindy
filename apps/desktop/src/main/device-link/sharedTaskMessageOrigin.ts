@@ -1,10 +1,19 @@
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 
+const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
+
 const GUEST_HIDDEN_META_KEYS = ['agentFacingWireContent', 'sourceDevice', 'sourcePlugin'] as const;
 
 function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<string, unknown> | null {
   if (origin.kind === 'session') return { kind: 'session' };
   if (origin.kind === 'scheduler') {
+    // Hook 渠道消息复用 scheduler 形态（scheduleId 为 `hook:<连接>`）：只保留 `hook:` 前缀，
+    // 访客端据此仍显示渠道而不是「由自动化发送」，连接 id 与名字不下发。
+    if (typeof origin.scheduleId === 'string' && origin.scheduleId.startsWith(HOOK_SCHEDULE_ID_PREFIX)) {
+      return origin.scheduleId === HOOK_SCHEDULE_ID_PREFIX && Object.keys(origin).length === 2
+        ? null
+        : { kind: 'scheduler', scheduleId: HOOK_SCHEDULE_ID_PREFIX };
+    }
     return Object.keys(origin).some((key) => key !== 'kind') ? { kind: 'scheduler' } : null;
   }
   if (origin.kind === 'orca' && 'senderSessionId' in origin) {
@@ -21,7 +30,8 @@ function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<str
  * 伙伴 id / 名字、Orca 发送方任务——都不属于访客可见范围，投递给访客前一律剥掉。
  * 任务来源降级为不带身份的 `{ kind: 'session' }`，访客端显示不可点击的「由其他任务发送」；
  * 自动化来源只保留 `{ kind: 'scheduler' }`（去掉 scheduleId / scheduleName / runId），
- * 访客端显示不可点击的「由自动化发送」。
+ * 访客端显示不可点击的「由自动化发送」；Hook 渠道消息只保留 `scheduleId: 'hook:'`，
+ * 访客端仍显示渠道。
  *
  * 房主的设备（sourceDevice）与插件（sourcePlugin）同样不属于访客可见范围，一律不下发。
  * `agentFacingWireContent` 是主机内部的 Agent 原文副本（只用于上下文溢出后重放），
@@ -53,7 +63,8 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
  * 排队条目的访客视图。任务来源条目里，发给 Agent 的 `text` 与 `origin.displayText`
  * 可能带来源身份，访客只能拿到落库可见正文（`persistedContent`，带附件时是
  * `{text, images, files}` 信封里的 text）；来源降级为不带 id / 标题 / 伙伴的任务来源。
- * 自动化来源只保留 kind；Orca 来源去掉发送方任务 id；房主的设备 / 插件来源不下发。
+ * 自动化来源只保留 kind（Hook 渠道只保留 `hook:` 前缀），`text` 换成可见正文；Orca 来源
+ * 去掉发送方任务 id；房主的设备 / 插件来源不下发。
  * 无需改动时返回原引用。
  */
 export function redactQueueItemForSharedGuest<T>(item: T): T {
@@ -79,6 +90,14 @@ export function redactQueueItemForSharedGuest<T>(item: T): T {
     } as T;
   }
   const redactedOrigin = redactOriginForSharedGuest(typed);
+  if (typed.kind === 'scheduler') {
+    // 自动化条目的 `text` 是发给 Agent 的原文，带 `[Scheduled run context]`（含自动化名字与
+    // schedule_id）等只给 Agent 的内容；访客只拿落库可见正文。
+    const visible = queueItemVisibleText(entry);
+    if (visible !== entry.text || redactedOrigin) {
+      return { ...entry, text: visible, ...(redactedOrigin ? { origin: redactedOrigin } : {}) } as T;
+    }
+  }
   if (redactedOrigin) return { ...entry, origin: redactedOrigin } as T;
   return (entry === original ? item : entry) as T;
 }

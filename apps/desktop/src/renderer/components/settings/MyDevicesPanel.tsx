@@ -127,7 +127,6 @@ function useFocusDeviceRow(
   useEffect(() => {
     if (!focusDeviceId || !focusRequestKey || !rowRendered) return;
     if (handledKeyRef.current === focusRequestKey) return;
-    handledKeyRef.current = focusRequestKey;
     let row: HTMLLIElement | undefined;
     let timer: number | undefined;
     let second = 0;
@@ -135,6 +134,9 @@ function useFocusDeviceRow(
       second = window.requestAnimationFrame(() => {
         row = rowRefs.current.get(focusDeviceId);
         if (!row) return;
+        // 真正滚到并高亮后才记为已处理:列表刷新等让 effect 在两帧之间被清理时,
+        // 重新运行仍会再定位一次,不会因提前记账而永远跳过。
+        handledKeyRef.current = focusRequestKey;
         const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
         row.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
         row.classList.add(FOCUS_HIGHLIGHT_CLASS);

@@ -235,11 +235,21 @@ describe('shared task guests never see the owner private message sources', () =>
     };
     __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message: deviceRow });
     __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message: scheduledRow });
+    const hookRow = {
+      clientId: 'm4', sessionId: 'task-a', role: 'user', content: 'from slack',
+      agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:owner-conn', scheduleName: 'Hook · Owner Slack' } },
+    };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message: hookRow });
     const projection = {
       sessionId: 'task-a',
       pendingQueue: [
         { clientId: 'q3', text: 'hi', persistedContent: 'hi', sourceDevice, sourcePlugin },
-        { clientId: 'q4', text: 'nightly', persistedContent: 'nightly', origin: schedulerOrigin },
+        {
+          clientId: 'q4',
+          text: 'nightly\n\n---\n[Scheduled run context]\nschedule: 「Owner nightly」(schedule_id: owner-schedule)',
+          persistedContent: 'nightly',
+          origin: schedulerOrigin,
+        },
       ],
     };
     __testing.forwardPush('maker:input:projection', projection);
@@ -247,14 +257,22 @@ describe('shared task guests never see the owner private message sources', () =>
     const guestPushes = transport.sendPush.mock.calls.filter((call) => call[0] === guestA).map((call) => call[2]);
     const ownPushes = transport.sendPush.mock.calls.filter((call) => call[0] === 'own-task').map((call) => call[2]);
     const guestRows = guestPushes.filter((payload) => payload.message).map((payload) => payload.message.agentMeta);
-    expect(guestRows).toEqual([{ uuid: 'u2' }, { origin: { kind: 'scheduler' } }]);
+    expect(guestRows).toEqual([
+      { uuid: 'u2' },
+      { origin: { kind: 'scheduler' } },
+      // Hook 渠道消息只保留 `hook:` 前缀：访客端仍显示渠道，而不是「由自动化发送」。
+      { origin: { kind: 'scheduler', scheduleId: 'hook:' } },
+    ]);
     const guestQueue = guestPushes.find((payload) => payload.pendingQueue).pendingQueue;
     expect(guestQueue[0]).toEqual({ clientId: 'q3', text: 'hi', persistedContent: 'hi' });
     expect(guestQueue[1].origin).toEqual({ kind: 'scheduler' });
-    expect(JSON.stringify(guestPushes)).not.toMatch(/owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-schedule|Owner nightly|run-1/);
+    expect(guestQueue[1].text).toBe('nightly');
+    expect(JSON.stringify(guestPushes)).not.toMatch(
+      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack/,
+    );
     // Same-account controllers keep the full attribution.
     expect(ownPushes.filter((payload) => payload.message).map((payload) => payload.message.agentMeta))
-      .toEqual([deviceRow.agentMeta, scheduledRow.agentMeta]);
+      .toEqual([deviceRow.agentMeta, scheduledRow.agentMeta, hookRow.agentMeta]);
     expect(ownPushes.find((payload) => payload.pendingQueue)).toEqual(projection);
   });
 

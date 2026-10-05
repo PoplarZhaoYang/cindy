@@ -331,6 +331,19 @@ export function createMessageHandler(
     }
 
     // ── invoke agent ────────────────────────────────────────────────────────
+    // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。与下面的
+    // 群上下文拼装互不依赖, 先发起、派发前再取, 群名查询不额外拖慢首条消息。
+    const channelNoteSourcePromise: Promise<ImChannelNoteSource | null> = (async () => {
+      try {
+        return adapter.channelNoteSourceFor
+          ? await adapter.channelNoteSourceFor(event)
+          : imChannelNoteSourceFromEvent(event);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`channelNoteSourceFor failed (note omitted): ${msg}`);
+        return null;
+      }
+    })();
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
     let prepared: Awaited<ReturnType<NonNullable<ImChannelAdapter['prepareAgentTurnText']>>> = null;
     // 「已收到」表情先落, 再拼上下文 —— 群上下文拼装要回翻群历史(可能翻页 + 调
@@ -369,16 +382,7 @@ export function createMessageHandler(
         log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
       }
     }
-    // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。
-    let channelNoteSource: ImChannelNoteSource | null = null;
-    try {
-      channelNoteSource = adapter.channelNoteSourceFor
-        ? await adapter.channelNoteSourceFor(event)
-        : imChannelNoteSourceFromEvent(event);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warn(`channelNoteSourceFor failed (note omitted): ${msg}`);
-    }
+    const channelNoteSource = await channelNoteSourcePromise;
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
     const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);

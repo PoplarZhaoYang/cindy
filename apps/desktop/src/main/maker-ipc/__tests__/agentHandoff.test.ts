@@ -202,7 +202,16 @@ describe('buildHandoffText', () => {
         agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead', senderSessionId: 'ls-1' } },
       },
       { role: 'user', content: '飞书来的', createdAt: 7, agentMeta: { imSource: { im: 'feishu', userText: '飞书来的' } } },
-      { role: 'user', content: 'Slack 来的', createdAt: 8, agentMeta: { hookSource: { im: 'slack' } } },
+      {
+        role: 'user',
+        content: 'Slack 来的',
+        createdAt: 8,
+        // Hook 渠道消息复用 scheduler 形态：是真人从渠道发来的，不能写成定时触发。
+        agentMeta: {
+          hookSource: { im: 'slack' },
+          origin: { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' },
+        },
+      },
       {
         role: 'user',
         content: '手机上发的',
@@ -225,6 +234,7 @@ describe('buildHandoffText', () => {
     }
     expect(text).toContain('[User · 来自飞书]\n飞书来的');
     expect(text).toContain('[User · 来自 Slack]\nSlack 来的');
+    expect(text).not.toContain('hook:conn-1');
     expect(text).toContain('[User · 在手机「iPhone」(device_id: d-1) 上发送]\n手机上发的');
     expect(text).toContain('[User · 由插件「日历」(plugin_id: p-1) 发送]\n插件派的');
     expect(text).not.toContain('orcaSource');

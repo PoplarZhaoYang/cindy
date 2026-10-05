@@ -114,7 +114,7 @@ export function buildQueuePanelSummary(
 
 export function buildQueueRowPresentation(input: {
   busy?: boolean;
-  item: Pick<{ clientId: string; origin?: unknown; text?: string }, 'clientId' | 'origin' | 'text'>;
+  item: { clientId: string; origin?: unknown; text?: string; sourcePlugin?: unknown };
   originalIndex: number;
   projection: QueueRowProjectionLike;
   queueLength: number;
@@ -142,7 +142,7 @@ export function buildQueueRowPresentation(input: {
       // 协同成员发来的消息(对齐桌面 canEdit / canSteer=false):删除与排序照常。
       ? presentationText(localizer, 'message.queuePresentation.row.orcaEditDisabled', '协同消息不支持编辑或插话发送。')
       : isAutoSentQueueItem(input.item)
-        // 自动化 / 其他任务经工具排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
+        // 自动化 / 其他任务经工具 / 插件排进来的消息(对齐桌面 canEdit / canSteer=false):改写后
         // 落库气泡的来源标签就不再属实;删除与排序照常。
         ? presentationText(localizer, 'message.queuePresentation.row.autoSentEditDisabled', '自动发送的消息不支持编辑或插话发送。')
         : null;
@@ -193,12 +193,17 @@ export function isOrcaQueueItem(
   return origin?.kind === 'orca';
 }
 
-/** 自动化(scheduler)或其他任务经工具(session)排进来的消息。Orca 消息另有来源标题与文案。 */
+/**
+ * 自动化(scheduler)、其他任务经工具(session)或插件任务(主机盖章的 sourcePlugin)
+ * 排进来的消息。Orca 消息另有来源标题与文案。
+ */
 export function isAutoSentQueueItem(
-  item: Pick<{ origin?: unknown }, 'origin'>,
+  item: { origin?: unknown; sourcePlugin?: unknown },
 ): boolean {
   const kind = readRecord(item.origin)?.kind;
-  return kind === 'scheduler' || kind === 'session';
+  if (kind === 'scheduler' || kind === 'session') return true;
+  const plugin = readRecord(item.sourcePlugin);
+  return typeof plugin?.pluginId === 'string' && plugin.pluginId.trim().length > 0;
 }
 
 /**
@@ -214,6 +219,7 @@ export function queueItemVisibleText(item: {
   persistedContent?: string;
   files?: readonly unknown[];
   origin?: unknown;
+  sourcePlugin?: unknown;
 }): string {
   const text = item.text ?? '';
   if (!isAutoSentQueueItem(item)) return text;

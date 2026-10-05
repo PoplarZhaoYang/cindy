@@ -1752,9 +1752,23 @@ export function getSelfDeviceId(): string | null {
  */
 export function getHostSourceDevice(): MessageSourceHostDevice {
   const deviceId = getSelfDeviceId() ?? undefined;
+  const now = Date.now();
+  // 每条远程消息都要用到;名字来自设置文件,短时缓存避免逐条读盘。改名后最多晚一分钟生效。
+  if (
+    hostSourceDeviceCache &&
+    hostSourceDeviceCache.deviceId === deviceId &&
+    now - hostSourceDeviceCache.at < HOST_SOURCE_DEVICE_CACHE_MS
+  ) {
+    return hostSourceDeviceCache.value;
+  }
   const name = sanitizeSourceName((deviceId ? readLastKnownDeviceNames()[deviceId] : undefined) ?? deviceName());
-  return { ...(deviceId ? { deviceId } : {}), ...(name ? { name } : {}) };
+  const value = { ...(deviceId ? { deviceId } : {}), ...(name ? { name } : {}) };
+  hostSourceDeviceCache = { deviceId, at: now, value };
+  return value;
 }
+
+const HOST_SOURCE_DEVICE_CACHE_MS = 60_000;
+let hostSourceDeviceCache: { deviceId: string | undefined; at: number; value: MessageSourceHostDevice } | null = null;
 
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。
  *  被控端自身持有执行预算的 channel(desktop-cmd:run)按协议契约放宽隧道超时,

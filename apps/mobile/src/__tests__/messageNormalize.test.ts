@@ -1171,6 +1171,24 @@ describe('normalizeRemoteMessages', () => {
     expect(isShareableMessage(item)).toBe(true);
   });
 
+  it('never labels hook channel messages (hook:<conn> scheduler origins) as automation', () => {
+    const items = normalizeRemoteMessages([
+      message({
+        id: 'hook-legacy',
+        role: 'user',
+        content: 'from slack',
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' } },
+      }),
+      message({
+        id: 'hook-redacted-for-guest',
+        role: 'user',
+        content: 'from slack',
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'hook:' } },
+      }),
+    ]);
+    expect(items.map((item) => item.automationOrigin)).toEqual([undefined, undefined]);
+  });
+
   it('reads host-stamped device, plugin and shared-task author sources', () => {
     const items = normalizeRemoteMessages([
       message({
