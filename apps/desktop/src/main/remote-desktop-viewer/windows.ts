@@ -64,6 +64,8 @@ type Entry = {
   window: BrowserWindow | null;
   controller: ResourceUsageWindowController;
   connection: RemoteViewerConnection;
+  /** The remote keyboard surface owns shortcuts, including Cmd/Ctrl+W. */
+  inputCaptured: boolean;
 };
 
 /** Reuses the existing auxiliary-window lifecycle. One window per target plus
@@ -113,6 +115,11 @@ export class RemoteDesktopViewerWindows {
     }
     this.entries.clear();
   }
+  private setInputCaptured(entry: Entry, captured: boolean): void {
+    entry.inputCaptured = captured;
+    const win = entry.window;
+    if (win && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(captured);
+  }
   private requestClose(entry: Entry): void {
     const win = entry.window;
     if (!win || win.isDestroyed()) return;
@@ -161,7 +168,7 @@ export class RemoteDesktopViewerWindows {
       request: requestRemote,
       credentials,
     });
-    const entry: Entry = { window: null, connection, controller: null! };
+    const entry: Entry = { window: null, connection, controller: null!, inputCaptured: false };
     entry.controller = new ResourceUsageWindowController({
       isOpenSender: this.isOpenSender,
       // Independent top-level windows do not follow main-window minimize/hide.
@@ -174,7 +181,7 @@ export class RemoteDesktopViewerWindows {
         [connection.target?.name, t('remoteDesktop.title')].filter(Boolean).join(' · '),
       onActivityChanged: (win, active) => {
         connection.setActive(active);
-        if (!active && !win.isDestroyed()) win.webContents.setIgnoreMenuShortcuts(false);
+        if (!active) this.setInputCaptured(entry, false);
       },
       createWindow: () => {
         const win = createResourceUsageWindow(undefined, {
@@ -190,6 +197,7 @@ export class RemoteDesktopViewerWindows {
         });
         entry.window = win;
         win.on('blur', () => {
+          this.setInputCaptured(entry, false);
           void connection.focusChanged();
         });
         // Local navigation/reloads/crashes immediately retire authority, including in-flight starts.
@@ -199,7 +207,12 @@ export class RemoteDesktopViewerWindows {
         win.webContents.on('render-process-gone', () => connection.deactivate());
         win.on('closed', () => connection.deactivate());
         win.webContents.on('before-input-event', (event, input) => {
-          if (input.type === 'keyDown' && input.code === 'KeyW' && (input.meta || input.control)) {
+          if (
+            !entry.inputCaptured &&
+            input.type === 'keyDown' &&
+            input.code === 'KeyW' &&
+            (input.meta || input.control)
+          ) {
             event.preventDefault();
             this.requestClose(entry);
           }
@@ -364,7 +377,7 @@ export class RemoteDesktopViewerWindows {
           throwIpcError('PRECONDITION_FAILED', 'DESKTOP_STOPPED');
         }
       } else if (generation !== entry.connection.generation) return;
-      event.sender.setIgnoreMenuShortcuts(focused && entry.window!.isFocused());
+      this.setInputCaptured(entry, focused && entry.window!.isFocused());
     });
   }
 }
