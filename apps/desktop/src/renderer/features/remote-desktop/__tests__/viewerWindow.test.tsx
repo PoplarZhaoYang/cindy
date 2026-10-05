@@ -334,7 +334,7 @@ it.each([
   expect(toolbar.getByText(label)).toBeDefined();
 });
 
-it('marks an active privacy screen in the toolbar without a persistent banner', async () => {
+it('marks an active privacy screen in the toolbar and for screen readers without a persistent banner', async () => {
   await i18n.changeLanguage('zh-CN');
   Object.assign(window, {
     electronAPI: {
@@ -377,7 +377,10 @@ it('marks an active privacy screen in the toolbar without a persistent banner', 
       settings: { fps: 30, quality: 'auto', audio: false },
     }),
   );
-  expect(screen.queryByText(i18n.t('remoteDesktop.privacyActive'))).toBeNull();
+  expect(document.querySelector('.remote-viewer-feedback')).toBeNull();
+  const announcement = screen.getByText(i18n.t('remoteDesktop.privacyActive'));
+  expect(announcement.getAttribute('role')).toBe('status');
+  expect(announcement.classList.contains('sr-only')).toBe(true);
   expect(
     screen.getByRole('button', { name: '安全' }).querySelector('.remote-viewer-active-dot'),
   ).not.toBeNull();

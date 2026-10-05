@@ -680,6 +680,10 @@ export function RemoteDesktopViewerWindow() {
             </div>
           )}
         {isFullscreen && network && <div className="remote-viewer-network-overlay">{network}</div>}
+        {/* Announce the privacy screen to assistive tech without covering the remote picture. */}
+        <span className="sr-only" role="status">
+          {state?.safety.privacyActive ? t('remoteDesktop.privacyActive') : ''}
+        </span>
         {(notice || state?.safety.notice) && (
           <div className="remote-viewer-feedback" role="status">
             <span>{notice ?? t(`remoteDesktop.${state?.safety.notice}`)}</span>
