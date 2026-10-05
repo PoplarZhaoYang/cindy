@@ -146,8 +146,9 @@ describe('MessageSourceLabels plugin and row', () => {
         sourceDevice={phone}
       />,
     );
+    // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual([
-      'chat.userMessage.sessionSentNamed:Planner',
+      'chat.userMessage.pluginSentNamed:Notes',
       'chat.userMessage.deviceSentMobileNamed:Dash iPhone',
     ]);
     expect(container.firstElementChild?.hasAttribute(SHARE_SOURCE_ATTR)).toBe(true);

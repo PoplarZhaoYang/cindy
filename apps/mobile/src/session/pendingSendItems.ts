@@ -251,6 +251,15 @@ export function pendingSendSource(
       ...(scheduleId ? { idText: i18n.t('message.renderer.sourceAutomationId', { id: scheduleId }) } : {}),
     };
   }
+  // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
+  const plugin = origin?.kind === 'orca' ? undefined : readMessageSourcePlugin(item);
+  if (plugin) {
+    return {
+      kind: 'plugin',
+      label: sourcePluginLabel(plugin),
+      idText: i18n.t('message.renderer.sourcePluginId', { id: plugin.pluginId }),
+    };
+  }
   if (origin?.kind === 'session') {
     const senderBotName = readNonEmptyString(origin.senderBotId)
       ? sanitizeSourceName(origin.senderBotName) ?? sanitizeSourceName(origin.senderBotId)
@@ -270,14 +279,6 @@ export function pendingSendSource(
     const direction = readOrcaPersistedSource(item.persistedContent)
       ?? (senderLabel?.toLowerCase() === 'lead' ? 'lead' : 'worker');
     return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel) };
-  }
-  const plugin = readMessageSourcePlugin(item);
-  if (plugin) {
-    return {
-      kind: 'plugin',
-      label: sourcePluginLabel(plugin),
-      idText: i18n.t('message.renderer.sourcePluginId', { id: plugin.pluginId }),
-    };
   }
   return null;
 }

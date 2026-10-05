@@ -172,14 +172,15 @@ export function MessageSourceLabels({
         align === 'start' ? 'justify-start' : 'justify-end',
       )}
     >
-      {automationOrigin ? (
+      {/* 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。 */}
+      {sourcePlugin ? (
+        <MessageSourcePluginBadge plugin={sourcePlugin} hostSessionId={hostSessionId} />
+      ) : automationOrigin ? (
         <AutomationOriginBadge
           automationOrigin={automationOrigin}
           hostSessionId={hostSessionId}
           hookIm={hookIm}
         />
-      ) : sourcePlugin ? (
-        <MessageSourcePluginBadge plugin={sourcePlugin} hostSessionId={hostSessionId} />
       ) : null}
       {sourceDevice ? <MessageSourceDeviceBadge device={sourceDevice} /> : null}
     </div>

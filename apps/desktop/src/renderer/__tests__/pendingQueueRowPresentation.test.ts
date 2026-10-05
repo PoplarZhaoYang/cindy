@@ -192,6 +192,16 @@ describe('getPendingQueueRowPresentation', () => {
     });
   });
 
+  it('names the plugin, not the source task, when a plugin dispatches inside a task', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        sourcePlugin: { pluginId: 'ghost-github', name: 'GitHub' },
+        origin: { kind: 'session', senderSessionId: 'src', displayText: 'queued text', senderSessionTitle: 'Planner' },
+      }),
+    );
+    expect(presentation).toMatchObject({ isPlugin: true, isSession: false, senderLabel: 'GitHub', canEdit: false });
+  });
+
   it('leaves the plugin sender label empty when the plugin name is unknown', () => {
     expect(
       getPendingQueueRowPresentation(queuedMessage({ sourcePlugin: { pluginId: 'ghost-x' } })).senderLabel,

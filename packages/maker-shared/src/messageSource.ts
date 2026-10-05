@@ -164,6 +164,10 @@ export function shouldShowSourceDevice(
 export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender | undefined {
   const record = asRecord(meta);
   if (!record) return undefined;
+  // 插件优先：插件在某个任务里派发（agent.run 新建 / 继续 / 分叉）时同时带来源任务 origin，
+  // 真正的发送方是插件，任务只是它运行的地方。
+  const plugin = readMessageSourcePlugin(record);
+  if (plugin) return { kind: 'plugin', ...plugin };
   const origin = asRecord(record.origin);
   if (origin?.kind === 'session') {
     const sessionId = readString(origin, 'senderSessionId');
@@ -177,8 +181,6 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
       ...(botId ? { botId, ...(botName ? { botName } : {}) } : {}),
     };
   }
-  const plugin = readMessageSourcePlugin(record);
-  if (plugin) return { kind: 'plugin', ...plugin };
   const author = asRecord(record.sharedTaskAuthor);
   if (author) {
     const memberId = readString(author, 'memberId');

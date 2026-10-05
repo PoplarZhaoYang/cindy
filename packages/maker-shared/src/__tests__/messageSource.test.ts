@@ -114,6 +114,15 @@ describe('messageSourceSenderFromMeta', () => {
     ).toEqual({ kind: 'shared-member', memberId: 'm-1', name: '张三' });
   });
 
+  it('prefers the plugin when a plugin dispatches inside a task (agent.run carries both)', () => {
+    expect(
+      messageSourceSenderFromMeta({
+        origin: { kind: 'session', senderSessionId: 's-1', senderSessionTitle: '检查' },
+        sourcePlugin: { pluginId: 'p-1', name: 'GitHub' },
+      }),
+    ).toEqual({ kind: 'plugin', pluginId: 'p-1', name: 'GitHub' });
+  });
+
   it('returns nothing for scheduler, orca and plain user input', () => {
     expect(messageSourceSenderFromMeta({ origin: { kind: 'scheduler', scheduleId: 'x' } })).toBeUndefined();
     expect(messageSourceSenderFromMeta({ origin: { kind: 'orca' } })).toBeUndefined();

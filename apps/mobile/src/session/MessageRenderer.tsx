@@ -3902,7 +3902,8 @@ function MessageBubble({
         // 点击跳转自动化页)。共享任务访客的脱敏来源没有名字与 ID,显示通用文案。
         <AutomationOriginLabel align={isUser ? 'user' : 'agent'} origin={automationOrigin} />
       ) : null}
-      {item.message.kind === 'user' && item.message.sessionOrigin ? (
+      {/* 插件优先(与 messageSourceSenderFromMeta 同序):同时带来源任务 origin 时只显示插件。 */}
+      {item.message.kind === 'user' && item.message.sessionOrigin && !item.message.sourcePlugin ? (
         <SessionOriginLabel
           align={isUser ? 'user' : 'agent'}
           origin={item.message.sessionOrigin}

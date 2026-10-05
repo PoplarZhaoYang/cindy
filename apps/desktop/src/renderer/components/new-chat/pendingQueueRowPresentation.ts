@@ -63,8 +63,9 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   // Hook 渠道消息复用 scheduler 形态,不是自动化:不显示自动化来源行(与历史气泡一致)。
   const isHookOrigin = isHookSchedulerOrigin(origin);
   const isScheduler = origin?.kind === 'scheduler' && !isHookOrigin;
-  const isSession = origin?.kind === 'session';
-  const isPlugin = !isOrca && origin?.kind !== 'scheduler' && !isSession && Boolean(entry.sourcePlugin?.pluginId);
+  // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
+  const isPlugin = !isOrca && origin?.kind !== 'scheduler' && Boolean(entry.sourcePlugin?.pluginId);
+  const isSession = origin?.kind === 'session' && !isPlugin;
   // Hook 渠道条目同属机器投递(渠道原话),不显示来源行但同样不可编辑/插话。
   const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin || isHookOrigin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
@@ -88,10 +89,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
           : isPlugin
             ? entry.sourcePlugin?.name?.trim() || null
             : null,
-    senderBotId: isSession ? (origin.senderBotId ?? null) : null,
+    senderBotId: isSession && origin?.kind === 'session' ? (origin.senderBotId ?? null) : null,
     displayText: isOrca
       ? (origin.displayText ?? entry.text)
-      : isScheduler || isSession
+      : isScheduler || isSession || isPlugin
         ? queueItemVisibleText(entry)
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
