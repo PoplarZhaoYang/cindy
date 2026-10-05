@@ -86,6 +86,7 @@ export interface ChatFileDeps {
   deviceMediaFetch(
     deviceId: string,
     url: string,
+    signal?: AbortSignal,
   ): Promise<
     | { ossKey: string; size: number; inlineBase64?: string }
     | { ossKey: string; size: number; path: string; dispose(): Promise<void> }
@@ -96,6 +97,7 @@ export interface ChatFileDeps {
     destPath: string,
     expected?: undefined,
     onProgress?: (downloadedBytes: number) => void,
+    signal?: AbortSignal,
   ): Promise<void>;
   /** 用后删 OSS 对象(best-effort)。 */
   removeRemote(key: string): void;
@@ -311,7 +313,11 @@ export async function fetchChatFile(
   let uploadedKey: string | null = null;
   let consumed = false;
   try {
-    const fetched = await deps.deviceMediaFetch(origin.deviceId, buildDevicePathUrl(absPath));
+    const fetched = await deps.deviceMediaFetch(
+      origin.deviceId,
+      buildDevicePathUrl(absPath),
+      signal,
+    );
     if ('path' in fetched || fetched.inlineBase64 !== undefined) {
       try {
         const cachePath = await deps.fetchToCache(
@@ -332,13 +338,19 @@ export async function fetchChatFile(
     uploadedKey = fetched.ossKey;
     const cachePath = await deps.fetchToCache(
       { ...identity, size: fetched.size },
-      async (dest, progress) => {
+      async (dest, progress, transferSignal) => {
         consumed = true;
         progress(0, fetched.size);
         try {
-          await deps.downloadToFile(fetched.ossKey, dest, undefined, (downloaded) => {
-            progress(Math.min(downloaded, fetched.size), fetched.size);
-          });
+          await deps.downloadToFile(
+            fetched.ossKey,
+            dest,
+            undefined,
+            (downloaded) => {
+              progress(Math.min(downloaded, fetched.size), fetched.size);
+            },
+            transferSignal,
+          );
           progress(fetched.size, fetched.size);
         } finally {
           deps.removeRemote(fetched.ossKey);

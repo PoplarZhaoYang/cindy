@@ -478,8 +478,8 @@ export function registerFileBrowserIpc(): void {
         relPath,
       }),
     fetchBigFile: fetchRemoteBigFile,
-    deviceMediaFetch: async (deviceId, url) => {
-      return readRemoteDeviceFile(deviceId, url, remoteInvoke);
+    deviceMediaFetch: async (deviceId, url, signal) => {
+      return readRemoteDeviceFile(deviceId, url, remoteInvoke, signal ? { signal } : {});
     },
     downloadToFile,
     removeRemote: (key) => void removeRemote(key),
