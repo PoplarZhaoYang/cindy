@@ -25,12 +25,19 @@ const state = vi.hoisted(() => ({
   events: [] as string[],
   load: null as null | (() => Promise<void>),
   confirm: vi.fn(),
+  themeMode: 'system' as 'system' | 'light' | 'dark',
 }));
-vi.mock('../../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n', () => ({
+  t: (key: string) => (key.endsWith('ByDevice') ? `${key}:{{name}}` : key),
+}));
+vi.mock('../../window-theme-mode-store', () => ({
+  readWindowThemeSnapshot: () => ({ mode: state.themeMode }),
+}));
 vi.mock('../../logger', () => ({ createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) }));
 vi.mock('electron', () => ({
   app: { focus: vi.fn() },
   dialog: { showMessageBox: state.confirm },
+  nativeTheme: { shouldUseDarkColors: false },
   BrowserWindow: class extends EventEmitter {
     id = state.windows.length + 1;
     destroyed = false;
@@ -127,6 +134,7 @@ beforeEach(() => {
   state.displays = [primary, secondary];
   state.load = null;
   state.confirm.mockReset().mockResolvedValue({ response: 1 });
+  state.themeMode = 'system';
 });
 
 it('filters the overlay from capture before its first visible frame', async () => {
@@ -225,7 +233,7 @@ it('names the viewing device and ignores unchanged targets', async () => {
   await settle();
   const run = state.windows[0].webContents.executeJavaScript;
   expect(run).toHaveBeenLastCalledWith(
-    expect.stringContaining('"remoteDesktop.controlledByDevice"'),
+    expect.stringContaining('"remoteDesktop.controlledByDevice:Dash 的 iPhone"'),
   );
   expect(run).toHaveBeenLastCalledWith(expect.stringContaining('"remoteDevice.revokeAccess"'));
   expect(state.windows[0].getBounds()).toMatchObject({ x: 600, width: 240 });
@@ -267,4 +275,55 @@ it('cancels every other navigation without acting', async () => {
   await settle();
   expect(state.confirm).not.toHaveBeenCalled();
   expect(revoke).not.toHaveBeenCalled();
+});
+
+it('revokes the device the page shows while a newer label is still rendering', async () => {
+  const { overlay, revoke } = fixture();
+  overlay.update({ displayId: '1', controlling: true, peer: 'phone', name: 'iPhone' });
+  await settle();
+  const window = state.windows[0];
+  let finish!: (width: number) => void;
+  window.webContents.executeJavaScript.mockImplementationOnce(
+    () => new Promise<number>((resolve) => (finish = resolve)),
+  );
+  overlay.update({ displayId: '1', controlling: true, peer: 'laptop', name: 'MacBook' });
+  navigate(window, 'https://cindy-overlay.invalid/revoke');
+  await settle();
+  expect(revoke).toHaveBeenCalledExactlyOnceWith('phone');
+  finish(200);
+  await settle();
+  navigate(window, 'https://cindy-overlay.invalid/revoke');
+  await settle();
+  expect(revoke).toHaveBeenLastCalledWith('laptop');
+});
+
+it('stops recreating after repeated renderer crashes until the lease ends', async () => {
+  const { overlay } = fixture();
+  const target = { displayId: '1', controlling: true, peer: 'phone' };
+  for (let i = 0; i < 3; i++) {
+    overlay.update(target);
+    await settle();
+    state.windows.at(-1)!.webContents.emit('render-process-gone');
+  }
+  overlay.update(target);
+  await settle();
+  expect(state.windows).toHaveLength(3);
+  overlay.update(null);
+  overlay.update(target);
+  await settle();
+  expect(state.windows).toHaveLength(4);
+});
+
+it("follows Cindy's selected appearance rather than only the OS", async () => {
+  const { overlay } = fixture();
+  const target = { displayId: '1', controlling: true, peer: 'phone' };
+  state.themeMode = 'dark';
+  overlay.update(target);
+  await settle();
+  const run = state.windows[0].webContents.executeJavaScript;
+  expect(run).toHaveBeenLastCalledWith(expect.stringContaining("toggle('dark', true)"));
+  state.themeMode = 'light';
+  overlay.update(target);
+  await settle();
+  expect(run).toHaveBeenLastCalledWith(expect.stringContaining("toggle('dark', false)"));
 });

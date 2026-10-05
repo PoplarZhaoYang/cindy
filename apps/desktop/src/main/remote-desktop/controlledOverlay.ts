@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  nativeTheme,
   screen,
   session,
   type Display,
@@ -9,12 +10,16 @@ import {
 } from 'electron';
 import { createLogger } from '../logger';
 import { t } from '../i18n';
+import { resolveAppThemeIsDark } from '../resolved-app-theme';
+import { readWindowThemeSnapshot } from '../window-theme-mode-store';
 
 const log = createLogger('remote-desktop:overlay');
 
 const HEIGHT = 28;
 const FALLBACK_WIDTH = 220;
 const TOP_MARGIN = 12;
+// Renderer crashes / load failures tolerated per lease before giving up.
+const MAX_FAILURES = 3;
 // Never loaded: the page has no script, so its only way to talk to Main is
 // a link click, which will-navigate cancels and recognizes by this exact URL.
 const REVOKE_URL = 'https://cindy-overlay.invalid/revoke';
@@ -32,8 +37,8 @@ function overlayHtml(): string {
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <style>
-:root{color-scheme:light dark;--surface:#ffffff;--border:#d7d7d4;--text-primary:#262626;--accent:#ea6b17;--chip:#e5e5e5}
-@media(prefers-color-scheme:dark){:root{--surface:#2c2c2a;--border:#3c3c3a;--text-primary:#d4d4d4;--chip:#3c3c3a}}
+:root{color-scheme:light;--surface:#ffffff;--border:#d7d7d4;--text-primary:#262626;--accent:#ea6b17;--chip:#e5e5e5}
+:root.dark{color-scheme:dark;--surface:#2c2c2a;--border:#3c3c3a;--text-primary:#d4d4d4;--chip:#3c3c3a}
 html,body{margin:0;height:100%;overflow:hidden;background:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none;cursor:default;-webkit-app-region:drag}
 main{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:${HEIGHT}px;padding:0 4px 0 12px;border:1px solid var(--border);border-radius:${HEIGHT / 2}px;background:var(--surface);color:var(--text-primary);font-size:12px;white-space:nowrap}
@@ -44,6 +49,12 @@ a:hover{opacity:.8}
 @keyframes breathe{0%,100%{opacity:.3}50%{opacity:1}}
 @media(prefers-reduced-motion:reduce){i{animation:none}}
 </style></head><body><main><i></i><span id="text"></span><a id="revoke" href="${REVOKE_URL}" draggable="false"></a></main></body></html>`;
+}
+
+/** Cindy's selected Light / Dark mode, not just the OS appearance. */
+function overlayIsDark(): boolean {
+  const theme = readWindowThemeSnapshot();
+  return resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors, theme.mode, theme.resolvedIsDark);
 }
 
 function clamp(bounds: Rectangle, area: Rectangle): Rectangle {
@@ -62,6 +73,9 @@ function clamp(bounds: Rectangle, area: Rectangle): Rectangle {
 export class ControlledOverlay {
   private window: BrowserWindow | null = null;
   private target: ControlledOverlayTarget | null = null;
+  /** The target whose label the page currently shows; revoke acts on this one. */
+  private displayed: ControlledOverlayTarget | null = null;
+  private failures = 0;
   private rendered = '';
   private loaded = false;
   private placedDisplay: string | null = null;
@@ -79,23 +93,15 @@ export class ControlledOverlay {
   /** Idempotent; `null` removes the overlay. */
   update(target: ControlledOverlayTarget | null): void {
     if (!target) {
+      // A new lease gets a fresh recreation budget.
+      this.failures = 0;
       this.stop();
       return;
     }
-    const previous = this.target;
     this.target = target;
     const window = this.window;
-    if (
-      window &&
-      previous &&
-      previous.displayId === target.displayId &&
-      previous.controlling === target.controlling &&
-      previous.peer === target.peer &&
-      previous.name === target.name
-    )
-      return;
     if (!window) {
-      void this.create(this.generation + 1);
+      if (this.failures < MAX_FAILURES) void this.create(this.generation + 1);
       return;
     }
     // Until the page loads, create() renders the latest target itself.
@@ -108,6 +114,7 @@ export class ControlledOverlay {
     const window = this.window;
     if (!window) return;
     this.window = null;
+    this.displayed = null;
     this.rendered = '';
     this.loaded = false;
     this.placedDisplay = null;
@@ -154,28 +161,35 @@ export class ControlledOverlay {
   }
 
   private async render(window: BrowserWindow, generation: number): Promise<void> {
-    const controlling = this.target?.controlling === true;
-    const name = this.target?.name;
+    const target = this.target;
+    const controlling = target?.controlling === true;
+    const name = target?.name;
     const text = name
       ? t(
           controlling ? 'remoteDesktop.controlledByDevice' : 'remoteDesktop.viewedByDevice',
         ).replaceAll('{{name}}', name)
       : t(controlling ? 'remoteDesktop.beingControlled' : 'remoteDesktop.beingViewed');
     const label = t('remoteDevice.revokeAccess');
-    if (text + label === this.rendered) {
-      this.layout(window);
+    const dark = overlayIsDark();
+    const key = JSON.stringify([text, label, dark]);
+    if (key === this.rendered) {
+      // Same visible label: the shown device is indistinguishable from the target.
+      this.displayed = target;
+      if (this.placedDisplay !== String(this.display().id)) this.layout(window);
       return;
     }
-    this.rendered = text + label;
+    this.rendered = key;
     // executeJavaScript calls run in order, so the last size always matches the last text.
     const measured: unknown = await window.webContents
       .executeJavaScript(
-        `(() => { document.getElementById('text').textContent = ${JSON.stringify(text)};
+        `(() => { document.documentElement.classList.toggle('dark', ${dark});
+          document.getElementById('text').textContent = ${JSON.stringify(text)};
           document.getElementById('revoke').textContent = ${JSON.stringify(label)};
           return Math.ceil(document.querySelector('main').getBoundingClientRect().width); })()`,
       )
       .catch(() => null);
     if (generation !== this.generation || window.isDestroyed()) return;
+    this.displayed = target;
     const width =
       typeof measured === 'number' && Number.isFinite(measured) && measured > 0
         ? measured
@@ -185,7 +199,7 @@ export class ControlledOverlay {
 
   /** Revokes the device shown when the button was clicked, never a later one. */
   private async confirmRevoke(): Promise<void> {
-    const target = this.target;
+    const target = this.displayed;
     if (!target || this.confirming) return;
     this.confirming = true;
     try {
@@ -258,6 +272,7 @@ export class ControlledOverlay {
       });
     } catch (error) {
       log.warn('overlay unavailable', error);
+      this.failures++;
       return;
     }
     this.window = window;
@@ -275,6 +290,7 @@ export class ControlledOverlay {
       screen.removeListener('display-metrics-changed', relayout);
       if (this.window !== window) return;
       this.window = null;
+      this.displayed = null;
       this.rendered = '';
       this.loaded = false;
       this.placedDisplay = null;
@@ -290,6 +306,7 @@ export class ControlledOverlay {
         if (event.url === REVOKE_URL) void this.confirmRevoke();
       });
       window.webContents.on('render-process-gone', () => {
+        this.failures++;
         if (!window.isDestroyed()) window.destroy();
       });
       window.setContentProtection(true);
@@ -308,6 +325,7 @@ export class ControlledOverlay {
       window.showInactive();
     } catch (error) {
       log.warn('overlay unavailable', error);
+      this.failures++;
       if (this.window === window) this.stop();
       else if (!window.isDestroyed()) window.destroy();
     }
