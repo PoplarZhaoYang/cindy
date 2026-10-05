@@ -17515,42 +17515,6 @@ export const makerChatStore = {
     return out;
   },
   /**
-   * 停止回执收口:归属端已成功执行停止(任务被停或早已结束)时,把这些仍显示
-   * running 的条目标 stopped。供 device-link 远程会话使用 —— 镜像终态事件可能在
-   * 断连窗口丢失,且远程快照不能当对账权威,停止回执是唯一确定信号。
-   * 回执是针对具体任务的,按 taskId / parentToolUseId 精确匹配,不分 provider
-   * (PI durable 子任务同样经停止按钮收口);别名键共享同一新对象。后续真实事件
-   * 仍会覆盖,非终局。
-   */
-  settleStoppedAgentTasks: (sessionId: string, taskIds: ReadonlySet<string>): void => {
-    if (taskIds.size === 0 || !sessions.has(sessionId)) return;
-    setState(sessionId, (s) => {
-      const tasks = s.taskUpdates;
-      if (!tasks || tasks.size === 0) return s;
-      let changed = false;
-      const replaced = new Map<AgentTaskUpdate, AgentTaskUpdate>();
-      const next = new Map<string, AgentTaskUpdate>();
-      for (const [key, task] of tasks) {
-        const settle =
-          task.status === 'running' &&
-          (taskIds.has(task.taskId) ||
-            Boolean(task.parentToolUseId && taskIds.has(task.parentToolUseId)));
-        if (!settle) {
-          next.set(key, task);
-          continue;
-        }
-        let stopped = replaced.get(task);
-        if (!stopped) {
-          stopped = { ...task, status: 'stopped' as const };
-          replaced.set(task, stopped);
-        }
-        next.set(key, stopped);
-        changed = true;
-      }
-      return changed ? { ...s, taskUpdates: next } : s;
-    });
-  },
-  /**
    * 捕获该会话当前的唤醒桥接代际(计数 + 置位代次)。
    * 用途:活动熄灭延迟对账 —— ①粗筛放行:桥接泄漏时 taskUpdates 里往往已无
    * running 条目(迟到终态本身就是 completed),只看 running 候选会把桥接对账

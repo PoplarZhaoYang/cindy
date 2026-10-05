@@ -847,35 +847,6 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
     }
   });
 
-  it('settleStoppedAgentTasks:停止回执只收口指定的 running 条目(含 PI)', () => {
-    const sid = `settle-${Math.random().toString(36).slice(2, 8)}`;
-    try {
-      applyTask(sid, { taskId: 't1', status: 'running', taskType: 'local_bash' });
-      applyTask(sid, { taskId: 't2', status: 'running', taskType: 'local_bash' });
-      makerChatStore.settleStoppedAgentTasks(sid, new Set(['t1']));
-      const tasks = makerChatStore.getSnapshot(sid).taskUpdates;
-      expect(tasks?.get('t1')?.status).toBe('stopped');
-      expect(tasks?.get('t2')?.status).toBe('running');
-      // 后续真实事件仍会覆盖(非终局)。
-      applyTask(sid, { taskId: 't1', status: 'completed', taskType: 'local_bash' });
-      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('t1')?.status).toBe('completed');
-      // PI durable 子任务同样按回执精确收口(不套用快照对账的 claude-code 判据)。
-      makerChatStore.__applyStreamEventForTest(sid, {
-        sessionId: sid,
-        type: 'agent_task_update',
-        source: 'pi',
-        data: { provider: 'pi', taskId: 'pi-1', status: 'running', taskType: 'pi_subagent' },
-      } as CCAgentStreamEvent);
-      makerChatStore.settleStoppedAgentTasks(sid, new Set(['pi-1']));
-      expect(makerChatStore.getSnapshot(sid).taskUpdates?.get('pi-1')?.status).toBe('stopped');
-      // 未知会话不建状态。
-      makerChatStore.settleStoppedAgentTasks('never-seen-session', new Set(['x']));
-      expect(makerChatStore.getSnapshot('never-seen-session').taskUpdates?.size ?? 0).toBe(0);
-    } finally {
-      makerChatStore.purgeSession(sid);
-    }
-  });
-
   it('codex 会话的 agent_task_update 不参与折算(provider gate)', async () => {
     const sid = `codex-${Math.random().toString(36).slice(2, 8)}`;
     try {
