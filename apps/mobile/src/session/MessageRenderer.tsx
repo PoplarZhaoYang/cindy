@@ -18,7 +18,6 @@ import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
-import { sharedTaskAuthorName } from '@cindy/maker-shared';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime } from '@cindy/maker-shared/botTimeline';
 import { CompanionMessageCard } from '@/session/CompanionMessageCard';
 import { CompanionEntering } from '@/session/CompanionEntering';
@@ -41,13 +40,17 @@ import {
   Copy,
   Ellipsis,
   ExternalLink,
+  Ghost,
   Layers,
   ListTodo,
   LoaderCircle,
+  MessageSquare,
+  Monitor,
   RefreshCw,
   PencilLine,
   Share as ShareIcon,
   Send,
+  Smartphone,
   Split,
   Sparkles,
   Timer,
@@ -253,9 +256,22 @@ import {
   type RemotePathVerdict,
 } from '@/session/remotePathVerdict';
 import {
+  useRemoteDeviceIdentity,
   useRemoteSessionMessages,
   useRemoteSessions,
 } from '@/session/remoteSessionStore';
+import {
+  shouldShowSourceDevice,
+  type MessageSourceDevice,
+  type MessageSourcePlugin,
+} from '@cindy/maker-shared/message-source';
+import {
+  automationOriginLabel,
+  imSourceHeaderTitle,
+  sessionOriginLabel,
+  sourceDeviceLabel,
+  sourcePluginLabel,
+} from '@/session/messageSourceLabels';
 import {
   compactSessionMessageLabel,
   mobileSessionMessageDisplayText,
@@ -661,6 +677,13 @@ interface MessageActions {
   onOpenForkOrigin?: () => void;
   /** 「由任务「X」发送」来源标签点击:跳到同一设备上的来源任务。 */
   onOpenOriginSession?: (sessionId: string) => void;
+  /**
+   * 本机(这台手机)的 device-link 设备 id:设备来源标签只标「别的设备」发来的消息,
+   * 本机发出的不标(shouldShowSourceDevice)。
+   */
+  viewerDeviceId?: string | null;
+  /** 「从手机「X」发送」设备标签点击:打开设备详情;设备已删除时由宿主提示。 */
+  onOpenSourceDevice?: (deviceId: string) => void;
   onOpenPayload?: (payload: MessagePayload) => void;
   onLoadToolInput?: (ref: MobileToolInputProjection) => Promise<MobileToolInputDetail>;
   onBlockingOverlayChange?: (blocked: boolean) => void;
@@ -716,6 +739,8 @@ export function MessageRenderer({
   onLoadToolInput,
   onOpenForkOrigin,
   onOpenOriginSession,
+  viewerDeviceId,
+  onOpenSourceDevice,
   onBlockingOverlayChange,
   onOpenSessionLink,
   onPreviewRewind,
@@ -1721,6 +1746,8 @@ export function MessageRenderer({
     onDeleteMessage,
     onOpenForkOrigin,
     onOpenOriginSession,
+    viewerDeviceId,
+    onOpenSourceDevice,
     onOpenSessionLink,
     onPreviewRewind,
     onEnterShareSelection,
@@ -1767,6 +1794,8 @@ export function MessageRenderer({
     onForkMessage,
     onOpenForkOrigin,
     onOpenOriginSession,
+    viewerDeviceId,
+    onOpenSourceDevice,
     onLoadToolInput,
     onOpenSessionLink,
     onPreviewRewind,
@@ -2883,9 +2912,15 @@ const RenderItemView = memo(function RenderItemView({
     ),
     [item],
   );
+  // 旧 Hook(落库正文是拼好的 Agent prompt)降级为左对齐系统卡,不挂 fork / rewind /
+  // delete 等用户操作;本机 IM 落库的是用户原文(userTextContent),保持 user kind 与普通
+  // 用户消息的全部操作,只在 MessageBubble 里换成左对齐的「Cindy · 来自 X」卡片。
   const hookSourceUserItem = useMemo(
     () => (
-      item.type === 'message' && item.message.kind === 'user' && item.message.hookSource
+      item.type === 'message'
+        && item.message.kind === 'user'
+        && item.message.hookSource
+        && !item.message.hookSource.userTextContent
         ? { ...item, message: { ...item.message, kind: 'system' as const, align: 'agent' as const } }
         : null
     ),
@@ -3041,11 +3076,7 @@ function SessionOriginLabel({
   const styles = useThemedStyles(makeStyles);
   const senderSessionId = origin.senderSessionId;
   const openTarget = onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined;
-  const label = origin.senderBotName
-    ? t('message.renderer.botOriginNamed', { name: origin.senderBotName })
-    : origin.senderSessionTitle
-      ? t('message.renderer.sessionOriginNamed', { name: origin.senderSessionTitle })
-      : t('message.renderer.sessionOrigin');
+  const label = sessionOriginLabel(origin);
   return (
     <Pressable
       accessibilityHint={openTarget ? t('message.renderer.openSessionOrigin') : undefined}
@@ -3060,6 +3091,70 @@ function SessionOriginLabel({
       <Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
       <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
     </Pressable>
+  );
+}
+
+/**
+ * 手机或另一台电脑远程操作主机时发来的消息:气泡外的设备标签(样式同其它来源标签)。
+ * 点按打开设备详情;长按就地显示设备 ID(可选中复制),读屏在提示里直接读出设备 ID。
+ * 标签挂在气泡外——气泡本身不能挂 Pressable(会干扰正文横向滚动手势)。
+ */
+function SourceDeviceLabel({
+  align,
+  device,
+  onOpen,
+}: {
+  align: 'user' | 'agent';
+  device: MessageSourceDevice;
+  onOpen?: (deviceId: string) => void;
+}) {
+  const { colors } = useTheme();
+  const { t, i18n: i18nInstance } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const directory = useRemoteDeviceIdentity();
+  const [idVisible, setIdVisible] = useRecyclingState(false);
+  const label = useMemo(
+    () => sourceDeviceLabel(device, directory),
+    // 文案走 i18n.t,语言进依赖。
+    [device, directory, i18nInstance.language],
+  );
+  const idText = t('message.renderer.sourceDeviceId', { id: device.deviceId });
+  const Icon = device.platform === 'mobile' ? Smartphone : Monitor;
+  return (
+    <View style={[styles.sourceLabelStack, align === 'user' ? styles.sourceLabelStackUser : null]}>
+      <Pressable
+        accessibilityHint={onOpen
+          ? t('message.renderer.openSourceDeviceHint', { id: device.deviceId })
+          : idText}
+        accessibilityLabel={label}
+        accessibilityRole={onOpen ? 'button' : 'text'}
+        hitSlop={8}
+        onLongPress={() => setIdVisible((visible) => !visible)}
+        onPress={onOpen ? () => onOpen(device.deviceId) : undefined}
+        style={styles.automationOriginRow}
+        testID="message.sourceDevice"
+      >
+        <Icon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+        <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
+      </Pressable>
+      {idVisible ? (
+        <Text selectable style={styles.automationOriginText} testID="message.sourceDeviceId">{idText}</Text>
+      ) : null}
+    </View>
+  );
+}
+
+/** 插件任务派发的消息:气泡外的来源标签;与气泡内的本轮插件调用头(PluginInvocationHeader)是两回事。 */
+function SourcePluginLabel({ plugin }: { plugin: MessageSourcePlugin }) {
+  const { colors } = useTheme();
+  const { i18n: i18nInstance } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  const label = useMemo(() => sourcePluginLabel(plugin), [plugin, i18nInstance.language]);
+  return (
+    <View accessibilityLabel={label} accessible style={styles.automationOriginRow} testID="message.sourcePlugin">
+      <Ghost color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+      <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
+    </View>
   );
 }
 
@@ -3270,7 +3365,8 @@ function MessageBubble({
     mediaCount: item.message.media?.length ?? 0,
     secondaryBody: item.message.secondaryBody,
   });
-  const isUser = presentation.isUserAligned;
+  // IM 来源卡片(本机 IM 保留 user kind 以挂普通用户操作)与桌面一样左对齐。
+  const isUser = presentation.isUserAligned && !item.message.hookSource;
   const isStreamingAssistant = item.message.kind === 'assistant' && item.message.isStreaming === true;
   const clientId = messageClientId(item);
   useEffect(() => {
@@ -3576,8 +3672,6 @@ function MessageBubble({
       ]}
       testID={isUser ? 'message.userBubble' : 'message.agentBubble'}
     >
-      {isUser && sharedTaskAuthorName(item.message.source.agentMeta) ?
-        <Text style={styles.hookSourceTitle}>{sharedTaskAuthorName(item.message.source.agentMeta)}</Text> : null}
       {hasPluginInvocations ? (
         <PluginInvocationHeader
           key={clientId}
@@ -3589,9 +3683,11 @@ function MessageBubble({
       ) : null}
       {hookSource ? (
         <View style={styles.hookSourceHeader} testID="message.hookSource">
-          <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+          {hookSource.im === 'telegram'
+            ? <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+            : <MessageSquare color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
           <Text numberOfLines={1} style={styles.hookSourceTitle}>
-            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : hookSource.im === 'x' ? 'X' : 'Slack'}`}
+            {imSourceHeaderTitle(hookSource.im)}
           </Text>
           {hookSource.channelName ? (
             <Text numberOfLines={1} style={styles.hookSourceChannel}>
@@ -3732,20 +3828,40 @@ function MessageBubble({
         isUser ? styles.userMessageItem : styles.agentMessageItem,
       ]}
     >
+      {item.message.kind === 'user' && item.message.sharedAuthorName ? (
+        // 共享任务成员发的消息:作者名放在气泡上方(对齐桌面 UserMessage),不进气泡。
+        <View
+          accessibilityLabel={t('message.renderer.sharedAuthor', { name: item.message.sharedAuthorName })}
+          accessible
+          style={styles.automationOriginRow}
+          testID="message.sharedAuthor"
+        >
+          <Text numberOfLines={1} style={styles.automationOriginText}>{item.message.sharedAuthorName}</Text>
+        </View>
+      ) : null}
       {automationOrigin ? (
         // 自动化任务注入的消息:气泡上方渲来源标签(对齐桌面;手机版暂不做
-        // 点击跳转自动化页,纯展示)。
+        // 点击跳转自动化页,纯展示)。共享任务访客的脱敏来源没有名字,显示通用文案。
         <View style={styles.automationOriginRow} testID="message.automationOrigin">
           <Timer color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
           <Text numberOfLines={1} style={styles.automationOriginText}>
-            {automationOrigin.scheduleName
-              ? t('message.renderer.automationOriginNamed', { name: automationOrigin.scheduleName })
-              : t('message.renderer.automationOrigin')}
+            {automationOriginLabel(automationOrigin)}
           </Text>
         </View>
       ) : null}
       {item.message.kind === 'user' && item.message.sessionOrigin ? (
         <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
+      ) : null}
+      {item.message.kind === 'user' && item.message.sourcePlugin ? (
+        <SourcePluginLabel plugin={item.message.sourcePlugin} />
+      ) : null}
+      {item.message.kind === 'user'
+        && shouldShowSourceDevice(item.message.sourceDevice, actions.viewerDeviceId) ? (
+        <SourceDeviceLabel
+          align={isUser ? 'user' : 'agent'}
+          device={item.message.sourceDevice}
+          onOpen={actions.onOpenSourceDevice}
+        />
       ) : null}
       {attachmentStripNode}
       {hasBubbleContent || (!attachmentStripNode && messageQuotes.length === 0) ? bubble : null}
@@ -8488,6 +8604,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexShrink: 1,
     fontSize: typeScale.caption,
     lineHeight: lineHeight.caption,
+  },
+  sourceLabelStack: {
+    alignItems: 'flex-start',
+    gap: 2,
+    maxWidth: '86%',
+  },
+  sourceLabelStackUser: {
+    alignItems: 'flex-end',
   },
   modelMismatchRow: {
     alignItems: 'center',

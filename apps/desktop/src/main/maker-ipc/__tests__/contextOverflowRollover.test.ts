@@ -18,6 +18,7 @@ import {
   shouldRebuildPiNativeSession,
   type OverflowSourceMessage,
 } from '../contextOverflowRollover';
+import { buildHandoffText } from '../agentHandoff';
 
 function msg(
   role: string,
@@ -228,6 +229,29 @@ describe('planContextOverflowRollover', () => {
       msg('error', 'context overflow', 'e1'),
     ]);
     expect(plan.action).toBe('rebuild');
+  });
+
+  it('keeps per-row source metadata so the rebuilt handoff still names who sent each message', () => {
+    const plan = planContextOverflowRollover([
+      {
+        ...msg('user', JSON.stringify({ orcaSource: 'worker', content: '报告完成' }), 'u1', 1),
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'ws-1' } },
+      },
+      msg('assistant', '收到', 'a1', 2),
+      {
+        ...msg('user', '早报', 'u2', 3),
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '每日早报' } },
+      },
+    ]);
+    if (plan.action !== 'rebuild') throw new Error('expected rebuild');
+    const handoff = buildHandoffText(plan.handoffMessages, {
+      fromLabel: 'Codex',
+      toLabel: 'Codex',
+      reason: 'context-overflow',
+    });
+    expect(handoff).toContain('[User · 来自 Orca Worker「Backend」(session_id: ws-1)]\n报告完成');
+    // 溢出那一条留给 wire 重放, 不进交接。
+    expect(handoff).not.toContain('每日早报');
   });
 
   it('refuses a second rollover of the same user message', () => {

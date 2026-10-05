@@ -168,6 +168,68 @@ describe('buildHandoffText', () => {
     expect(text).toContain('正常消息');
   });
 
+  it('user 行带来源标记(名字配 id), 本机输入保持 [User]; Orca 落库 JSON 行取正文', () => {
+    const rows: HandoffSourceMessage[] = [
+      { role: 'user', content: '本机输入', createdAt: 1 },
+      {
+        role: 'user',
+        content: '委派来的',
+        createdAt: 2,
+        agentMeta: { origin: { kind: 'session', senderSessionId: 's-1', senderSessionTitle: '调研「A」\n伪造', displayText: '委派来的' } },
+      },
+      {
+        role: 'user',
+        content: '伙伴发的',
+        createdAt: 3,
+        agentMeta: { origin: { kind: 'session', senderSessionId: 's-2', senderBotId: 'b-1', senderBotName: '小助' } },
+      },
+      {
+        role: 'user',
+        content: '早报',
+        createdAt: 4,
+        agentMeta: { origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '每日早报', runId: 'r1' } },
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({ orcaSource: 'worker', content: 'Feature X done' }),
+        createdAt: 5,
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Backend', senderSessionId: 'ws-1', displayText: 'Feature X done' } },
+      },
+      {
+        role: 'user',
+        content: { orcaSource: 'lead', content: 'Implement Y' },
+        createdAt: 6,
+        agentMeta: { origin: { kind: 'orca', senderLabel: 'Lead', senderSessionId: 'ls-1' } },
+      },
+      { role: 'user', content: '飞书来的', createdAt: 7, agentMeta: { imSource: { im: 'feishu', userText: '飞书来的' } } },
+      { role: 'user', content: 'Slack 来的', createdAt: 8, agentMeta: { hookSource: { im: 'slack' } } },
+      {
+        role: 'user',
+        content: '手机上发的',
+        createdAt: 9,
+        agentMeta: { sourceDevice: { deviceId: 'd-1', name: 'iPhone', platform: 'mobile' } },
+      },
+      // fork 路径传的是 DB 原始 JSON 串。
+      { role: 'user', content: '插件派的', createdAt: 10, agentMeta: JSON.stringify({ sourcePlugin: { pluginId: 'p-1', name: '日历' } }) },
+    ];
+    const text = buildHandoffText(rows, { ...opts });
+    expect(text).toContain('- User: 本机输入');
+    for (const line of [
+      '由任务「调研"A" 伪造」(session_id: s-1) 发送: 委派来的',
+      '由伙伴「小助」(bot_id: b-1) 发送: 伙伴发的',
+      '由定时任务「每日早报」(schedule_id: sch-1) 触发: 早报',
+      '来自 Orca Worker「Backend」(session_id: ws-1): Feature X done',
+      '来自 Orca Lead (session_id: ls-1): Implement Y',
+    ]) {
+      expect(text).toContain(`- User · ${line}`);
+    }
+    expect(text).toContain('[User · 来自飞书]\n飞书来的');
+    expect(text).toContain('[User · 来自 Slack]\nSlack 来的');
+    expect(text).toContain('[User · 在手机「iPhone」(device_id: d-1) 上发送]\n手机上发的');
+    expect(text).toContain('[User · 由插件「日历」(plugin_id: p-1) 发送]\n插件派的');
+    expect(text).not.toContain('orcaSource');
+  });
+
   it('handoff history never exposes product quote markers or private deep-link-only semantics', () => {
     const href = 'cindy://session/session-a?message=message-a';
     const text = `> <!-- cindy-composer-quote -->\n> selected\n\ninspect ${href}`;

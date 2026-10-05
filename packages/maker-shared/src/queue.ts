@@ -203,8 +203,9 @@ export function isAutoSentQueueItem(
 
 /**
  * 排队条目给人看的正文。自动化调度或其他任务经工具发来（origin.kind 为 scheduler /
- * session）的条目，`text` 是发给 Agent 的原文——可能带「[来自 X 的补充]」前缀或静默运行
- * 协议——可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
+ * session）的条目，`text` 是发给 Agent 的原文——可能带静默运行协议等只给 Agent 的内容
+ * （来源身份不再写进正文，而是派发时在 wire 消息上另加统一的 `[消息来源]` 说明）——
+ * 可见正文以落库的 `persistedContent` 为准；带附件时落库是主机构造的
  * `{text, images, files}` 信封，取其中 text（只在确有附件时解包，正文本身是 JSON 的消息
  * 原样显示）。其它条目沿用 `text`。桌面排队面板、手机待发送气泡与共享访客投影共用此判据。
  */

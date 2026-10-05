@@ -49,6 +49,7 @@ import {
   resolveRemoteInvokeTimeoutMs,
 } from '@cindy/device-link';
 import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
+import { sanitizeSourceName, type MessageSourceHostDevice } from '@cindy/maker-shared/message-source';
 import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -1742,6 +1743,17 @@ function assertRemoteControlTargetEnabledAfterReopen(deviceId: string): void {
  */
 export function getSelfDeviceId(): string | null {
   return client?.getSelfDeviceId() ?? null;
+}
+
+/**
+ * 被控电脑自身的身份,用于发给模型的设备说明里指明「本机」。
+ * 名字优先取设备目录里用户为本机设置的名字(last-known 缓存),否则回退系统设备名;
+ * 同一台设备的 id / 名字不随轮次变化。未连接时 id 缺省,说明里只写名字。
+ */
+export function getHostSourceDevice(): MessageSourceHostDevice {
+  const deviceId = getSelfDeviceId() ?? undefined;
+  const name = sanitizeSourceName((deviceId ? readLastKnownDeviceNames()[deviceId] : undefined) ?? deviceName());
+  return { ...(deviceId ? { deviceId } : {}), ...(name ? { name } : {}) };
 }
 
 /** 控制端:对目标设备远程 invoke 一个 allowlist 内的 channel。

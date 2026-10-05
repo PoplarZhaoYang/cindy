@@ -12,6 +12,14 @@
  */
 
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
+import {
+  formatSourceRef,
+  messageSourceSenderFromMeta,
+  readMessageSourceDevice,
+  sanitizeSourceName,
+} from '@cindy/maker-shared/message-source';
+
+import { imChannelDisplayName } from '../../shared/imMessageSource.js';
 
 /** DB 层引擎标识(sessions.agent_kind / messages.agent_kind 的值域)。 */
 export type DbAgentKind = 'cc' | 'codex' | 'pi';
@@ -23,6 +31,12 @@ export interface HandoffSourceMessage {
   createdAt: number; // unix ms
   /** 生产 tool_result 的关联列；content 经常是纯字符串，不能靠信封里的 toolUseId。 */
   toolUseId?: string | null;
+  /**
+   * 落库 agentMeta（origin / imSource / hookSource / sourceDevice / sourcePlugin …），
+   * 已解析对象或 DB 原始 JSON 串均可。user 行据此写一段简短来源标记，让换引擎 /
+   * 换窗 / 重建后模型仍知道每条是谁发的。
+   */
+  agentMeta?: unknown;
 }
 
 export interface BuildHandoffOptions {
@@ -153,8 +167,83 @@ export function extractPlainText(content: unknown): string {
       return projectPersistedAgentFacingUserText(c) ?? c.text;
     }
     if (typeof c.message === 'string') return c.message;
+    // Orca lead/worker 消息落库为 formatOrcaCommunicationMessage 的 {orcaSource, content}。
+    if (isOrcaCommunicationRecord(c)) return c.content;
   }
   return '';
+}
+
+function isOrcaCommunicationRecord(
+  value: Record<string, unknown>,
+): value is { orcaSource: 'lead' | 'worker'; content: string } {
+  return (value.orcaSource === 'lead' || value.orcaSource === 'worker') && typeof value.content === 'string';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** 未解析的 DB 列(JSON 串)也接受, 解析失败按无 meta 处理。 */
+function parseJsonObjectString(value: unknown): unknown {
+  if (typeof value !== 'string' || !value.startsWith('{')) return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Orca 落库行的发送方(lead / worker);content 可能是 JSON 串或已解析对象。 */
+function orcaSourceOf(content: unknown): 'lead' | 'worker' | undefined {
+  const record = asRecord(parseJsonObjectString(content));
+  return record && isOrcaCommunicationRecord(record) ? record.orcaSource : undefined;
+}
+
+/**
+ * user 行的来源标记(交接正文里 `[User · …]`)。只用 host 落库的事实字段, 名字一律配 id、
+ * 经 sanitizeSourceName 消毒; 本机用户亲手输入返回 null(保持原来的 `[User]`)。
+ */
+export function describeHandoffUserSource(message: Pick<HandoffSourceMessage, 'content' | 'agentMeta'>): string | null {
+  const meta = asRecord(parseJsonObjectString(message.agentMeta));
+  if (!meta) return null;
+  const parts: string[] = [];
+  const origin = asRecord(meta.origin);
+  if (origin?.kind === 'scheduler') {
+    parts.push(`由定时任务${formatSourceRef(origin.scheduleName, 'schedule_id', origin.scheduleId)} 触发`);
+  } else if (origin?.kind === 'orca') {
+    const from = orcaSourceOf(message.content) === 'lead' ? 'Lead' : 'Worker';
+    const label = typeof origin.senderLabel === 'string' ? origin.senderLabel : undefined;
+    // 'Lead' / 'Worker' 是查不到 role 时的占位, 不当名字写。
+    const name = label && label !== 'Lead' && label !== 'Worker' && from === 'Worker' ? label : undefined;
+    parts.push(`来自 Orca ${from}${formatSourceRef(name, 'session_id', origin.senderSessionId)}`);
+  } else {
+    const sender = messageSourceSenderFromMeta(meta);
+    if (sender?.kind === 'session') {
+      if (sender.botId) {
+        parts.push(`由伙伴${formatSourceRef(sender.botName, 'bot_id', sender.botId)} 发送`);
+      } else {
+        const ref = formatSourceRef(sender.title, 'session_id', sender.sessionId);
+        parts.push(ref ? `由任务${ref} 发送` : '由其他任务发送');
+      }
+    } else if (sender?.kind === 'plugin') {
+      parts.push(`由插件${formatSourceRef(sender.name, 'plugin_id', sender.pluginId)} 发送`);
+    } else if (sender?.kind === 'shared-member') {
+      parts.push(`由共享任务成员${formatSourceRef(sender.name, 'member_id', sender.memberId)} 发送`);
+    }
+  }
+  const im = asRecord(meta.imSource)?.im ?? asRecord(meta.hookSource)?.im;
+  if (im !== undefined) {
+    const channel = imChannelDisplayName(im) ?? sanitizeSourceName(im);
+    if (channel) parts.push(`来自${/^[A-Za-z]/.test(channel) ? ` ${channel}` : channel}`);
+  }
+  const device = readMessageSourceDevice(meta);
+  if (device) {
+    const where = device.platform === 'mobile' ? '手机' : '另一台电脑';
+    parts.push(`在${where}${formatSourceRef(device.name, 'device_id', device.deviceId)} 上发送`);
+  }
+  return parts.length > 0 ? parts.join(' · ').replace(/ {2,}/g, ' ') : null;
 }
 
 function isStringifyUserContentEnvelope(
@@ -195,6 +284,8 @@ export function extractAgentIslandPromptText(content: unknown): string | null {
 
 interface Turn {
   userText: string;
+  /** user 行来源标记(见 describeHandoffUserSource);本机用户输入为 null。 */
+  userSource: string | null;
   /** 轮内按序的展示行(assistant 文本 / 工具行 / 错误行)。 */
   detailLines: string[];
   /** 轮内最后一段 assistant 文本(提要区用)。 */
@@ -349,12 +440,17 @@ function splitTurns(messages: HandoffSourceMessage[], includeToolResults = false
     if (msg.role === 'user') {
       const text = extractPlainText(msg.content);
       if (text.startsWith(SYNTHETIC_TRIGGER_PREFIX)) continue;
-      current = { userText: text, detailLines: [], lastAssistantText: '' };
+      current = {
+        userText: text,
+        userSource: describeHandoffUserSource(msg),
+        detailLines: [],
+        lastAssistantText: '',
+      };
       turns.push(current);
       continue;
     }
     if (!current) {
-      current = { userText: '', detailLines: [], lastAssistantText: '' };
+      current = { userText: '', userSource: null, detailLines: [], lastAssistantText: '' };
       turns.push(current);
     }
     switch (msg.role) {
@@ -629,7 +725,9 @@ function assembleHandoffText(
   if (earlier.length > 0) {
     const lines: string[] = [];
     for (const t of earlier) {
-      if (t.userText) lines.push(`- User: ${truncate(oneLine(t.userText), DIGEST_LINE_CAP)}`);
+      if (t.userText) {
+        lines.push(`- User${t.userSource ? ` · ${t.userSource}` : ''}: ${truncate(oneLine(t.userText), DIGEST_LINE_CAP)}`);
+      }
       if (t.lastAssistantText) {
         lines.push(`  Reply: ${truncate(oneLine(t.lastAssistantText), DIGEST_LINE_CAP)}`);
       }
@@ -658,7 +756,9 @@ function assembleHandoffText(
     const blocks: string[] = [];
     for (const t of recent) {
       const parts: string[] = [];
-      if (t.userText) parts.push(`[User]\n${truncate(t.userText, RECENT_TEXT_CAP)}`);
+      if (t.userText) {
+        parts.push(`[User${t.userSource ? ` · ${t.userSource}` : ''}]\n${truncate(t.userText, RECENT_TEXT_CAP)}`);
+      }
       parts.push(...collapseDetailLines(t.detailLines));
       if (parts.length > 0) blocks.push(parts.join('\n'));
     }

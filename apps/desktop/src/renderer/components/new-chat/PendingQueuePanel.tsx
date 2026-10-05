@@ -29,6 +29,7 @@ import {
   ChevronUp,
   GripVertical,
   Pencil,
+  Puzzle,
   Send,
   Trash2,
 } from 'lucide-react';
@@ -301,7 +302,11 @@ export function PendingQueuePanel({
           const queueRowSenderLabel =
             senderBotProfile?.name ||
             rowPresentation.senderLabel ||
-            (rowPresentation.isSession ? t('newChat.pendingQueue.sessionSenderFallback') : null);
+            (rowPresentation.isSession
+              ? t('newChat.pendingQueue.sessionSenderFallback')
+              : rowPresentation.isPlugin
+                ? t('newChat.pendingQueue.pluginSenderFallback')
+                : null);
           const isPendingEnqueue = entry.isPendingEnqueue === true;
           const isRowActive = isPendingQueueRowActive(rowActivity, entry.clientId);
           const isRowEditing = entry.clientId === editingClientId;
@@ -464,7 +469,10 @@ export function PendingQueuePanel({
               >
                 <GripVertical size={12} strokeWidth={2} aria-hidden />
               </button>
-              {rowPresentation.isOrca || rowPresentation.isScheduler || rowPresentation.isSession ? (
+              {rowPresentation.isOrca ||
+              rowPresentation.isScheduler ||
+              rowPresentation.isSession ||
+              rowPresentation.isPlugin ? (
                 <div
                   aria-label={t(
                     rowPresentation.isScheduler
@@ -473,6 +481,8 @@ export function PendingQueuePanel({
                         ? 'newChat.pendingQueue.botRowAria'
                         : rowPresentation.isSession
                           ? 'newChat.pendingQueue.sessionRowAria'
+                        : rowPresentation.isPlugin
+                          ? 'newChat.pendingQueue.pluginRowAria'
                         : 'newChat.pendingQueue.orcaRowAria',
                     { sender: queueRowSenderLabel },
                   )}
@@ -490,6 +500,13 @@ export function PendingQueuePanel({
                     />
                   ) : rowPresentation.isSession ? (
                     <Send
+                      size={13}
+                      strokeWidth={2}
+                      aria-hidden
+                      className="shrink-0 text-[var(--msg-assistant-text)]"
+                    />
+                  ) : rowPresentation.isPlugin ? (
+                    <Puzzle
                       size={13}
                       strokeWidth={2}
                       aria-hidden

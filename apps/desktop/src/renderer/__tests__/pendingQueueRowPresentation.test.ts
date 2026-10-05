@@ -57,6 +57,7 @@ describe('getPendingQueueRowPresentation', () => {
 
     expect(presentation).toMatchObject({
       isSession: true,
+      isPlugin: false,
       isOrca: false,
       isScheduler: false,
       senderLabel: 'Release checklist',
@@ -121,6 +122,7 @@ describe('getPendingQueueRowPresentation', () => {
       isOrca: true,
       isScheduler: false,
       isSession: false,
+      isPlugin: false,
       senderBotId: null,
       senderLabel: 'reviewer',
       displayText: '请看一下这个结论',
@@ -150,6 +152,7 @@ describe('getPendingQueueRowPresentation', () => {
       isOrca: false,
       isScheduler: true,
       isSession: false,
+      isPlugin: false,
       senderBotId: null,
       senderLabel: 'PR #971 心跳',
       displayText: 'PR #971 heartbeat prompt',
@@ -172,6 +175,27 @@ describe('getPendingQueueRowPresentation', () => {
     );
 
     expect(presentation.displayText).toBe('raw queued text');
+  });
+
+  it('marks plugin-dispatched rows as read-only rows named after the plugin', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({ sourcePlugin: { pluginId: 'ghost-github', name: 'GitHub' } }),
+    );
+
+    expect(presentation).toMatchObject({
+      isPlugin: true,
+      isSession: false,
+      senderLabel: 'GitHub',
+      displayText: 'queued text',
+      canEdit: false,
+      canSteer: false,
+    });
+  });
+
+  it('leaves the plugin sender label empty when the plugin name is unknown', () => {
+    expect(
+      getPendingQueueRowPresentation(queuedMessage({ sourcePlugin: { pluginId: 'ghost-x' } })).senderLabel,
+    ).toBeNull();
   });
 
   it('keeps regular queued messages editable and steerable', () => {

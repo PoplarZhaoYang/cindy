@@ -24,10 +24,14 @@ import { shareSelectionTapMoved, shouldCommitShareSelectionTap, type ShareSelect
 import {
   AlertCircle,
   ArrowUp,
+  Bot,
+  Ghost,
   ListEnd,
   Paperclip,
   Pencil,
   RotateCcw,
+  Send,
+  Timer,
   Trash2,
   type LucideIcon,
 } from 'lucide-react-native';
@@ -40,6 +44,7 @@ import {
   isPendingSendItemSelected,
   pendingSendSpins,
   type MobilePendingSendItem,
+  type MobilePendingSendSourceKind,
 } from '@/session/pendingSendItems';
 import {
   isDesktopLocalMediaUrl,
@@ -56,6 +61,16 @@ import {
   type ThemeColors,
 } from '@/theme';
 import { radius, spacing, typeScale } from '@/theme/tokens';
+
+/** 与已发送消息上的来源标签同一组图标(自动化 Timer / 任务 Send / Orca Bot / 插件 Ghost)。 */
+function sourceIcon(kind: MobilePendingSendSourceKind): LucideIcon {
+  switch (kind) {
+    case 'automation': return Timer;
+    case 'orca': return Bot;
+    case 'plugin': return Ghost;
+    default: return Send;
+  }
+}
 
 export interface PendingSendBubbleActions {
   /** 展开 / 收起操作行的条目;null = 全收起。 */
@@ -279,19 +294,35 @@ export function PendingSendBubble({
   };
   const badgePosition = badgeAnchor?.clientId === item.clientId
     ? { left: badgeAnchor.left } : { right: 0 };
+  const statusLabel = failed
+    ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+    : spinning
+      ? t('message.queue.sendingMessage', { text: bubbleLabel })
+      : item.queueIndex !== null
+        ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
+        : t('message.queue.sendingMessage', { text: bubbleLabel });
+  const SourceIcon = item.source ? sourceIcon(item.source.kind) : null;
 
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
+      {item.source && SourceIcon ? (
+        // 非本人输入的排队条目:气泡上方的来源标签(对齐桌面排队面板与已发送消息的来源标签)。
+        <View
+          accessibilityLabel={item.source.label}
+          accessible
+          style={styles.sourceRow}
+          testID={`pendingSend.source.${item.clientId}`}
+        >
+          <SourceIcon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
+          <Text numberOfLines={1} style={styles.sourceText}>{item.source.label}</Text>
+        </View>
+      ) : null}
       <View style={styles.bubbleRow}>
         <Pressable
           accessibilityHint={item.hint ?? undefined}
-          accessibilityLabel={failed
-            ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
-            : spinning
-              ? t('message.queue.sendingMessage', { text: bubbleLabel })
-              : item.queueIndex !== null
-                ? t('message.queue.queuedMessageLabel', { index: item.queueIndex, text: bubbleLabel })
-                : t('message.queue.sendingMessage', { text: bubbleLabel })}
+          accessibilityLabel={item.source
+            ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
+            : statusLabel}
           accessibilityRole="button"
           accessibilityState={{ expanded: selected, disabled: !interactive }}
           disabled={!interactive}
@@ -516,6 +547,9 @@ function ActionPill({
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowWrap: { alignItems: 'flex-end', gap: spacing.sm, width: '100%' },
+  // 来源标签:与已发送消息上方的来源标签同款(12/18 三级色)。
+  sourceRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, maxWidth: '86%' },
+  sourceText: { color: colors.textTertiary, flexShrink: 1, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   bubbleRow: {
     alignItems: 'center',
     flexDirection: 'row',

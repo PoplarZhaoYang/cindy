@@ -19,6 +19,11 @@ export interface PendingQueueRowPresentation {
    * 保留重排/删除、禁止编辑/steer（改写后气泡的来源标签就不再属实）；行首显示来源任务。
    */
   isSession: boolean;
+  /**
+   * 插件任务派发的消息（host 盖章的 sourcePlugin）：同属机器生成，保留重排/删除、
+   * 禁止编辑/steer（改写后「由插件「X」发送」就不再属实）；行首显示插件名。
+   */
+  isPlugin: boolean;
   /** 来源名称；任务来源缺标题快照时为 null，面板显示通用文案。 */
   senderLabel: string | null;
   /** 任务来源属于伙伴时的伙伴 id：面板行首显示伙伴头像，来源名为伙伴名。 */
@@ -56,7 +61,8 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   const isOrca = origin?.kind === 'orca';
   const isScheduler = origin?.kind === 'scheduler';
   const isSession = origin?.kind === 'session';
-  const isMachineGenerated = isOrca || isScheduler || isSession;
+  const isPlugin = !isOrca && !isScheduler && !isSession && Boolean(entry.sourcePlugin?.pluginId);
+  const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;
@@ -66,6 +72,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
     isOrca,
     isScheduler,
     isSession,
+    isPlugin,
     senderLabel: isOrca
       ? origin.senderLabel
       : isScheduler
@@ -74,7 +81,9 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
           ? (origin.senderBotId ? origin.senderBotName?.trim() : undefined) ||
             origin.senderSessionTitle?.trim() ||
             null
-          : null,
+          : isPlugin
+            ? entry.sourcePlugin?.name?.trim() || null
+            : null,
     senderBotId: isSession ? (origin.senderBotId ?? null) : null,
     displayText: isOrca
       ? (origin.displayText ?? entry.text)

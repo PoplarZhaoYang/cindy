@@ -22,7 +22,8 @@ vi.mock('react-native', async () => {
 });
 vi.mock('@/components/AppText', async () => ({ Text: (await import('react-native')).Text }));
 vi.mock('lucide-react-native', () => ({ Check: () => null, AlertCircle: () => null, ArrowUp: () => null,
-  ListEnd: () => null, Paperclip: () => null, Pencil: () => null, RotateCcw: () => null, Trash2: () => null }));
+  ListEnd: () => null, Paperclip: () => null, Pencil: () => null, RotateCcw: () => null, Trash2: () => null,
+  Bot: () => null, Ghost: () => null, Send: () => null, Timer: () => null }));
 vi.mock('@/session/SentInlineAtomBody', () => ({ SentInlineAtomBody: () => null }));
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: () => null,
   useSentAttachmentThumbsVersion: () => 0 }));
@@ -106,4 +107,14 @@ it('lets a real body link consume the pending tap before the frame commits', () 
   show(); touch('Start'); touch('End');
   act(() => host.querySelector<HTMLElement>('[data-testid="link"]')!.click());
   flush(); expect(openLink).toHaveBeenCalledOnce(); expect(select).not.toHaveBeenCalled();
+});
+it('shows the source label above the bubble and announces it with the queued message', () => {
+  show({ source: { kind: 'automation', label: '由自动化「巡检」发送' } });
+  const label = host.querySelector('[data-testid="pendingSend.source.a"]');
+  expect(label?.textContent).toBe('由自动化「巡检」发送');
+  expect(handlers.get('pendingSend.source.a')?.accessibilityLabel).toBe('由自动化「巡检」发送');
+  expect(handlers.get('pendingSend.badge.queued')?.accessibilityLabel).toBe('message.queue.withSource');
+  show();
+  expect(host.querySelector('[data-testid="pendingSend.source.a"]')).toBeNull();
+  expect(handlers.get('pendingSend.badge.queued')?.accessibilityLabel).toBe('message.queue.queuedMessageLabel');
 });

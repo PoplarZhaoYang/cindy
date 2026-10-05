@@ -33,6 +33,7 @@ import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
 import type { ImChannelAdapter } from './types';
 import { describeInteractionSource } from './interactionSource';
+import { imChannelNoteSourceFromEvent, type ImChannelNoteSource } from './channelNote';
 
 /**
  * `!stop` 控制指令 — 半角/全角感叹号、大小写不敏感(issue #867)。
@@ -368,6 +369,16 @@ export function createMessageHandler(
         log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
       }
     }
+    // 本条的渠道来源事实(只进模型正文); 取不到按"不写说明"降级, 不阻断消息。
+    let channelNoteSource: ImChannelNoteSource | null = null;
+    try {
+      channelNoteSource = adapter.channelNoteSourceFor
+        ? await adapter.channelNoteSourceFor(event)
+        : imChannelNoteSourceFromEvent(event);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`channelNoteSourceFor failed (note omitted): ${msg}`);
+    }
     // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
     const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
     const groupHistoryAccess = adapter.groupHistoryAccessFor?.(event);
@@ -385,6 +396,7 @@ export function createMessageHandler(
         userId: event.senderId,
         userMessageId: event.messageId,
         sourceDescription: describeInteractionSource(event),
+        ...(channelNoteSource ? { channelNoteSource } : {}),
         text: event.text,
         // 受保护群的触发消息照常起 turn, 但不进会话存档(渠道侧已挡住群历史池,
         // 这里挡住第二条路径)。

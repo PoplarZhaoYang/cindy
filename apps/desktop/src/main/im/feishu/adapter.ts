@@ -210,7 +210,7 @@ async function notifyContextFetchFailure(
   );
 }
 
-// ── 群名缓存(群 lane 会话标题用) ──────────────────────────────────────────────
+// ── 群名缓存(群 lane 会话标题 / 渠道说明用) ─────────────────────────────────────
 
 const chatNames = new Map<string, string | null>();
 
@@ -225,6 +225,25 @@ async function resolveChatName(feishuIm: FeishuIM, chatId: string): Promise<stri
   const name = raw ? sanitizeDisplayText(raw) || null : null;
   chatNames.set(chatId, name);
   return name;
+}
+
+const CHAT_NAME_NOTE_TIMEOUT_MS = 2_000;
+
+/** 渠道说明里的群名是锦上添花: 失败或慢于 2s 就只写 chat_id, 不拖慢本条消息。 */
+async function resolveChatNameForNote(feishuIm: FeishuIM, chatId: string): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolveChatName(feishuIm, chatId),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CHAT_NAME_NOTE_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function buildFeishuAdapter(
@@ -351,6 +370,19 @@ export function buildFeishuAdapter(
     // 防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
     // acceptEdits 仍保持失败路径(错误 + 私聊修复卡)。
     turnPolicyOptionalForMode: (mode) => mode === 'bypassPermissions',
+    // 渠道说明: 群 lane 用真实群 id + 缓存的群名(拉不到或超时就只写 id), 发言人只有
+    // open_id(飞书事件不带显示名)。私聊写 p2p chat_id。
+    channelNoteSourceFor: async (event) => {
+      const lane = decodeFeishuLaneUserId(event.senderId);
+      if (!lane) return { chatKind: 'direct', ...(event.chatId ? { chatId: event.chatId } : {}) };
+      const chatName = await resolveChatNameForNote(feishuIm, lane.chatId);
+      return {
+        chatKind: 'group',
+        chatId: lane.chatId,
+        ...(chatName ? { chatName } : {}),
+        ...(event.speaker?.id ? { senderId: event.speaker.id } : {}),
+      };
+    },
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。
     prepareAgentTurnText: async (event) => {
       const lane = decodeFeishuLaneUserId(event.senderId);
@@ -404,8 +436,9 @@ export function buildFeishuAdapter(
       if (!built) return null;
       return {
         agentText: `${built.prefix}${event.text}`,
+        // 快照用不带 user_id 的展示版: id 只给模型, 不进「群聊背景」展示。
         contextSnapshot: captureImContext({
-          groupPrefix: built.prefix,
+          groupPrefix: built.displayPrefix,
           groupMessageCount: built.messageCount,
         }),
         ...(built.contextAttachments.length > 0

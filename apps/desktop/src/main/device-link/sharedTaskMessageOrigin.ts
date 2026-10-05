@@ -1,30 +1,44 @@
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 
+const GUEST_HIDDEN_META_KEYS = ['agentFacingWireContent', 'sourceDevice', 'sourcePlugin'] as const;
+
+function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<string, unknown> | null {
+  if (origin.kind === 'session') return { kind: 'session' };
+  if (origin.kind === 'scheduler') {
+    return Object.keys(origin).some((key) => key !== 'kind') ? { kind: 'scheduler' } : null;
+  }
+  if (origin.kind === 'orca' && 'senderSessionId' in origin) {
+    const orcaRest = { ...origin };
+    delete orcaRest.senderSessionId;
+    return orcaRest;
+  }
+  return null;
+}
+
 /**
  * 共享任务访客只能直接访问被共享的这一个任务（docs/product-rules/shared-task-mode.md）。
  * 消息来源（agentMeta.origin）里指向房主其它任务或伙伴的身份——来源任务 id、标题、
  * 伙伴 id / 名字、Orca 发送方任务——都不属于访客可见范围，投递给访客前一律剥掉。
- * 任务来源降级为不带身份的 `{ kind: 'session' }`，访客端显示不可点击的「由其他任务发送」。
+ * 任务来源降级为不带身份的 `{ kind: 'session' }`，访客端显示不可点击的「由其他任务发送」；
+ * 自动化来源只保留 `{ kind: 'scheduler' }`（去掉 scheduleId / scheduleName / runId），
+ * 访客端显示不可点击的「由自动化发送」。
  *
+ * 房主的设备（sourceDevice）与插件（sourcePlugin）同样不属于访客可见范围，一律不下发。
  * `agentFacingWireContent` 是主机内部的 Agent 原文副本（只用于上下文溢出后重放），
- * 可能带「[来自 X 的补充]」这类来源前缀；访客端从不使用，一律不下发。
+ * 访客端从不使用，一律不下发。
  */
 export function redactMessageOriginForSharedGuest(agentMeta: unknown): unknown {
   if (!agentMeta || typeof agentMeta !== 'object' || Array.isArray(agentMeta)) return agentMeta;
   const meta = agentMeta as Record<string, unknown>;
-  const { agentFacingWireContent: _wire, ...rest } = meta;
-  const hadWire = 'agentFacingWireContent' in meta;
+  const hidden = GUEST_HIDDEN_META_KEYS.some((key) => key in meta);
+  const rest: Record<string, unknown> = { ...meta };
+  for (const key of GUEST_HIDDEN_META_KEYS) delete rest[key];
   const origin = meta.origin;
-  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) {
-    return hadWire ? rest : agentMeta;
-  }
-  const kind = (origin as { kind?: unknown }).kind;
-  if (kind === 'session') return { ...rest, origin: { kind: 'session' } };
-  if (kind === 'orca' && 'senderSessionId' in origin) {
-    const { senderSessionId: _, ...orcaRest } = origin as Record<string, unknown>;
-    return { ...rest, origin: orcaRest };
-  }
-  return hadWire ? rest : agentMeta;
+  const redactedOrigin = origin && typeof origin === 'object' && !Array.isArray(origin)
+    ? redactOriginForSharedGuest(origin as Record<string, unknown>)
+    : null;
+  if (redactedOrigin) return { ...rest, origin: redactedOrigin };
+  return hidden ? rest : agentMeta;
 }
 
 /** 对单条消息行套用 {@link redactMessageOriginForSharedGuest}；无需改动时返回原引用。 */
@@ -37,15 +51,24 @@ export function redactMessageRowForSharedGuest<T>(message: T): T {
 
 /**
  * 排队条目的访客视图。任务来源条目里，发给 Agent 的 `text` 与 `origin.displayText`
- * 可能带来源身份（如伙伴补充的「[来自 X 的补充]」前缀），访客只能拿到落库可见正文
- * （`persistedContent`，带附件时是 `{text, images, files}` 信封里的 text）；来源降级为
- * 不带 id / 标题 / 伙伴的任务来源。Orca 来源去掉发送方任务 id。无需改动时返回原引用。
+ * 可能带来源身份，访客只能拿到落库可见正文（`persistedContent`，带附件时是
+ * `{text, images, files}` 信封里的 text）；来源降级为不带 id / 标题 / 伙伴的任务来源。
+ * 自动化来源只保留 kind；Orca 来源去掉发送方任务 id；房主的设备 / 插件来源不下发。
+ * 无需改动时返回原引用。
  */
 export function redactQueueItemForSharedGuest<T>(item: T): T {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
-  const entry = item as Record<string, unknown>;
+  const original = item as Record<string, unknown>;
+  let entry = original;
+  if ('sourceDevice' in entry || 'sourcePlugin' in entry) {
+    entry = { ...entry };
+    delete entry.sourceDevice;
+    delete entry.sourcePlugin;
+  }
   const origin = entry.origin;
-  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) return item;
+  if (!origin || typeof origin !== 'object' || Array.isArray(origin)) {
+    return (entry === original ? item : entry) as T;
+  }
   const typed = origin as Record<string, unknown>;
   if (typed.kind === 'session') {
     const visible = queueItemVisibleText(entry);
@@ -55,11 +78,9 @@ export function redactQueueItemForSharedGuest<T>(item: T): T {
       origin: { kind: 'session', senderSessionId: '', displayText: visible },
     } as T;
   }
-  if (typed.kind === 'orca' && 'senderSessionId' in typed) {
-    const { senderSessionId: _, ...rest } = typed;
-    return { ...entry, origin: rest } as T;
-  }
-  return item;
+  const redactedOrigin = redactOriginForSharedGuest(typed);
+  if (redactedOrigin) return { ...entry, origin: redactedOrigin } as T;
+  return (entry === original ? item : entry) as T;
 }
 
 /**
