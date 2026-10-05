@@ -88,7 +88,9 @@ export class ControlledOverlay {
   /** The target whose label the page currently shows; revoke acts on this one. */
   private displayed: ControlledOverlayTarget | null = null;
   private failures = 0;
-  private rendered = '';
+  /** Label key the page has confirmed showing, and the one still being written. */
+  private committed = '';
+  private pending = '';
   private loaded = false;
   private placedDisplay: string | null = null;
   private generation = 0;
@@ -127,7 +129,8 @@ export class ControlledOverlay {
     if (!window) return;
     this.window = null;
     this.displayed = null;
-    this.rendered = '';
+    this.committed = '';
+    this.pending = '';
     this.loaded = false;
     this.placedDisplay = null;
     if (!window.isDestroyed()) window.destroy();
@@ -185,13 +188,15 @@ export class ControlledOverlay {
     const label = t('remoteDevice.revokeAccess');
     const dark = overlayIsDark();
     const key = JSON.stringify([text, label, dark]);
-    if (key === this.rendered) {
+    if (key === this.committed && !this.pending) {
       // Same visible label: the shown device is indistinguishable from the target.
       this.displayed = target;
       if (this.placedDisplay !== String(this.display().id)) this.layout(window);
       return true;
     }
-    this.rendered = key;
+    // Already being written: only its own result may move the revoke target.
+    if (key === this.pending) return false;
+    this.pending = key;
     // executeJavaScript calls run in order, so the last size always matches the last text.
     const measured: unknown = await window.webContents
       .executeJavaScript(
@@ -202,11 +207,12 @@ export class ControlledOverlay {
       )
       .catch(() => null);
     if (generation !== this.generation || window.isDestroyed()) return false;
+    if (this.pending === key) this.pending = '';
     if (typeof measured !== 'number' || !Number.isFinite(measured) || measured <= 0) {
       // Not shown: keep the previous device as the revoke target and retry next sync.
-      if (this.rendered === key) this.rendered = '';
       return false;
     }
+    this.committed = key;
     this.displayed = target;
     this.layout(window, measured);
     return true;
@@ -306,7 +312,8 @@ export class ControlledOverlay {
       if (this.window !== window) return;
       this.window = null;
       this.displayed = null;
-      this.rendered = '';
+      this.committed = '';
+      this.pending = '';
       this.loaded = false;
       this.placedDisplay = null;
       this.excluded([]);

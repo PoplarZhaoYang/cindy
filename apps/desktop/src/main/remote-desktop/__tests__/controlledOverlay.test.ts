@@ -374,3 +374,28 @@ it('never shows a window whose first label could not be rendered', async () => {
   expect(state.windows[0].isVisible()).toBe(false);
   expect(excluded).not.toHaveBeenCalledWith([101]);
 });
+
+it('does not move the revoke target while the same label is still being written', async () => {
+  const { overlay, revoke } = fixture();
+  const phone = { displayId: '1', controlling: true, peer: 'phone', name: 'iPhone' };
+  const laptop = { displayId: '1', controlling: true, peer: 'laptop', name: 'MacBook' };
+  overlay.update(phone);
+  await settle();
+  const window = state.windows[0];
+  const run = window.webContents.executeJavaScript;
+  let finish!: (width: number) => void;
+  run.mockImplementationOnce(() => new Promise<number>((resolve) => (finish = resolve)));
+  overlay.update(laptop);
+  // The periodic sync repeats the same target while the first write is pending.
+  overlay.update(laptop);
+  await settle();
+  expect(run).toHaveBeenCalledTimes(2);
+  navigate(window, 'https://cindy-overlay.invalid/revoke');
+  await settle();
+  expect(revoke).toHaveBeenLastCalledWith('phone');
+  finish(200);
+  await settle();
+  navigate(window, 'https://cindy-overlay.invalid/revoke');
+  await settle();
+  expect(revoke).toHaveBeenLastCalledWith('laptop');
+});
