@@ -17,10 +17,16 @@ const viewportHarness = vi.hoisted(() => ({
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock("react-native", async () => {
   const React = await import("react");
-  const view = ({ children, testID, accessibilityLabel }: any) =>
+  // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
+  const view = ({ children, testID, accessibilityLabel, accessibilityHint, onLongPress }: any) =>
     React.createElement(
       "div",
-      { "data-testid": testID, "aria-label": accessibilityLabel },
+      {
+        "data-testid": testID,
+        "aria-label": accessibilityLabel,
+        ...(accessibilityHint ? { "data-hint": accessibilityHint } : {}),
+        ...(onLongPress ? { onContextMenu: () => onLongPress() } : {}),
+      },
       children,
     );
   class Value {
@@ -421,5 +427,50 @@ describe("IM source card", () => {
     ]);
     expect(html).toContain(`Cindy · 来自 ${platform}`);
     expect(html).toContain("#general");
+  });
+});
+
+describe("source labels reveal their ids on long press", () => {
+  function longPress(messages: RemoteMessage[], testID: string): string {
+    const items = buildMobileMessageRenderItems(messages, {}).filter(
+      (item) => item.type === "message",
+    );
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    act(() => root.render(<MessageRenderer items={items} viewerDeviceId="phone-b" />));
+    const label = host.querySelector(`[data-testid="${testID}"]`);
+    expect(label).not.toBeNull();
+    act(() => {
+      label!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    });
+    const html = host.innerHTML;
+    act(() => root.unmount());
+    return html;
+  }
+
+  it("shows plugin, session and automation ids, like the device label", () => {
+    expect(
+      longPress([msg("p1", "run", { sourcePlugin: { pluginId: "ghost-github", name: "GitHub" } })], "message.sourcePlugin"),
+    ).toContain("插件 ID：ghost-github");
+    expect(
+      longPress(
+        [msg("s1", "go", { origin: { kind: "session", senderSessionId: "sess-9", senderSessionTitle: "检查" } })],
+        "message.sessionOrigin",
+      ),
+    ).toContain("任务 ID：sess-9");
+    expect(
+      longPress(
+        [msg("a1", "tick", { origin: { kind: "scheduler", scheduleId: "sch-7", scheduleName: "心跳" } })],
+        "message.automationOrigin",
+      ),
+    ).toContain("自动化 ID：sch-7");
+  });
+
+  it("keeps redacted sources static (no id to reveal)", () => {
+    const html = render([msg("r1", "tick", { origin: { kind: "scheduler" } })]);
+    expect(html).toContain("由自动化发送");
+    expect(html).not.toContain("自动化 ID");
+    expect(html).not.toMatch(/data-testid="message.automationOrigin"[^>]*data-hint/);
   });
 });

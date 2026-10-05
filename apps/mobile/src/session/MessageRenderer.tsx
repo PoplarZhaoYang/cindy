@@ -2938,7 +2938,7 @@ const RenderItemView = memo(function RenderItemView({
         ? (
           <>
             {item.message.sessionOrigin ? (
-              <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
+              <SessionOriginLabel align="agent" origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
             ) : null}
             <OrcaCollabCard card={item.message.orcaCard} screenWidth={actions.screenWidth}
               blockKey={JSON.stringify([actions.remoteDeviceId, item.key])} />
@@ -3063,41 +3063,105 @@ const RenderListItemView = memo(function RenderListItemView({
   );
 });
 
+/**
+ * 气泡外的来源标签(任务 / 自动化 / 插件 / 设备共用):有 ID 时长按就地显示 ID(可选中复制),
+ * 读屏在提示里直接读出 ID;脱敏后没有 ID 的来源保持静态展示。对齐桌面悬停给出 ID。
+ * 标签挂在气泡外——气泡本身不能挂 Pressable(会干扰正文横向滚动手势)。
+ */
+function SourceLabelWithId({
+  align,
+  icon,
+  label,
+  idText,
+  onPress,
+  openHint,
+  testID,
+}: {
+  align: 'user' | 'agent';
+  icon: ReactNode;
+  label: string;
+  idText?: string;
+  onPress?: () => void;
+  openHint?: string;
+  testID: string;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const [idVisible, setIdVisible] = useRecyclingState(false);
+  const hint = [onPress ? openHint : undefined, idText].filter(Boolean).join(' ');
+  return (
+    <View style={[styles.sourceLabelStack, align === 'user' ? styles.sourceLabelStackUser : null]}>
+      <Pressable
+        accessibilityHint={hint || undefined}
+        accessibilityLabel={label}
+        accessibilityRole={onPress ? 'button' : 'text'}
+        disabled={!onPress && !idText}
+        hitSlop={8}
+        onLongPress={idText ? () => setIdVisible((visible) => !visible) : undefined}
+        onPress={onPress}
+        style={styles.automationOriginRow}
+        testID={testID}
+      >
+        {icon}
+        <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
+      </Pressable>
+      {idVisible && idText ? (
+        <Text selectable style={styles.automationOriginText} testID={`${testID}Id`}>{idText}</Text>
+      ) : null}
+    </View>
+  );
+}
+
 /** 另一个任务经工具发来的消息:气泡上方的来源标签,点按跳来源任务(对齐桌面 AutomationOriginBadge)。 */
 function SessionOriginLabel({
+  align,
   origin,
   onOpen,
 }: {
+  align: 'user' | 'agent';
   origin: NonNullable<NormalizedRemoteMessage['sessionOrigin']>;
   onOpen?: (sessionId: string) => void;
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const styles = useThemedStyles(makeStyles);
   const senderSessionId = origin.senderSessionId;
-  const openTarget = onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined;
-  const label = sessionOriginLabel(origin);
   return (
-    <Pressable
-      accessibilityHint={openTarget ? t('message.renderer.openSessionOrigin') : undefined}
-      accessibilityLabel={label}
-      accessibilityRole={openTarget ? 'button' : 'text'}
-      disabled={!openTarget}
-      hitSlop={8}
-      onPress={openTarget}
-      style={styles.automationOriginRow}
+    <SourceLabelWithId
+      align={align}
+      icon={<Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
+      idText={senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined}
+      label={sessionOriginLabel(origin)}
+      onPress={onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined}
+      openHint={t('message.renderer.openSessionOrigin')}
       testID="message.sessionOrigin"
-    >
-      <Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-      <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
-    </Pressable>
+    />
+  );
+}
+
+/** 自动化注入的消息:气泡上方的来源标签(手机版不跳自动化页);脱敏来源没有 ID,静态展示。 */
+function AutomationOriginLabel({
+  align,
+  origin,
+}: {
+  align: 'user' | 'agent';
+  origin: NonNullable<NormalizedRemoteMessage['automationOrigin']>;
+}) {
+  const { colors } = useTheme();
+  const { t, i18n: i18nInstance } = useTranslation();
+  const label = useMemo(() => automationOriginLabel(origin), [origin, i18nInstance.language]);
+  return (
+    <SourceLabelWithId
+      align={align}
+      icon={<Timer color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
+      idText={origin.scheduleId ? t('message.renderer.sourceAutomationId', { id: origin.scheduleId }) : undefined}
+      label={label}
+      testID="message.automationOrigin"
+    />
   );
 }
 
 /**
  * 手机或另一台电脑远程操作主机时发来的消息:气泡外的设备标签(样式同其它来源标签)。
- * 点按打开设备详情;长按就地显示设备 ID(可选中复制),读屏在提示里直接读出设备 ID。
- * 标签挂在气泡外——气泡本身不能挂 Pressable(会干扰正文横向滚动手势)。
+ * 点按打开设备详情;长按就地显示设备 ID。
  */
 function SourceDeviceLabel({
   align,
@@ -3110,51 +3174,39 @@ function SourceDeviceLabel({
 }) {
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
-  const styles = useThemedStyles(makeStyles);
   const directory = useRemoteDeviceIdentity();
-  const [idVisible, setIdVisible] = useRecyclingState(false);
   const label = useMemo(
     () => sourceDeviceLabel(device, directory),
     // 文案走 i18n.t,语言进依赖。
     [device, directory, i18nInstance.language],
   );
-  const idText = t('message.renderer.sourceDeviceId', { id: device.deviceId });
   const Icon = device.platform === 'mobile' ? Smartphone : Monitor;
   return (
-    <View style={[styles.sourceLabelStack, align === 'user' ? styles.sourceLabelStackUser : null]}>
-      <Pressable
-        accessibilityHint={onOpen
-          ? t('message.renderer.openSourceDeviceHint', { id: device.deviceId })
-          : idText}
-        accessibilityLabel={label}
-        accessibilityRole={onOpen ? 'button' : 'text'}
-        hitSlop={8}
-        onLongPress={() => setIdVisible((visible) => !visible)}
-        onPress={onOpen ? () => onOpen(device.deviceId) : undefined}
-        style={styles.automationOriginRow}
-        testID="message.sourceDevice"
-      >
-        <Icon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-        <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
-      </Pressable>
-      {idVisible ? (
-        <Text selectable style={styles.automationOriginText} testID="message.sourceDeviceId">{idText}</Text>
-      ) : null}
-    </View>
+    <SourceLabelWithId
+      align={align}
+      icon={<Icon color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
+      idText={t('message.renderer.sourceDeviceId', { id: device.deviceId })}
+      label={label}
+      onPress={onOpen ? () => onOpen(device.deviceId) : undefined}
+      openHint={t('message.renderer.openSourceDeviceHint', { id: device.deviceId })}
+      testID="message.sourceDevice"
+    />
   );
 }
 
 /** 插件任务派发的消息:气泡外的来源标签;与气泡内的本轮插件调用头(PluginInvocationHeader)是两回事。 */
-function SourcePluginLabel({ plugin }: { plugin: MessageSourcePlugin }) {
+function SourcePluginLabel({ align, plugin }: { align: 'user' | 'agent'; plugin: MessageSourcePlugin }) {
   const { colors } = useTheme();
-  const { i18n: i18nInstance } = useTranslation();
-  const styles = useThemedStyles(makeStyles);
+  const { t, i18n: i18nInstance } = useTranslation();
   const label = useMemo(() => sourcePluginLabel(plugin), [plugin, i18nInstance.language]);
   return (
-    <View accessibilityLabel={label} accessible style={styles.automationOriginRow} testID="message.sourcePlugin">
-      <Ghost color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-      <Text numberOfLines={1} style={styles.automationOriginText}>{label}</Text>
-    </View>
+    <SourceLabelWithId
+      align={align}
+      icon={<Ghost color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
+      idText={t('message.renderer.sourcePluginId', { id: plugin.pluginId })}
+      label={label}
+      testID="message.sourcePlugin"
+    />
   );
 }
 
@@ -3841,19 +3893,18 @@ function MessageBubble({
       ) : null}
       {automationOrigin ? (
         // 自动化任务注入的消息:气泡上方渲来源标签(对齐桌面;手机版暂不做
-        // 点击跳转自动化页,纯展示)。共享任务访客的脱敏来源没有名字,显示通用文案。
-        <View style={styles.automationOriginRow} testID="message.automationOrigin">
-          <Timer color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />
-          <Text numberOfLines={1} style={styles.automationOriginText}>
-            {automationOriginLabel(automationOrigin)}
-          </Text>
-        </View>
+        // 点击跳转自动化页)。共享任务访客的脱敏来源没有名字与 ID,显示通用文案。
+        <AutomationOriginLabel align={isUser ? 'user' : 'agent'} origin={automationOrigin} />
       ) : null}
       {item.message.kind === 'user' && item.message.sessionOrigin ? (
-        <SessionOriginLabel origin={item.message.sessionOrigin} onOpen={actions.onOpenOriginSession} />
+        <SessionOriginLabel
+          align={isUser ? 'user' : 'agent'}
+          origin={item.message.sessionOrigin}
+          onOpen={actions.onOpenOriginSession}
+        />
       ) : null}
       {item.message.kind === 'user' && item.message.sourcePlugin ? (
-        <SourcePluginLabel plugin={item.message.sourcePlugin} />
+        <SourcePluginLabel align={isUser ? 'user' : 'agent'} plugin={item.message.sourcePlugin} />
       ) : null}
       {item.message.kind === 'user'
         && shouldShowSourceDevice(item.message.sourceDevice, actions.viewerDeviceId) ? (
