@@ -1435,3 +1435,23 @@ it('forwards viewerHidden for the bound lease without needing control', async ()
     h.controller.request('phone', { op: 'viewerHidden', lease, hidden: false }),
   ).rejects.toThrow('DESKTOP_VIDEO_UNAVAILABLE');
 });
+it('reports each background viewing change once, ending it when control returns', async () => {
+  const h = harness(),
+    { lease } = await h.start();
+  h.deps.videoBackground = vi.fn();
+  expect(h.controller.isBackgroundViewing(lease)).toBe(false);
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  expect(h.controller.isBackgroundViewing(lease)).toBe(true);
+  expect(h.controller.isBackgroundViewing('stale')).toBe(false);
+  await h.controller.request('phone', { op: 'control', lease, enabled: true });
+  expect(h.controller.isBackgroundViewing(lease)).toBe(false);
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: true });
+  await h.controller.request('phone', { op: 'presentation', lease, enabled: false });
+  expect(vi.mocked(h.deps.videoBackground).mock.calls).toEqual([
+    [lease, true],
+    [lease, false],
+    [lease, true],
+    [lease, false],
+  ]);
+});
