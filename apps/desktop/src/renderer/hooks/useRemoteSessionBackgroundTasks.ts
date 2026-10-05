@@ -17,7 +17,11 @@ import { useTranslation } from 'react-i18next';
 
 import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
-import { stopAllBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import {
+  canManageBackgroundTasks,
+  stopAllBackgroundTasks,
+  stopBackgroundTask,
+} from '@/lib/backgroundTaskStop';
 import { listSessionBackgroundTasksFor, sessionBackgroundActivityFor } from '@/lib/makerTransport';
 
 import type { RunningBashTask } from './useBackgroundBashTasks';
@@ -67,7 +71,12 @@ export function useRemoteSessionBackgroundTasks(
   const connected =
     Boolean(deviceId) && remoteDevices.some((d) => d.deviceId === deviceId && d.connected);
   const visible = useDocumentVisible(Boolean(deviceId));
-  const enabled = Boolean(sessionId) && connected && visible && !foregroundRunning;
+  // 共享任务访客没有后台任务管理权:不读取、不显示,保持与改动前一致。
+  const enabled =
+    Boolean(sessionId && canManageBackgroundTasks(sessionId)) &&
+    connected &&
+    visible &&
+    !foregroundRunning;
 
   // 快照带 sessionId:切会话后旧会话的快照不会被当成新会话的状态输出。
   const [snapshot, setSnapshot] = useState<RemoteBackgroundState & { sessionId?: string }>(

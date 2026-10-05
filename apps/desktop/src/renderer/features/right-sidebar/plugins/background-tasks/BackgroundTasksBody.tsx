@@ -58,7 +58,7 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
-import { stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import {
   getWorkflowProgressFor,
@@ -198,14 +198,15 @@ function workflowAgentCounts(
   return total > 0 ? { done, total } : null;
 }
 
-/** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId。
- *  远程会话由 stopBackgroundTask 按会话归属隧道到被控端执行。 */
+/** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId +
+ *  有后台任务管理权(共享任务访客没有)。远程会话由 stopBackgroundTask 按会话归属
+ *  隧道到被控端执行。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   return (
     item.status === 'running' &&
     item.provider === 'claude-code' &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId)
+    Boolean(sessionId && canManageBackgroundTasks(sessionId))
   );
 }
 

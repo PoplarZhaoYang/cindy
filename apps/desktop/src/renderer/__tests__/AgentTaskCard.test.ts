@@ -48,7 +48,9 @@ vi.mock('@/features/right-sidebar/lib/openSubagentsTab', () => ({
 const { getWorkflowProgressForMock } = vi.hoisted(() => ({
   getWorkflowProgressForMock: vi.fn().mockResolvedValue(null),
 }));
-const { stopAgentTaskForMock, reportStopFailureMock } = vi.hoisted(() => ({
+const { stopAgentTaskForMock, reportStopFailureMock, canManageMock } = vi.hoisted(() => ({
+  // 共享任务访客(房主保留后台任务管理权)用 guest- 前缀模拟。
+  canManageMock: vi.fn((sessionId: string) => !sessionId.startsWith('guest-')),
   // 默认按本机路由:落到 window.electronAPI.maker.stopAgentTask(与真实实现的本机分支一致)。
   stopAgentTaskForMock: vi.fn((sessionId: string, taskId: string) =>
     (
@@ -65,6 +67,7 @@ vi.mock('@/lib/makerTransport', () => ({
   readBackgroundTaskOutputTailFor: vi.fn().mockResolvedValue({ ok: false, reason: 'unavailable' }),
 }));
 vi.mock('@/lib/backgroundTaskStop', () => ({
+  canManageBackgroundTasks: (sessionId: string) => canManageMock(sessionId),
   stopBackgroundTask: stopAgentTaskForMock,
 }));
 vi.mock('@/lib/backgroundTaskStopFailure', () => ({
@@ -485,6 +488,20 @@ describe('AgentTaskCard', () => {
       }),
     );
     expect(stopButton(noSession.container)).toBeNull();
+
+    // 共享任务访客没有后台任务管理权:不给停止入口。
+    const sharedGuest = render(
+      React.createElement(AgentTaskCard, {
+        sessionId: 'guest-session',
+        update: {
+          provider: 'claude-code',
+          taskId: 'bash-1',
+          status: 'running',
+          taskType: 'local_bash',
+        },
+      }),
+    );
+    expect(stopButton(sharedGuest.container)).toBeNull();
   });
 
   it('opens the existing Subagents panel focused on a PI durable run alias', () => {

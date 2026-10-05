@@ -38,6 +38,7 @@ vi.mock('@/lib/makerTransport', () => ({
   listSessionBackgroundTasksFor: mocks.list,
 }));
 vi.mock('@/lib/backgroundTaskStop', () => ({
+  canManageBackgroundTasks: (sessionId: string) => !sessionId.startsWith('guest-'),
   stopBackgroundTask: mocks.stopTask,
   stopAllBackgroundTasks: mocks.stopAll,
 }));
@@ -138,6 +139,14 @@ describe('useRemoteSessionBackgroundTasks', () => {
     await flush();
     expect(mocks.activity).toHaveBeenCalledTimes(callsDuringTurn + 1);
     expect(result.current.active).toBe(true);
+  });
+
+  it('共享任务访客没有后台任务管理权:不读取、不显示', async () => {
+    mocks.activity.mockResolvedValue({ active: true });
+    const { result } = renderHook(() => useRemoteSessionBackgroundTasks('guest-s', 'dev-1', false));
+    await flush();
+    expect(mocks.activity).not.toHaveBeenCalled();
+    expect(result.current.active).toBe(false);
   });
 
   it('设备断连或窗口不可见时不读取', async () => {

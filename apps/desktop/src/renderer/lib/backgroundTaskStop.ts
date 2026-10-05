@@ -7,12 +7,26 @@
  * 状态,仍由事件流与快照对账收口。
  */
 
+import { isSharedTaskPeer } from '@cindy/device-link';
+
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+
 import { makerChatStore } from './makerChatStore';
 import {
   isRemoteSessionSticky,
   stopAgentTaskFor,
   stopSessionBackgroundTasksFor,
 } from './makerTransport';
+
+/**
+ * 后台任务管理入口(停止按钮 / 状态栏后台模式)的唯一可见判据:本机会话或同账号
+ * 远程会话。共享任务访客看的是房主的任务,后台任务管理权保留给房主
+ * (docs/product-rules/shared-task-mode.md),访客白名单也不放行停止通道 —— 不给
+ * 入口,避免点了被拒却毫无反馈。
+ */
+export function canManageBackgroundTasks(sessionId: string): boolean {
+  return !isSharedTaskPeer(getStickySessionDeviceId(sessionId) ?? '');
+}
 
 export async function stopBackgroundTask(sessionId: string, taskId: string): Promise<void> {
   await stopAgentTaskFor(sessionId, taskId);

@@ -31,7 +31,7 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import { stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
@@ -368,7 +368,8 @@ export function AgentTaskCard({
     status === 'running' &&
     Boolean(sessionId) &&
     Boolean(update?.taskId) &&
-    providerCanStop;
+    providerCanStop &&
+    Boolean(sessionId && canManageBackgroundTasks(sessionId));
   const handleStop = useCallback(() => {
     if (!sessionId || !update?.taskId) return;
     setStopping(true);
