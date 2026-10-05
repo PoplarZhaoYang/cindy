@@ -381,7 +381,8 @@ schema，服务端无需改动。
 
 Desktop 控制端在远程任务的输入框状态栏显示后台任务提示：进入任务、前台 turn 结束、设备重连或
 窗口重新可见时，读取已登记的只读 `maker:session-background-activity` 与
-`maker:session-background-tasks:list`，之后在「在线 + 可见 + 无前台 turn」期间每 15 秒复查；
+`maker:session-background-tasks:list`（两者登记为后台 invoke，让位于用户操作），之后在「在线 + 可见 +
+无前台 turn」期间每 15 秒复查；
 不依赖镜像事件，断连或停读时清空提示。读取失败（含旧被控端）按无后台任务处理。
 
 同账号 invoke allowlist 新增写通道 `maker:agent-task:stop`（单个后台任务）与
