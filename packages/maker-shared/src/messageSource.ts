@@ -190,6 +190,40 @@ export function messageSourceSenderFromMeta(meta: unknown): MessageSourceSender 
   return undefined;
 }
 
+export type MessageSourceIdKind = 'plugin' | 'teammate' | 'session' | 'automation' | 'member';
+
+export interface MessageSourceIdEntry {
+  kind: MessageSourceIdKind;
+  id: string;
+}
+
+/**
+ * 可见「谁发的」标签对应的 ID 列表——桌面悬停、手机长按、排队行共用，与标签同一优先级：
+ * 插件 → 伙伴（伙伴 id + 来源任务 id）→ 任务 → Orca 发送方任务 → 自动化（Hook 不算）→ 共享成员。
+ * 脱敏后没有 id 的来源返回空数组（标签保持静态）。设备 id 属另一维度，不在此列。
+ */
+export function messageSourceIdEntries(meta: unknown): MessageSourceIdEntry[] {
+  const sender = messageSourceSenderFromMeta(meta);
+  if (sender?.kind === 'plugin') return [{ kind: 'plugin', id: sender.pluginId }];
+  if (sender?.kind === 'shared-member') return [{ kind: 'member', id: sender.memberId }];
+  if (sender?.kind === 'session') {
+    return [
+      ...(sender.botId ? [{ kind: 'teammate' as const, id: sender.botId }] : []),
+      ...(sender.sessionId ? [{ kind: 'session' as const, id: sender.sessionId }] : []),
+    ];
+  }
+  const origin = asRecord(asRecord(meta)?.origin);
+  if (origin?.kind === 'orca') {
+    const sessionId = readString(origin, 'senderSessionId');
+    return sessionId ? [{ kind: 'session', id: sessionId }] : [];
+  }
+  if (origin?.kind === 'scheduler' && !isHookSchedulerOrigin(origin)) {
+    const scheduleId = readString(origin, 'scheduleId');
+    return scheduleId ? [{ kind: 'automation', id: scheduleId }] : [];
+  }
+  return [];
+}
+
 /**
  * 「谁发的」的一句话描述（不带前缀与结尾）：`[消息来源]` 说明与交接摘要共用，
  * 两处措辞与 ID 永远一致。例：`由任务「X」(session_id: s) 发送`。

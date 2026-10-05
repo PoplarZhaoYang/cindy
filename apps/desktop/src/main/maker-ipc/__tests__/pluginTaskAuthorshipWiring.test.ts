@@ -49,7 +49,11 @@ it('marks plugin dispatch and every queue fallback with the host-only receipt', 
   expect(dispatch).toContain("message: text, autoReviewUserText: { kind: 'delegated-continuation' }, forceQueue: true");
   const queues = [...dispatch.matchAll(/await enqueueSendToSessionMessage\(\{([\s\S]*?)\}\);/g)];
   expect(queues).toHaveLength(4);
-  for (const call of queues) expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
+  for (const call of queues) {
+    expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
+    // 插件来源随每个入队回退分支传递(含 queued-before-dispatch 竞态),排队项不丢插件身份。
+    expect(call[1]).toMatch(/\bsourcePlugin\b/);
+  }
   // Both newly created and resumed direct tasks persist the same authored metadata.
   expect(dispatch.match(/agentMeta: inputAgentMeta/g)).toHaveLength(2);
 });

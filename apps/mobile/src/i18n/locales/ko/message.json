@@ -40,6 +40,7 @@
     "sourceDeviceDesktop": "컴퓨터에서 전송",
     "sourceDeviceId": "기기 ID: {{id}}",
     "sourceSessionId": "세션 ID: {{id}}",
+    "sourceTeammateId": "동료 ID: {{id}}",
     "sourceAutomationId": "자동화 ID: {{id}}",
     "sourcePluginId": "플러그인 ID: {{id}}",
     "sourceMemberId": "멤버 ID: {{id}}",

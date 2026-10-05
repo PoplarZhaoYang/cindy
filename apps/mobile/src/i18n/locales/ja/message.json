@@ -40,6 +40,7 @@
     "sourceDeviceDesktop": "パソコンから送信",
     "sourceDeviceId": "デバイス ID：{{id}}",
     "sourceSessionId": "セッション ID：{{id}}",
+    "sourceTeammateId": "仲間 ID：{{id}}",
     "sourceAutomationId": "自動化 ID：{{id}}",
     "sourcePluginId": "プラグイン ID：{{id}}",
     "sourceMemberId": "メンバー ID：{{id}}",

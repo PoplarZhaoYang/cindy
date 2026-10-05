@@ -557,7 +557,8 @@ describe('pending bubble source labels', () => {
       'auto-redacted': null,
       task: '任务 ID：s1',
       'task-redacted': null,
-      mate: '任务 ID：s2',
+      // 伙伴来源与模型说明一致:伙伴 ID + 来源任务 ID。
+      mate: '伙伴 ID：b1\n任务 ID：s2',
       plugin: '插件 ID：pl-1',
       mine: null,
     });

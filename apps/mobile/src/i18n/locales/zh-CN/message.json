@@ -40,6 +40,7 @@
     "sourceDeviceDesktop": "从电脑发送",
     "sourceDeviceId": "设备 ID：{{id}}",
     "sourceSessionId": "任务 ID：{{id}}",
+    "sourceTeammateId": "伙伴 ID：{{id}}",
     "sourceAutomationId": "自动化 ID：{{id}}",
     "sourcePluginId": "插件 ID：{{id}}",
     "sourceMemberId": "成员 ID：{{id}}",

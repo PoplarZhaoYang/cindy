@@ -3,6 +3,7 @@ import {
   buildClientDeviceNote,
   buildMessageSourceNote,
   describeMessageSourceSender,
+  messageSourceIdEntries,
   formatSourceRef,
   promptSafeSourceName,
   messageSourceSenderFromMeta,
@@ -131,6 +132,39 @@ describe('messageSourceSenderFromMeta', () => {
 
   it('reads plugins tolerantly', () => {
     expect(readMessageSourcePlugin({ sourcePlugin: { name: 'x' } })).toBeUndefined();
+  });
+});
+
+describe('messageSourceIdEntries', () => {
+  it('lists the ids of the visible sender label, in the same priority as the label', () => {
+    expect(
+      messageSourceIdEntries({
+        origin: { kind: 'session', senderSessionId: 's-1' },
+        sourcePlugin: { pluginId: 'p-1' },
+      }),
+    ).toEqual([{ kind: 'plugin', id: 'p-1' }]);
+    expect(
+      messageSourceIdEntries({ origin: { kind: 'session', senderSessionId: 's-1', senderBotId: 'b-1' } }),
+    ).toEqual([
+      { kind: 'teammate', id: 'b-1' },
+      { kind: 'session', id: 's-1' },
+    ]);
+    expect(messageSourceIdEntries({ origin: { kind: 'scheduler', scheduleId: 'sch-1' } })).toEqual([
+      { kind: 'automation', id: 'sch-1' },
+    ]);
+    expect(messageSourceIdEntries({ origin: { kind: 'orca', senderSessionId: 'w-s' } })).toEqual([
+      { kind: 'session', id: 'w-s' },
+    ]);
+    expect(messageSourceIdEntries({ sharedTaskAuthor: { memberId: 'm-1', displayName: 'A' } })).toEqual([
+      { kind: 'member', id: 'm-1' },
+    ]);
+  });
+
+  it('returns nothing for hook channels, redacted sources and local input', () => {
+    expect(messageSourceIdEntries({ origin: { kind: 'scheduler', scheduleId: 'hook:c' } })).toEqual([]);
+    expect(messageSourceIdEntries({ origin: { kind: 'scheduler' } })).toEqual([]);
+    expect(messageSourceIdEntries({ origin: { kind: 'session' } })).toEqual([]);
+    expect(messageSourceIdEntries({})).toEqual([]);
   });
 });
 

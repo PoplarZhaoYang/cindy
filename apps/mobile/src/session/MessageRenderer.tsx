@@ -270,6 +270,7 @@ import {
   imSourceHeaderTitle,
   sessionOriginLabel,
   sourceDeviceLabel,
+  sourceIdText,
   sourcePluginLabel,
 } from '@/session/messageSourceLabels';
 import {
@@ -3120,10 +3121,13 @@ function SessionOriginLabel({
   align,
   origin,
   onOpen,
+  sourceMeta,
 }: {
   align: 'user' | 'agent';
   origin: NonNullable<NormalizedRemoteMessage['sessionOrigin']>;
   onOpen?: (sessionId: string) => void;
+  /** 原始 agentMeta:长按 ID 与桌面悬停、排队行同源(伙伴给伙伴 ID + 任务 ID)。 */
+  sourceMeta?: unknown;
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
@@ -3132,7 +3136,8 @@ function SessionOriginLabel({
     <SourceLabelWithId
       align={align}
       icon={<Send color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.thin} />}
-      idText={senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined}
+      idText={sourceIdText(sourceMeta)
+        ?? (senderSessionId ? t('message.renderer.sourceSessionId', { id: senderSessionId }) : undefined)}
       label={sessionOriginLabel(origin)}
       onPress={onOpen && senderSessionId ? () => onOpen(senderSessionId) : undefined}
       openHint={t('message.renderer.openSessionOrigin')}
@@ -3908,6 +3913,7 @@ function MessageBubble({
           align={isUser ? 'user' : 'agent'}
           origin={item.message.sessionOrigin}
           onOpen={actions.onOpenOriginSession}
+          sourceMeta={item.message.source.agentMeta}
         />
       ) : null}
       {item.message.kind === 'user' && item.message.sourcePlugin ? (

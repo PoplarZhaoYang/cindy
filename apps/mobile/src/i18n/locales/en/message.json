@@ -40,6 +40,7 @@
     "sourceDeviceDesktop": "Sent from a computer",
     "sourceDeviceId": "Device ID: {{id}}",
     "sourceSessionId": "Session ID: {{id}}",
+    "sourceTeammateId": "Teammate ID: {{id}}",
     "sourceAutomationId": "Automation ID: {{id}}",
     "sourcePluginId": "Plugin ID: {{id}}",
     "sourceMemberId": "Member ID: {{id}}",

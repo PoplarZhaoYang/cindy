@@ -41,6 +41,7 @@ import {
   automationOriginLabel,
   orcaMessageTitle,
   sessionOriginLabel,
+  sourceIdText,
   sourcePluginLabel,
 } from '@/session/messageSourceLabels';
 import { parseOrcaPersistedMessage, readOrcaPersistedSource } from '@/session/orcaCollab';
@@ -230,6 +231,12 @@ export function pendingSendBubbleText(item: PendingSendTextSource): string {
   return visibleText;
 }
 
+/** 排队来源的 ID 文案:与已发送消息、桌面排队悬停共用 messageSourceIdEntries(插件优先、伙伴带伙伴 ID)。 */
+function idTextField(item: unknown): { idText?: string } {
+  const idText = sourceIdText(item);
+  return idText ? { idText } : {};
+}
+
 /**
  * 排队条目的来源标签(对齐桌面 pendingQueueRowPresentation):自动化、其他任务 / 伙伴、
  * Orca Lead / Worker、插件。只认主机盖章的 origin / sourcePlugin;本人输入返回 null。
@@ -248,7 +255,7 @@ export function pendingSendSource(
     return {
       kind: 'automation',
       label: automationOriginLabel({ scheduleName }),
-      ...(scheduleId ? { idText: i18n.t('message.renderer.sourceAutomationId', { id: scheduleId }) } : {}),
+      ...idTextField(item),
     };
   }
   // 插件优先(与 messageSourceSenderFromMeta 同序):插件在某任务里派发时同时带来源任务 origin。
@@ -257,7 +264,7 @@ export function pendingSendSource(
     return {
       kind: 'plugin',
       label: sourcePluginLabel(plugin),
-      idText: i18n.t('message.renderer.sourcePluginId', { id: plugin.pluginId }),
+      ...idTextField(item),
     };
   }
   if (origin?.kind === 'session') {
@@ -265,13 +272,10 @@ export function pendingSendSource(
       ? sanitizeSourceName(origin.senderBotName) ?? sanitizeSourceName(origin.senderBotId)
       : undefined;
     const senderSessionTitle = sanitizeSourceName(origin.senderSessionTitle);
-    const senderSessionId = readNonEmptyString(origin.senderSessionId);
     return {
       kind: senderBotName ? 'teammate' : 'session',
       label: sessionOriginLabel({ senderBotName, senderSessionTitle }),
-      ...(senderSessionId
-        ? { idText: i18n.t('message.renderer.sourceSessionId', { id: senderSessionId }) }
-        : {}),
+      ...idTextField(item),
     };
   }
   if (origin?.kind === 'orca') {

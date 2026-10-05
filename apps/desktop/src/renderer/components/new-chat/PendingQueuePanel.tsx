@@ -46,6 +46,7 @@ import { useBotProfiles } from '@/features/bots/botStore';
 import { cn } from '@/lib/utils';
 import type { QueuedMessage } from '@/lib/makerChatStore';
 import { QueueSourceDeviceTag } from '@/components/chat/MessageSourceLabels';
+import { messageSourceIdEntries } from '@cindy/maker-shared/message-source';
 import {
   activatePendingQueueRowFocus,
   activatePendingQueueRowHover,
@@ -149,22 +150,18 @@ function isPendingQueueSteerShortcut(event: ReactKeyboardEvent): boolean {
 }
 
 
-/** 排队来源行的悬停提示:给出来源 ID(对齐已发送消息来源标签的悬停 ID);脱敏来源没有 ID。 */
+/**
+ * 排队来源行的悬停提示:与可见标签同一优先级的来源 ID(共享 messageSourceIdEntries:插件优先,
+ * 伙伴给伙伴 ID + 任务 ID);脱敏来源没有 ID。
+ */
 function queueRowSourceIdTitle(
   entry: QueuedMessage,
   t: (key: string, opts?: Record<string, unknown>) => string,
 ): string | null {
-  const origin = entry.origin;
-  if (origin?.kind === 'scheduler' && origin.scheduleId && !origin.scheduleId.startsWith('hook:')) {
-    return t('chat.userMessage.sourceIds.automation', { id: origin.scheduleId });
-  }
-  if (origin?.kind === 'session' && origin.senderSessionId) {
-    return t('chat.userMessage.sourceIds.session', { id: origin.senderSessionId });
-  }
-  if (entry.sourcePlugin?.pluginId) {
-    return t('chat.userMessage.sourceIds.plugin', { id: entry.sourcePlugin.pluginId });
-  }
-  return null;
+  const lines = messageSourceIdEntries(entry).map(({ kind, id }) =>
+    t(`chat.userMessage.sourceIds.${kind}`, { id }),
+  );
+  return lines.length > 0 ? lines.join('\n') : null;
 }
 
 export function PendingQueuePanel({

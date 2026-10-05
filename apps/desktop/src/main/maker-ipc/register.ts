@@ -9818,6 +9818,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               onAcceptedRollback,
               onAcceptedCommit,
               origin: queuedOrigin,
+              sourcePlugin,
               autoReviewUserText: params.autoReviewUserText,
             });
             return {

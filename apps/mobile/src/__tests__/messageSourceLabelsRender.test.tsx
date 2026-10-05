@@ -459,6 +459,12 @@ describe("source labels reveal their ids on long press", () => {
         "message.sessionOrigin",
       ),
     ).toContain("任务 ID：sess-9");
+    const teammate = longPress(
+      [msg("t1", "go", { origin: { kind: "session", senderSessionId: "sess-2", senderBotId: "bot-7", senderBotName: "Lizi" } })],
+      "message.sessionOrigin",
+    );
+    expect(teammate).toContain("伙伴 ID：bot-7");
+    expect(teammate).toContain("任务 ID：sess-2");
     expect(
       longPress(
         [msg("a1", "tick", { origin: { kind: "scheduler", scheduleId: "sch-7", scheduleName: "心跳" } })],

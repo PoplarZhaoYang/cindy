@@ -9,8 +9,10 @@
  * 分享图不显示任何来源标签，这里的文案不进分享投影。
  */
 import {
+  messageSourceIdEntries,
   sanitizeSourceName,
   type MessageSourceDevice,
+  type MessageSourceIdKind,
   type MessageSourcePlugin,
 } from "@cindy/maker-shared/message-source";
 import { i18n } from "@/i18n";
@@ -152,3 +154,21 @@ export function orcaMessageTitle(
     ? i18n.t("interaction.collab.fromWorkerNamed", { role })
     : i18n.t("interaction.collab.fromWorker");
 }
+
+const SOURCE_ID_I18N_KEYS: Record<MessageSourceIdKind, string> = {
+  plugin: "message.renderer.sourcePluginId",
+  teammate: "message.renderer.sourceTeammateId",
+  session: "message.renderer.sourceSessionId",
+  automation: "message.renderer.sourceAutomationId",
+  member: "message.renderer.sourceMemberId",
+};
+
+/**
+ * 可见「谁发的」标签对应的 ID 文案(长按显示):与桌面悬停、排队行共用 messageSourceIdEntries,
+ * 插件优先、伙伴给伙伴 ID + 任务 ID。没有 ID(脱敏 / 本人输入)返回 undefined。
+ */
+export function sourceIdText(meta: unknown): string | undefined {
+  const lines = messageSourceIdEntries(meta).map(({ kind, id }) => i18n.t(SOURCE_ID_I18N_KEYS[kind], { id }));
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
