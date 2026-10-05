@@ -23,6 +23,7 @@ import {
 } from '@cindy/maker-shared/agent-task';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
 import {
+  isHookSchedulerOrigin,
   readMessageSourceDevice,
   readMessageSourcePlugin,
   sanitizeSourceName,
@@ -1077,7 +1078,7 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
   const scheduleId = readString(origin.scheduleId);
   // Hook 渠道消息复用 scheduler 形态(scheduleId 为 `hook:<连接>`),不是自动化:不出自动化标签
   // (有 hookSource 时由渠道卡片表明来源)。
-  if (scheduleId?.startsWith('hook:')) return {};
+  if (isHookSchedulerOrigin(origin)) return {};
   if (!scheduleId) return { automationOrigin: {} };
   const scheduleName = readString(origin.scheduleName);
   return {

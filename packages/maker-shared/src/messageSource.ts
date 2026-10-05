@@ -97,6 +97,21 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
+
+/**
+ * Hook 渠道（Slack / X / 官方 Telegram）消息复用 scheduler 形态的 origin（scheduleId 为
+ * `hook:<连接>`），它们是真人从渠道发来的，不是自动化：界面不显示自动化标签。
+ */
+export function isHookSchedulerOrigin(origin: unknown): boolean {
+  const record = asRecord(origin);
+  return (
+    record?.kind === 'scheduler' &&
+    typeof record.scheduleId === 'string' &&
+    record.scheduleId.startsWith(HOOK_SCHEDULE_ID_PREFIX)
+  );
+}
+
 /** 宽容读取持久化的 sourceDevice；平台缺失或未知时不出标签。 */
 export function readMessageSourceDevice(meta: unknown): MessageSourceDevice | undefined {
   const raw = asRecord(asRecord(meta)?.sourceDevice);

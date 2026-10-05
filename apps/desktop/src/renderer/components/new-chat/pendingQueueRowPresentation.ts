@@ -1,3 +1,4 @@
+import { isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -59,10 +60,13 @@ export interface PendingQueueRowPresentation {
 export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQueueRowPresentation {
   const origin = entry.origin;
   const isOrca = origin?.kind === 'orca';
-  const isScheduler = origin?.kind === 'scheduler';
+  // Hook 渠道消息复用 scheduler 形态,不是自动化:不显示自动化来源行(与历史气泡一致)。
+  const isHookOrigin = isHookSchedulerOrigin(origin);
+  const isScheduler = origin?.kind === 'scheduler' && !isHookOrigin;
   const isSession = origin?.kind === 'session';
-  const isPlugin = !isOrca && !isScheduler && !isSession && Boolean(entry.sourcePlugin?.pluginId);
-  const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin;
+  const isPlugin = !isOrca && origin?.kind !== 'scheduler' && !isSession && Boolean(entry.sourcePlugin?.pluginId);
+  // Hook 渠道条目同属机器投递(渠道原话),不显示来源行但同样不可编辑/插话。
+  const isMachineGenerated = isOrca || isScheduler || isSession || isPlugin || isHookOrigin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;

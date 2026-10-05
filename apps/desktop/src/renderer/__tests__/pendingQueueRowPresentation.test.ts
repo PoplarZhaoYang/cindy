@@ -198,6 +198,22 @@ describe('getPendingQueueRowPresentation', () => {
     ).toBeNull();
   });
 
+  it('never presents hook channel rows (hook:<conn> scheduler origins) as automation, but keeps them locked', () => {
+    const presentation = getPendingQueueRowPresentation(
+      queuedMessage({
+        origin: { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' },
+      }),
+    );
+    expect(presentation).toMatchObject({
+      isScheduler: false,
+      isSession: false,
+      isPlugin: false,
+      senderLabel: null,
+      canEdit: false,
+      canSteer: false,
+    });
+  });
+
   it('keeps regular queued messages editable and steerable', () => {
     const presentation = getPendingQueueRowPresentation(queuedMessage());
 

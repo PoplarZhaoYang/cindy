@@ -526,6 +526,8 @@ describe('pending bubble source labels', () => {
       queue: [
         withOrigin('auto', { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR 心跳' }),
         withOrigin('auto-redacted', { kind: 'scheduler' }),
+        // Hook 渠道消息复用 scheduler 形态:不是自动化,与历史消息一致不出自动化标签。
+        withOrigin('hook', { kind: 'scheduler', scheduleId: 'hook:conn-1', scheduleName: 'Hook · Team Slack' }),
         withOrigin('task', { kind: 'session', senderSessionId: 's1', senderSessionTitle: '发布清单', displayText: 'body' }),
         withOrigin('task-redacted', { kind: 'session', senderSessionId: '', displayText: 'body' }),
         withOrigin('mate', { kind: 'session', senderSessionId: 's2', senderBotId: 'b1', senderBotName: 'Cindy', displayText: 'body' }),
@@ -540,6 +542,7 @@ describe('pending bubble source labels', () => {
     expect(items.map((item) => [item.clientId, item.source?.kind ?? null, item.source?.label ?? null])).toEqual([
       ['auto', 'automation', '由自动化「PR 心跳」发送'],
       ['auto-redacted', 'automation', '由自动化发送'],
+      ['hook', null, null],
       ['task', 'session', '由任务「发布清单」发送'],
       ['task-redacted', 'session', '由其他任务发送'],
       ['mate', 'teammate', '由伙伴「Cindy」发送'],
