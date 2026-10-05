@@ -70,10 +70,6 @@ export class ToolLoopMonitor {
 
   onToolUse(toolUseId: string, toolName: unknown, input: unknown): void {
     this.guard.onToolUse(toolUseId, toolName, input);
-    // 模式在新调用开始时就可能被替换(长时调用的结果可能晚于复核结论到达)。
-    if (!this.review) return;
-    const fingerprint = this.guard.callFingerprintAtStart(toolName, input);
-    if (fingerprint !== null && !this.reviewedPattern?.has(fingerprint)) this.cancelReview();
   }
 
   onToolResult(
@@ -139,9 +135,18 @@ export class ToolLoopMonitor {
     ]).then((outcome) => {
       clearTimeout(timer);
       if (this.review !== controller) return;
+      const pattern = this.reviewedPattern;
       this.review = null;
       this.reviewedPattern = null;
       controller.abort();
+      // 结论到达时统一校验一次:仍有在途调用不属于被复核模式(已换做法、结果未到),
+      // 结论不适用于它,直接丢弃。此时流式调用的参数已补齐,不会误判。
+      if (pattern && this.guard.hasPendingCallOutside(pattern)) {
+        this.opts.logger.info('tool loop review discarded: pattern replaced by an in-flight call', {
+          reason: verdict.reason,
+        });
+        return;
+      }
       const decision: ToolLoopReviewDecision = outcome === 'continue' ? 'continue' : 'stop';
       this.opts.logger.info('tool loop review settled', {
         decision,

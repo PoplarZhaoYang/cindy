@@ -345,13 +345,15 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 调用开始时的 name+input 指纹,供复核在调用开始即判断模式是否被替换;等待/轮询工具
-   * 与无名调用返回 null(不打破模式)。纯计算,不改任何判定状态。
+   * 是否有在途(已开始、结果未到)的普通调用不属于给定的调用集合。等待/轮询工具不算。
+   * 纯查询,不改判定状态;在途调用的参数以最近一次 onToolUse 补齐后的为准。
    */
-  callFingerprintAtStart(toolName: unknown, input: unknown): string | null {
-    if (typeof toolName !== 'string' || toolName.length === 0) return null;
-    if (isPollingTool(toolName, input, false)) return null;
-    return fingerprintToolCall(toolName, input, null);
+  hasPendingCallOutside(pattern: ReadonlySet<string>): boolean {
+    for (const call of this.pendingToolUses.values()) {
+      if (isPollingTool(call.name, call.input, false)) continue;
+      if (!pattern.has(fingerprintToolCall(call.name, call.input, null))) return true;
+    }
+    return false;
   }
 
   /** 最近一次疑似判定涉及的调用集合。 */

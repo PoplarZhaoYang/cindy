@@ -151,20 +151,29 @@ describe('ToolLoopMonitor', () => {
     expect(reviewer).toHaveBeenCalledTimes(2);
   });
 
-  it('discards a pending review as soon as a replacement call starts', async () => {
+  it('discards a settled review while a replacement call is still in flight', async () => {
     const { reviewer, pending } = deferredReviewer();
     const t = setup(reviewer);
     t.repeatTimes(4);
-    // 同一被复核调用再次开始、等待工具开始:都不打破模式。
-    t.monitor.onToolUse('again', 'read', { path: 'same.ts' });
-    t.monitor.onToolUse('wait', 'TaskOutput', { task_id: 'x' });
-    expect(pending[0]?.signal.aborted).toBe(false);
-    // 一个不同的长时调用刚开始、结果未到:复核即作废。
+    // 一个不同的长时调用已开始、结果未到时结论到达:不适用于它,丢弃。
     t.monitor.onToolUse('build', 'exec', { cmd: 'pnpm build' });
-    expect(pending[0]?.signal.aborted).toBe(true);
     pending[0]?.resolve('stop');
     await vi.advanceTimersByTimeAsync(0);
     expect(t.stops).toEqual([]);
+  });
+
+  it('applies a settled review when in-flight calls belong to the reviewed pattern', async () => {
+    const { reviewer, pending } = deferredReviewer();
+    const t = setup(reviewer);
+    t.repeatTimes(4);
+    // Claude 流式:先以空参数开始,完整参数随后补齐为同一被复核调用;等待工具不算。
+    t.monitor.onToolUse('again', 'read', {});
+    t.monitor.onToolUse('again', 'read', { path: 'same.ts' });
+    t.monitor.onToolUse('wait', 'TaskOutput', { task_id: 'x' });
+    expect(pending[0]?.signal.aborted).toBe(false);
+    pending[0]?.resolve('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.stops).toHaveLength(1);
   });
 
   it('ignores review results after dispose or a new turn', async () => {

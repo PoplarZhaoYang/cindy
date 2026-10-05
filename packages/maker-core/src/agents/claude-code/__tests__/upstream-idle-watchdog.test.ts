@@ -604,6 +604,38 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     }
   });
 
+  it('子代理结束后丢弃其迟到的复核 stop,不中断父 turn', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'delegate the check' });
+      stream.emit({
+        type: 'assistant', parent_tool_use_id: null,
+        message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_task', name: 'Agent', input: { prompt: 'check' } }] },
+      });
+      for (let i = 0; i < 4; i++) {
+        stream.emit(assistantToolUse(`sub-${i}`, 'gh run view 1', 'toolu_task'));
+        stream.emit(userToolResult(`sub-${i}`, 'in_progress', 'toolu_task'));
+      }
+      await pumpUntil(() => reviewer.mock.calls.length === 1, 'sidechain review started');
+      // 子代理先结束:父 Agent 调用拿到结果。
+      stream.emit(userToolResult('toolu_task', 'subagent finished'));
+      await pumpUntil(() => events.some(e => e.type === 'tool_result_full'
+        && (e.data as { toolUseId?: string }).toolUseId === 'toolu_task'), 'task result delivered');
+      decide('stop');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(toolLoopError(events)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
   it('同一 turn 中途切换模型不重置复核次数', async () => {
     const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
     const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);

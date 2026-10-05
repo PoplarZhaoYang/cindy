@@ -2860,6 +2860,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 与 Pi/Codex 的 toolLoopControlFor 同一前提:等用户确认期间不中断。
           if (closed || toolLoopMonitors.get(scopeKey) !== monitor || !turnInFlight ||
             turnState.interruptRequested || pendingInteractions.size > 0) return;
+          // 子代理已结束(其父 Agent/Task 调用已有结果):迟到结论不能中断父 turn。
+          if (parentToolUseId && !pendingToolIds.has(parentToolUseId)) return;
           interruptForToolLoop(verdict, parentToolUseId);
         },
         logger: log,
