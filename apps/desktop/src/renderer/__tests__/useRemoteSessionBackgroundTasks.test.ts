@@ -209,6 +209,37 @@ describe('useRemoteSessionBackgroundTasks', () => {
     expect(result.current.active).toBe(false);
   });
 
+  it('停止回执迟到时视图已切到别的会话:不清空新会话的提示,也不显示停止中', async () => {
+    mocks.activity.mockResolvedValue({ active: true });
+    let releaseStop!: () => void;
+    mocks.stopAll.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseStop = resolve)),
+    );
+    const { result, rerender } = renderHook(
+      ({ sid }) => useRemoteSessionBackgroundTasks(sid, 'dev-1', false),
+      { initialProps: { sid: 'a' } },
+    );
+    await flush();
+    let stopPromise!: Promise<void>;
+    act(() => {
+      stopPromise = result.current.stopAll();
+    });
+    expect(result.current.stopping).toBe(true);
+
+    rerender({ sid: 'b' });
+    await flush();
+    expect(result.current.active).toBe(true);
+    expect(result.current.stopping).toBe(false);
+
+    await act(async () => {
+      releaseStop();
+      await stopPromise;
+    });
+    expect(mocks.stopAll).toHaveBeenCalledWith('a');
+    expect(result.current.active).toBe(true);
+    expect(result.current.stopping).toBe(false);
+  });
+
   it('「全部停止」成功后,停止前发出的在途读取不会重新点亮提示', async () => {
     mocks.activity.mockResolvedValue({ active: true });
     const { result } = renderHook(() => useRemoteSessionBackgroundTasks('s1', 'dev-1', false));

@@ -73,7 +73,7 @@ export function useRemoteSessionBackgroundTasks(
   const [snapshot, setSnapshot] = useState<RemoteBackgroundState & { sessionId?: string }>(
     EMPTY_STATE,
   );
-  const [stopping, setStopping] = useState(false);
+  const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
   // 读取序号:定时器不等上一轮返回,慢的旧读取只能被更新的结果取代,不能反过来覆盖;
   // 停止成功时把已发出的读取整体作废,避免在途旧快照重新点亮已熄灭的提示。
   const issuedSeqRef = useRef(0);
@@ -115,12 +115,16 @@ export function useRemoteSessionBackgroundTasks(
   // stopAll 读 ref:按钮点击时以最新快照为准,避免陈旧闭包。
   const currentRef = useRef(current);
   currentRef.current = current;
+  // 停止回执只作用于发起它的会话:视图已切到别的会话时,迟到的回执不得作废新会话的
+  // 读取、清空它的提示或让它显示「停止中」。
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   const stopAll = useCallback(async () => {
     if (!sessionId) return;
     const { active, tasks } = currentRef.current;
     if (!active && tasks.length === 0) return;
-    setStopping(true);
+    setStoppingSessionId(sessionId);
     try {
       // 与本机同语义:有模型活动 → 关闭被控端会话进程(后台命令随之终止);
       // 只有后台命令 → 逐个精确停止,不关会话进程。
@@ -134,14 +138,21 @@ export function useRemoteSessionBackgroundTasks(
         if (failed) throw failed.reason;
       }
       // 成功后立即熄灭并作废在途读取;仍有残留的话下一次复查会重新点亮。
-      appliedSeqRef.current = issuedSeqRef.current;
-      setSnapshot({ ...EMPTY_STATE, sessionId });
+      if (sessionIdRef.current === sessionId) {
+        appliedSeqRef.current = issuedSeqRef.current;
+        setSnapshot({ ...EMPTY_STATE, sessionId });
+      }
     } catch (error) {
       reportBackgroundTaskStopFailure(error, t);
     } finally {
-      setStopping(false);
+      setStoppingSessionId((prev) => (prev === sessionId ? null : prev));
     }
   }, [sessionId, t]);
 
-  return { active: current.active, tasks: current.tasks, stopping, stopAll };
+  return {
+    active: current.active,
+    tasks: current.tasks,
+    stopping: stoppingSessionId !== null && stoppingSessionId === sessionId,
+    stopAll,
+  };
 }
