@@ -22,7 +22,7 @@ import {
   isProductTurnDoneEvent,
   isTurnContinuationBoundaryEvent,
 } from '@cindy/maker-shared/turn-continuation';
-import { sanitizeSourceName } from '@cindy/maker-shared/message-source';
+import { promptSafeSourceName } from '@cindy/maker-shared/message-source';
 
 const MAX_CAPTURED_TEXT = 64 * 1024;
 
@@ -436,7 +436,9 @@ export function formatAgentMessage(
 }
 
 function formatOrcaWorkerLabel(workerId: string | undefined, workerRole: string | undefined): string {
-  const role = sanitizeSourceName(workerRole?.replace(/[[\]]/g, ' '));
+  // 与其它来源名字同一规则(promptSafeSourceName):方括号/圆括号转全角,角色名既闭合不了
+  // 前缀,也冒充不了 `(worker_id: …)`。
+  const role = promptSafeSourceName(workerRole);
   const id = workerId?.replace(/[\s()[\]「」]+/g, '').slice(0, 128);
   const parts = ['From Orca Worker'];
   if (role) parts.push(role);
