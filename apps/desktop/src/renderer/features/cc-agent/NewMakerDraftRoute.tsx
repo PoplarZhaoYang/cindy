@@ -3704,14 +3704,14 @@ export function NewMakerDraftRoute() {
             // pending 等视图来取,用户切走超过 60s 首条就丢了,对端只剩一个空的未命名任务。
             // 仍交给 SessionView 的只有两类(识别窗口与本机分支一致):
             //  · 开了协同 —— 首轮必须排在被控端起 Worker 之后,等待与输入锁都在视图里;
-            //  · 斜杠命令首条 —— 需要 SessionView 的完整命令分派。
+            //  · 斜杠命令首条(含任意 agent 的空白前缀命令)—— 需要 SessionView 的完整命令分派;
+            //    草稿路由的 rewritePiSkillMessageForSend 读的是本机命令目录,不能用在远程会话上。
             // 侧栏「首条已发出」标记只给直接发送这一条:它的每个终态(受理 / 未受理 / 投递
             // 失败 / 抛错)都在本函数内可见并能撤回;视图交接的失败分支散在 SessionView 里,
             // 不登记就不会留下撤不回的标记。
             const remoteSendWorkingDir = created?.workDir ?? remoteWorkingDir;
             const remoteSlashFirst =
-              /^\/(\S+)(?:\s+(.*))?$/s.test(message) ||
-              (capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message));
+              /^\/(\S+)(?:\s+(.*))?$/s.test(message) || !!leadingSlashInvocation(message);
             const remoteDirectSend =
               !shouldEnableCollab && !remoteSlashFirst && !!remoteSendWorkingDir;
             commitRemoteSessionHandoff({

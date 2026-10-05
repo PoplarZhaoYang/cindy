@@ -42,7 +42,10 @@ describe('NewMakerDraftRoute remote first-message send', () => {
   it('keeps collaboration and slash-command first messages on the SessionView handoff', () => {
     const gate = source.slice(remoteFence, remoteSend);
     expect(gate).toContain('!shouldEnableCollab && !remoteSlashFirst && !!remoteSendWorkingDir');
-    expect(gate).toContain("capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message)");
+    // 空白前缀命令不分 agent 一律交给视图:草稿路由的 Skill 别名改写读本机命令目录,远程不能用。
+    expect(gate).toContain('|| !!leadingSlashInvocation(message);');
+    expect(gate).not.toContain("capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message)");
+    expect(gate).not.toContain('await rewritePiSkillMessageForSend(');
     expect(gate).toContain('if (remoteDirectSend && remoteSendWorkingDir) {');
   });
 
