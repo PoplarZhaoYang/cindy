@@ -938,6 +938,8 @@ export function setControllerDisplayName(deviceId: string, name: string): void {
     controllerDisplayNameByDevice.set(deviceId, normalized);
   } else {
     controllerDisplayNameByDevice.delete(deviceId);
+    // An explicit clear also retires the legacy host name, matching the banner.
+    fallbackControllerNameByDevice.delete(deviceId);
   }
   const displayName = normalized
     ?? reportedControllerNameByDevice.get(deviceId)

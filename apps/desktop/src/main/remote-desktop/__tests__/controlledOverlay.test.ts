@@ -390,3 +390,21 @@ it("follows Cindy's selected appearance rather than only the OS", async () => {
   await settle();
   expect(window.html).toContain('<html>');
 });
+
+it('does not fail when a newer page interrupts the previous measurement', async () => {
+  const { overlay } = fixture();
+  overlay.update(phone);
+  await settle();
+  const window = state.windows[0];
+  let interrupt!: (error: Error) => void;
+  window.webContents.executeJavaScript.mockImplementationOnce(
+    () => new Promise((_, reject) => (interrupt = reject)),
+  );
+  overlay.update(laptop);
+  await settle();
+  overlay.update({ ...laptop, controlling: false });
+  interrupt(new Error('Execution context was destroyed'));
+  await settle();
+  expect(window.destroyed).toBe(false);
+  expect(window.html).toContain('remoteDesktop.viewedByDevice:MacBook');
+});

@@ -883,4 +883,10 @@ describe('被控浮窗读取控制端展示名', () => {
     clearControllerDisplayNames();
     expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
   });
+
+  it('权威名被显式清空时同时清掉旧 presence 主机名', () => {
+    setControllerFallbackDisplayName('ctrl-legacy', 'Legacy Mac');
+    setControllerDisplayName('ctrl-legacy', '');
+    expect(getControllerDisplayName('ctrl-legacy')).toBeUndefined();
+  });
 });

@@ -44,10 +44,10 @@ function overlayHtml(text: string, label: string, dark: boolean, peer: string): 
 :root.dark{color-scheme:dark;--surface:#2c2c2a;--border:#3c3c3a;--text-primary:#d4d4d4;--chip:#3c3c3a}
 html,body{margin:0;height:100%;overflow:hidden;background:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none;cursor:default;-webkit-app-region:drag}
-main{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:${HEIGHT}px;padding:0 4px 0 12px;border:1px solid var(--border);border-radius:${HEIGHT / 2}px;background:var(--surface);color:var(--text-primary);font-size:12px;white-space:nowrap}
+main{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:${HEIGHT}px;padding:0 4px 0 12px;border:1px solid var(--border);border-radius:9999px;background:var(--surface);color:var(--text-primary);font-size:12px;white-space:nowrap}
 i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:breathe 1.5s ease-in-out infinite}
 span{max-width:260px;overflow:hidden;text-overflow:ellipsis}
-a{flex:none;-webkit-app-region:no-drag;display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:10px;background:var(--chip);color:var(--text-primary);text-decoration:none;-webkit-user-drag:none}
+a{flex:none;-webkit-app-region:no-drag;display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:9999px;background:var(--chip);color:var(--text-primary);text-decoration:none;-webkit-user-drag:none}
 a:hover{opacity:.8}
 @keyframes breathe{0%,100%{opacity:.3}50%{opacity:1}}
 @media(prefers-reduced-motion:reduce){i{animation:none}}
@@ -210,17 +210,18 @@ export class ControlledOverlay {
     this.loadingKey = key;
     const current = () =>
       seq === this.loadSeq && generation === this.generation && !window.isDestroyed();
+    let width: unknown;
     try {
       await window.loadURL(
         `data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml(text, label, dark, target.peer))}`,
       );
+      if (!current()) return;
+      width = await window.webContents.executeJavaScript(MEASURE_SCRIPT);
     } catch (error) {
-      // A newer load aborts this one (ERR_ABORTED); that is not a failure.
+      // A newer page aborts this load or its measurement; that is not a failure.
       if (!current()) return;
       throw error;
     }
-    if (!current()) return;
-    const width: unknown = await window.webContents.executeJavaScript(MEASURE_SCRIPT);
     if (!current()) return;
     if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0)
       throw new Error('overlay label unavailable');
