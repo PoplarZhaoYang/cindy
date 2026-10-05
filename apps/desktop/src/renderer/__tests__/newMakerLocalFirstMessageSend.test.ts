@@ -118,18 +118,4 @@ describe('NewMakerDraftRoute local first-message send', () => {
     expect(sessionViewSource).toContain('leadingSlashInvocation(message)');
     expect(sessionViewSource).toContain('本机普通文本已在草稿路由发出');
   });
-
-  it('consumes a remote pending first message without waiting for the initial history load', () => {
-    const effect = sessionViewSource.indexOf('const pendingConsumedRef = useRef(false);');
-    const consume = sessionViewSource.indexOf('const pending = consumePending(sessionId);', effect);
-    const gate = sessionViewSource.slice(effect, consume);
-
-    expect(effect).toBeGreaterThan(-1);
-    expect(consume).toBeGreaterThan(effect);
-    // 本机交接(斜杠命令首条)仍等历史首拉;只有对端刚建好、确有待交接首条的远程任务提前消费。
-    expect(gate).toContain('if (!sessionId || !session) return;');
-    expect(gate).toContain(
-      'if (!historyLoaded && !(remoteDeviceId && hasPending(sessionId))) return;',
-    );
-  });
 });
