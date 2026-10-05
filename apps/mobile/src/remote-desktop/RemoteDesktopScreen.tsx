@@ -337,7 +337,12 @@ export function RemoteDesktopSession({
   const [viewerReadyRevision, setViewerReadyRevision] = useState(0);
   const active = useRef<RemoteDesktopLease | null>(null);
   const wantsControl = useRef(true);
+  // View only is a local guard against stray touches. The host keeps control
+  // and its input helper, so switching never waits for the computer.
   const [viewOnlySelected, setViewOnlySelected] = useState(false);
+  const viewOnlyRef = useRef(false);
+  /** Input reaches the computer only with host control and outside view only. */
+  const inputAllowed = (controlling: boolean) => controlling && !viewOnlyRef.current;
   // Last control bit we asked the host for but have not confirmed. Overflow and
   // take-control can time out after the local bit already moved; heartbeats use
   // this to retry a release or restore local control instead of ignoring host-true.
@@ -443,7 +448,8 @@ export function RemoteDesktopSession({
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
-  const mode: Mode = lease?.controlling ? inputMode : "pan";
+  const canInput = Boolean(lease?.controlling) && !viewOnlySelected;
+  const mode: Mode = canInput ? inputMode : "pan";
   const [operations, setOperations] = useState(false);
   const [controlPage, setControlPage] = useState<
     "controls" | "display" | "security"
@@ -557,8 +563,7 @@ export function RemoteDesktopSession({
     (event: { nativeEvent: { data: string } }) => void
   >(() => {});
   useEffect(() => {
-    const enabled =
-      keyboard && !fullKeys && focused && Boolean(lease?.controlling);
+    const enabled = keyboard && !fullKeys && focused && canInput;
     if (!enabled) {
       send({ type: "keyboard", enabled: false });
       Keyboard.dismiss();
@@ -568,14 +573,7 @@ export function RemoteDesktopSession({
     // focus to a web animation frame loses WebKit's user-interaction context.
     webview.current?.requestFocus();
     send({ type: "keyboard", enabled: true });
-  }, [
-    keyboard,
-    fullKeys,
-    focused,
-    lease?.controlling,
-    keyboardFocusRequest,
-    send,
-  ]);
+  }, [keyboard, fullKeys, focused, canInput, keyboardFocusRequest, send]);
   // Small control requests ride the media data channel when the host supports
   // it: a direct peer avoids the relay round trip and keeps their order with
   // input. Anything the channel did not take uses the relay; once sent, the
@@ -1005,7 +1003,7 @@ export function RemoteDesktopSession({
     // The shared session may already have mutated this lease before returning.
     // Always publish the confirmation to React's separate snapshot as well.
     if (alive.current) setLease({ ...current });
-    send({ type: "control", enabled: controlling });
+    send({ type: "control", enabled: inputAllowed(controlling) });
   };
   const requestHostControl = (
     current: RemoteDesktopLease,
@@ -1108,6 +1106,8 @@ export function RemoteDesktopSession({
             displayId: displayId ?? recovery.current.displayId,
             resume: resuming,
             takeover,
+            // Hosts with `autoControl` grant control with the lease.
+            control: wantsControl.current,
             onStart: () => {
               recovery.current.resuming = true;
             },
@@ -1207,14 +1207,15 @@ export function RemoteDesktopSession({
         send({ type: "mode", mode });
         // Entering remote desktop is the user's intent to control. The existing
         // host permission and ownership gates still decide whether it is allowed.
-        if (result.canControl && wantsControl.current) {
+        if (next.controlling) send({ type: "control", enabled: inputAllowed(true) });
+        else if (result.canControl && wantsControl.current) {
           try {
             const control = await viewerSession.current!.control(true);
             if (current !== generation.current) return;
             // Control changes keep the same session identity for in-flight replies.
             next.controlling = control.controlling;
             setLease({ ...next });
-            send({ type: "control", enabled: control.controlling });
+            send({ type: "control", enabled: inputAllowed(control.controlling) });
           } catch (cause) {
             if (current === generation.current) resolveControlFailure(cause);
           }
@@ -1643,7 +1644,7 @@ export function RemoteDesktopSession({
         focused &&
         !operations &&
         !keyboard &&
-        Boolean(lease?.controlling),
+        canInput,
       labels: {
         left: t("remoteDesktop.leftClick"),
         right: t("remoteDesktop.rightClick"),
@@ -1666,7 +1667,7 @@ export function RemoteDesktopSession({
     operations,
     keyboard,
     lease?.lease,
-    lease?.controlling,
+    canInput,
     send,
     t,
   ]);
@@ -2139,6 +2140,7 @@ export function RemoteDesktopSession({
         };
         if (
           !current.controlling ||
+          viewOnlyRef.current ||
           inputBusy.current?.lease === current.lease ||
           !Number.isSafeInteger(message.sequence) ||
           !Array.isArray(message.events) ||
@@ -2189,9 +2191,25 @@ export function RemoteDesktopSession({
       presentationTimer.current
     )
       return;
-    setBusy(true);
     setError(null);
-    controlInFlight.current = true;
+    const viewOnly = !viewOnlySelected;
+    viewOnlyRef.current = viewOnly;
+    setViewOnlySelected(viewOnly);
+    if (viewOnly) {
+      // Local only: drop held keys and stop forwarding; the host keeps control.
+      heldKeys.current.clear();
+      setModifiers([]);
+      setKeyboard(false);
+      send({ type: "control", enabled: false });
+      return;
+    }
+    if (current.controlling) {
+      send({ type: "control", enabled: true });
+      return;
+    }
+    // The host dropped control meanwhile (input failure, overflow or
+    // background viewing): leaving view only asks for it again.
+    setBusy(true);
     try {
       pipPrepared.current = false;
       presentationGeneration.current++;
@@ -2200,11 +2218,8 @@ export function RemoteDesktopSession({
         presentation.current = false;
         send({ type: "presentation", enabled: false });
       }
-      send({ type: "control", enabled: false });
-      const enabled = viewOnlySelected;
-      setViewOnlySelected(!enabled);
-      wantsControl.current = enabled;
-      if (pendingHostControl.current === false && enabled) {
+      wantsControl.current = true;
+      if (pendingHostControl.current === false) {
         // Overflow timed out with an unconfirmed host release. Taking control
         // first would skip stopInput while a key/button may still be held.
         const released = await request<{ controlling: boolean }>({
@@ -2216,21 +2231,13 @@ export function RemoteDesktopSession({
         applyConfirmedControl(current, released.controlling);
         if (released.controlling) return;
       }
-      pendingHostControl.current = enabled;
-      const result = await request<{ controlling: boolean }>({
-        op: "control",
-        lease: current.lease,
-        enabled,
-      });
-      if (active.current !== current) return;
-      applyConfirmedControl(current, result.controlling);
+      await requestHostControl(current, true);
     } catch (cause) {
       // Taking control can fail because this computer cannot inject input right
-      // now. Stay in view only and let the user retry; a session rebuild would
-      // cost the picture and the lease for a control-only fault.
+      // now. Stay usable for viewing and let the user retry; a session rebuild
+      // would cost the picture and the lease for a control-only fault.
       if (active.current === current) resolveControlFailure(cause);
     } finally {
-      controlInFlight.current = false;
       if (alive.current) setBusy(false);
     }
   };
@@ -2621,6 +2628,7 @@ export function RemoteDesktopSession({
         restore,
         modeId,
         keepVideo,
+        caps?.autoControl === true,
       );
       if (active.current !== current) return;
       // Reconnect the physical source display after the temporary mirror ends.
@@ -2687,7 +2695,10 @@ export function RemoteDesktopSession({
           audio: Boolean(caps?.systemAudio && videoSettingsRef.current.audio),
         });
       }
-      const control = await viewerSession.current.control(true);
+      // A host with `autoControl` already restarted input on the new geometry.
+      const control = next.controlling
+        ? { controlling: true }
+        : await viewerSession.current.control(true);
       if (active.current === current)
         applyConfirmedControl(current, control.controlling);
     } catch (cause) {
@@ -2773,7 +2784,9 @@ export function RemoteDesktopSession({
         if (mode.current) return false;
         modeId = mode.id;
       }
-      const control = await viewerSession.current.control(true);
+      const control = current.controlling
+        ? { controlling: true }
+        : await viewerSession.current.control(true);
       if (!isCurrent() || !control.controlling) return false;
       displayChangeSent = true;
       await viewerSession.current.fitDisplay(
@@ -2781,6 +2794,8 @@ export function RemoteDesktopSession({
         remembered.height,
         false,
         modeId,
+        false,
+        hostCaps.autoControl === true,
       );
       if (!isCurrent()) return false;
       rememberedResolutionLease.current = current.lease;
@@ -2880,7 +2895,7 @@ export function RemoteDesktopSession({
   const workspaceAction = (
     action: "workspaceLeft" | "workspaceRight" | "omarchyMenu",
   ) => {
-    if (!lease?.controlling) return;
+    if (!lease || !canInput) return;
     const current = active.current;
     void request({ op: "windowAction", action, lease: lease.lease }).catch(
       () => {
@@ -2945,7 +2960,7 @@ export function RemoteDesktopSession({
         pressed && styles.keyPressed,
       ]}
       onPressIn={() => {
-        if (!active.current?.controlling) return;
+        if (!inputAllowed(Boolean(active.current?.controlling))) return;
         const alreadyHeld = new Set([...heldKeys.current.values()].flat());
         const keys = comboMode ? [...modifiers, code] : [code];
         heldKeys.current.set(code, keys);
@@ -3081,7 +3096,7 @@ export function RemoteDesktopSession({
             focused &&
             !operations &&
             !keyboard &&
-            lease?.controlling && (
+            canInput && (
               <RemoteDesktopMouseControls
                 send={send}
                 bottom={landscape ? 0 : toolbarSize.height}
@@ -3228,7 +3243,8 @@ export function RemoteDesktopSession({
           )}
           {windowsOpen &&
             focused &&
-            lease?.controlling &&
+            lease &&
+            canInput &&
             caps?.windowActions && (
               <RemoteDesktopWindows
                 key={lease.lease}
@@ -3367,8 +3383,8 @@ export function RemoteDesktopSession({
           <View testID="remoteDesktop.foldControls" style={{ position: 'absolute', left: foldControls.x,
             top: foldControls.y, width: foldControls.width, height: foldControls.height,
             paddingBottom: toolbarSize.height + (showMouseButtons ? 80 : 0) }}>
-            <FoldTouchpad send={send} enabled={Boolean(lease?.controlling)} />
-            {showMouseButtons && lease?.controlling ? <RemoteDesktopMouseControls send={send}
+            <FoldTouchpad send={send} enabled={canInput} />
+            {showMouseButtons && canInput ? <RemoteDesktopMouseControls send={send}
               bottom={toolbarSize.height} right={0} compact labels={{ left: t("remoteDesktop.leftClick"),
                 right: t("remoteDesktop.rightClick"), wheel: t("remoteDesktop.mouseWheel") }} /> : null}
           </View>
@@ -3458,7 +3474,7 @@ export function RemoteDesktopSession({
                   ? () => workspaceAction("omarchyMenu")
                   : undefined
               }
-              canControl={Boolean(lease?.controlling)}
+              canControl={canInput}
               keyboard={keyboard}
               operations={operations}
               onWindows={() => {
@@ -3476,7 +3492,7 @@ export function RemoteDesktopSession({
                 );
               }}
               onDesktop={() =>
-                caps?.windowActions && lease?.controlling
+                caps?.windowActions && lease && canInput
                   ? void request({
                       op: "windowAction",
                       action: "desktop",
@@ -3572,7 +3588,7 @@ export function RemoteDesktopSession({
         >
           <View style={styles.keyboardHeader}>
             <RemoteDesktopClipboardButton
-              enabled={!connectionPending && Boolean(lease?.controlling)}
+              enabled={!connectionPending && canInput}
               supported={caps?.clipboardText === true}
               transfer={transferClipboard}
             />
@@ -3672,7 +3688,7 @@ export function RemoteDesktopSession({
                     onPressIn={() => {
                       if (
                         comboMode ||
-                        !active.current?.controlling ||
+                        !inputAllowed(Boolean(active.current?.controlling)) ||
                         heldKeys.current.has(code)
                       )
                         return;
@@ -3691,7 +3707,8 @@ export function RemoteDesktopSession({
                       });
                     }}
                     onPress={() => {
-                      if (!comboMode || !active.current?.controlling) return;
+                      if (!comboMode || !inputAllowed(Boolean(active.current?.controlling)))
+                        return;
                       setModifiers((previous) =>
                         previous.includes(code)
                           ? previous.filter((v) => v !== code)

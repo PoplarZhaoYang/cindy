@@ -1444,19 +1444,33 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     desktopPan = null;
     if (config.desktop && heldMouse.size) release();
   });
+  let wheelRestX = 0,
+    wheelRestY = 0;
   if (config.desktop)
     listen(
       stage,
       "wheel",
       (e) => {
         e.preventDefault();
-        if (!control) return;
+        if (!control) {
+          wheelRestX = wheelRestY = 0;
+          return;
+        }
         const factor =
           e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? stage.clientHeight : 1;
+        // Hosts inject whole pixels; carry fractions so slow trackpad and
+        // scaled-display deltas still scroll.
+        const sx = wheelRestX + e.deltaX * factor,
+          sy = wheelRestY + e.deltaY * factor,
+          wx = Math.trunc(sx) || 0,
+          wy = Math.trunc(sy) || 0;
+        wheelRestX = sx - wx;
+        wheelRestY = sy - wy;
+        if (!wx && !wy) return;
         queue({
           kind: "scroll",
-          dx: Math.max(-2000, Math.min(2000, e.deltaX * factor)),
-          dy: Math.max(-2000, Math.min(2000, e.deltaY * factor)),
+          dx: Math.max(-2000, Math.min(2000, wx)),
+          dy: Math.max(-2000, Math.min(2000, wy)),
         });
         flush();
       },

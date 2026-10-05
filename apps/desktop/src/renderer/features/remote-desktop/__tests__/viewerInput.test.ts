@@ -385,6 +385,21 @@ it('maps real mouse movement, right button and wheel to the picture below the to
   expect(events()).toContainEqual({ kind: 'button', button: 2, down: false, x: 0.5, y: 0.5 });
   expect(events()).toContainEqual({ kind: 'scroll', dx: 0, dy: 32 });
 });
+it('carries sub-pixel wheel deltas instead of letting hosts truncate them away', () => {
+  pointer('pointermove');
+  vi.advanceTimersByTime(34);
+  const wheel = (deltaX: number, deltaY: number) =>
+    stage.dispatchEvent(new WheelEvent('wheel', { deltaX, deltaY, bubbles: true, cancelable: true }));
+  wheel(0, 0.4);
+  wheel(0, 0.4);
+  expect(events().filter((e) => e.kind === 'scroll')).toEqual([]);
+  wheel(-0.5, 0.4);
+  wheel(-0.7, 2.5);
+  expect(events().filter((e) => e.kind === 'scroll')).toEqual([
+    { kind: 'scroll', dx: 0, dy: 1 },
+    { kind: 'scroll', dx: -1, dy: 2 },
+  ]);
+});
 it('commits IME text once and never forwards local toolbar keyboard input', () => {
   pointer('pointerdown');
   pointer('pointerup');
