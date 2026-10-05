@@ -41,6 +41,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useGhostMainViews, type GhostMainViewItem } from '@/cindy-brain/ghostMainViews';
+import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
@@ -189,14 +190,19 @@ function useSidebarNavigationEntries(): {
   const { dataOwnerId } = useAuth();
   const prefs = useSidebarNavigationPrefs(dataOwnerId);
   const { sidebarVisible } = useGhostMainViews();
+  const rosterReady = useInstalledGhosts().length > 0;
   const sidebarGhostIds = sidebarVisible.map((item) => item.ghostId).join('\n');
   // Plugins entering the sidebar for the first time start in More, flagged as new.
-  // Wait for the account: plugins and their switches are per data owner.
+  // Wait for the account and its installed roster: both are per data owner.
   useEffect(() => {
     if (dataOwnerId) {
-      reconcileSidebarAppArrivals(dataOwnerId, sidebarGhostIds ? sidebarGhostIds.split('\n') : []);
+      reconcileSidebarAppArrivals(
+        dataOwnerId,
+        sidebarGhostIds ? sidebarGhostIds.split('\n') : [],
+        rosterReady,
+      );
     }
-  }, [dataOwnerId, sidebarGhostIds]);
+  }, [dataOwnerId, sidebarGhostIds, rosterReady]);
   const unseenGhostIds = useSidebarUnseenApps(dataOwnerId);
   const apps = new Map(sidebarVisible.map((item) => [item.ghostId, item]));
   const order = resolveSidebarNavigationOrder(prefs.order, sidebarVisible.map((item) => item.ghostId));

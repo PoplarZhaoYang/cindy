@@ -21,6 +21,9 @@ const mainViewsMock = vi.hoisted(() => ({
 }));
 const authMock = vi.hoisted(() => ({ owner: 'owner-1' as string | null }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: authMock.owner }) }));
+// A non-empty installed roster marks the plugin list as loaded (Main sends none mid-switch).
+const installedMock = vi.hoisted(() => ({ ghosts: [{ manifest: { id: 'bundled' } }] as unknown[] }));
+vi.mock('@/cindy-brain/useInstalledGhosts', () => ({ useInstalledGhosts: () => installedMock.ghosts }));
 const SITES: MainViewMock = {
   ghostId: 'xd-sites', title: '站点', icon: 'globe', manifest: { name: 'XD Sites' },
 };
@@ -61,6 +64,7 @@ beforeEach(() => {
   mainViewsMock.routeCapable = [];
   mainViewsMock.sidebarVisible = [];
   authMock.owner = 'owner-1';
+  installedMock.ghosts = [{ manifest: { id: 'bundled' } }];
   localStorage.removeItem('sidebar-navigation:apps:v1');
   navigationTesting.resetArrivals();
   setSidebarNavigationPrefs(OWNER, {
@@ -660,5 +664,14 @@ describe('Plugins joining the sidebar', () => {
     );
     expect(screen.queryByRole('button', { name: 'sidebar.tabs.plugins' })).toBeNull();
     expect(screen.getByRole('button', { name: 'ccAgent.layout.automations' })).toBeTruthy();
+  });
+
+  it('defers the first run while the installed roster is still empty', () => {
+    installedMock.ghosts = [];
+    mainViewsMock.routeCapable = [SITES];
+    mainViewsMock.sidebarVisible = [SITES];
+    renderNav();
+    expect(localStorage.getItem('sidebar-navigation:apps:v1')).toBeNull();
+    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
   });
 });

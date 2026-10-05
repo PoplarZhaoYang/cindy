@@ -405,13 +405,19 @@ describe('sidebar navigation customization', () => {
     ).toEqual(['app:first', 'plugins', 'automations', 'app:mid', 'search', 'app:last']);
   });
 
-  it('never records a plugin baseline from an empty roster', () => {
-    reconcileSidebarAppArrivals(OWNER, []);
-    expect(getSidebarKnownApps(OWNER)).toEqual([]);
+  it('records nothing until the installed roster is known', () => {
+    reconcileSidebarAppArrivals(OWNER, [], false);
     expect(localStorage.getItem('sidebar-navigation:apps:v1')).toBeNull();
     // The real roster arriving afterwards is the first run: nothing moves into More.
-    reconcileSidebarAppArrivals(OWNER, ['xd-sites']);
+    reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
     expect(getSidebarKnownApps(OWNER)).toEqual(['xd-sites']);
     expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual([]);
+  });
+
+  it('starts the first sidebar plugin in More after an empty but known baseline', () => {
+    reconcileSidebarAppArrivals(OWNER, [], true);
+    expect(getSidebarKnownApps(OWNER)).toEqual([]);
+    reconcileSidebarAppArrivals(OWNER, ['xd-sites'], true);
+    expect(getSidebarNavigationPrefs(OWNER).appsInMore).toEqual(['app:xd-sites']);
   });
 });

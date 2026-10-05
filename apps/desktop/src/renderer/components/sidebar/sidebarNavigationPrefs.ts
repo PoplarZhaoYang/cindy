@@ -322,11 +322,16 @@ if (typeof window !== 'undefined') {
  * as new. The first run for an owner only records what is already there, so
  * existing entries keep their place after an upgrade. Idempotent.
  */
-export function reconcileSidebarAppArrivals(owner: string, ghostIds: readonly string[]): void {
-  // Main reports an empty roster while an account switch settles or before plugins
-  // load, so an empty list is never evidence: neither record a baseline from it nor
-  // treat the plugins that appear afterwards as new arrivals.
-  if (ghostIds.length === 0) return;
+export function reconcileSidebarAppArrivals(
+  owner: string,
+  ghostIds: readonly string[],
+  rosterReady: boolean,
+): void {
+  // Main reports no plugins at all while an account switch settles, and every real
+  // session carries at least the bundled ones. Until the installed roster is known,
+  // record nothing: neither a baseline nor arrivals. Once it is, an empty sidebar is
+  // a real baseline, so the owner's first sidebar plugin still starts in More.
+  if (!rosterReady) return;
   const record = arrivals[owner];
   if (!record) {
     writeArrivals({ ...arrivals, [owner]: { known: [...ghostIds], unseen: [] } });
