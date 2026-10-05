@@ -20,7 +20,7 @@ import { readRemoteDeviceFile } from '../device-link/fileAccess';
  * watcherManager;远程 watch 桥接见 remote-watch.ts。
  */
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { app, ipcMain, BrowserWindow } from 'electron';
 import {
   createFile,
   createFolder,
@@ -36,6 +36,7 @@ import {
 } from '@cindy/file-browser-core';
 
 import { promises as fsPromises } from 'node:fs';
+import { PassThrough } from 'node:stream';
 
 import { FILE_BROWSER_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 
@@ -43,6 +44,9 @@ import { createLogger } from '../logger.js';
 import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
+import { takePeerAttachment } from '../device-link/peerAttachmentStore.js';
+import { parseRemoteAttachmentRef } from '../device-link/remoteAttachment.js';
+import { getRemoteSshPool } from '../remote-ssh/index.js';
 import {
   fetchRemoteFileToCache,
   findStaleCached,
@@ -57,6 +61,7 @@ import {
   type ChatFileFetchArgs,
   buildDevicePathUrl,
 } from './chat-file.js';
+import { downloadChatEntry, type ChatDownloadDeps } from './chat-download.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { makeSshChunkExecutor } from './ssh-media.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
@@ -67,6 +72,11 @@ import { registerHtmlPreviewIpc } from './html-preview-ipc.js';
 import { toWorkdirRel } from '../../shared/workdirPath.js';
 
 const log = createLogger('file-browser/ipc');
+
+/** POSIX 单引号 shell quote(与 remote.ts 同实现)。 */
+function shq(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
 
 export const FILE_BROWSER_INVOKE = {
   /** 大文件取回:>2MiB inline 上限的远程文件拉到本地缓存(SSH 分片 / device OSS)。 */
@@ -92,6 +102,8 @@ export const FILE_BROWSER_INVOKE = {
   CHAT_FILE_FETCH: 'maker:chat-file:fetch',
   /** 聊天流文件 chip 点亮预检(远端精确 stat,见 chat-file.ts statChatFile)。 */
   CHAT_FILE_STAT: 'maker:chat-file:stat',
+  /** 远程文件 / 文件夹下载到系统「下载」文件夹(见 chat-download.ts)。 */
+  CHAT_FILE_DOWNLOAD: 'maker:chat-file:download',
 } as const;
 
 export const FILE_BROWSER_PUSH = {
@@ -500,6 +512,95 @@ export function registerFileBrowserIpc(): void {
     }
     return result;
   });
+
+  const chatDownloadDeps: ChatDownloadDeps = {
+    sshStat: chatFileDeps.sshStat,
+    deviceStat: chatFileDeps.deviceStat,
+    downloadsDir: () => app.getPath('downloads'),
+    fetchFile: (args, onProgress) => fetchChatFile(args, onProgress, chatFileDeps),
+    deviceOp: deviceOpInvoke,
+    receivePart: async (deviceId, part, destination, onProgress) => {
+      const ref = parseRemoteAttachmentRef(part.ref);
+      if (!ref || ref.size !== part.size || ref.sha256 !== part.sha256) {
+        throw new Error('invalid exported part');
+      }
+      if (ref.peer) {
+        await takePeerAttachment(deviceId, ref.peer, destination);
+        onProgress(part.size);
+        return;
+      }
+      try {
+        await downloadToFile(
+          ref.ossKey,
+          destination,
+          { size: part.size, sha256: part.sha256 },
+          onProgress,
+        );
+      } finally {
+        void removeRemote(ref.ossKey);
+      }
+    },
+    sshTar: async (hostId, absDir) => {
+      const host = getRemoteSshPool().get(hostId);
+      if (!host) throw new Error(`remote host not found in pool: ${hostId}`);
+      // sh -c 包一层:不依赖远端登录 shell 的语法;COPYFILE_DISABLE 让 macOS 的 tar
+      // 不额外写出 `._*` 元数据文件。
+      const script = 'cd -- "$1" && COPYFILE_DISABLE=1 exec tar -cf - .';
+      const handle = await host.execStream(`sh -c ${shq(script)} sh ${shq(absDir)}`, {
+        timeoutMs: 30_000,
+      });
+      const stream = new PassThrough();
+      let stderr = '';
+      handle.onStdoutBytes((bytes) => stream.write(bytes));
+      handle.onStderr((text) => {
+        stderr = (stderr + text).slice(-2000);
+      });
+      const done = new Promise<number | null>((resolve) => {
+        handle.onError((err) => {
+          stream.destroy(err);
+          resolve(null);
+        });
+        handle.onClose(({ code }) => {
+          stream.end();
+          resolve(code);
+        });
+      });
+      return { stream, done, stderr: () => stderr, kill: () => handle.kill() };
+    },
+  };
+  ipcMain.handle(
+    FILE_BROWSER_INVOKE.CHAT_FILE_DOWNLOAD,
+    async (event, args: ChatFileFetchArgs) => {
+      const wc = event.sender;
+      let lastPush = 0;
+      const result = await downloadChatEntry(
+        args,
+        (received, total, phase) => {
+          const now = Date.now();
+          if (now - lastPush < 100 && (total === 0 || received < total)) return;
+          lastPush = now;
+          if (!wc.isDestroyed()) {
+            wc.send(FILE_BROWSER_PUSH.TRANSFER, {
+              workdir: args?.workdir ?? '',
+              relPath: args?.absPath ?? '',
+              received,
+              total,
+              phase,
+            });
+          }
+        },
+        chatDownloadDeps,
+      );
+      if (!result.ok) {
+        log.warn('chat-file download failed', {
+          code: result.code,
+          absPath: args?.absPath,
+          message: result.message,
+        });
+      }
+      return result;
+    },
+  );
 
   // chip 点亮预检:远端精确 stat,verdict 见 statChatFile 注释。查询型接口,
   // 任何异常都折叠进 verdict(unknown),不 throw。
