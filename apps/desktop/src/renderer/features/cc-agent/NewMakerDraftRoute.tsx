@@ -3697,6 +3697,23 @@ export function NewMakerDraftRoute() {
             // commitRemoteSessionHandoff 里;它同步返回且不抛,所以这里既不 await 也不需要 try ——
             // **回流不能挡在 setPending 前面**:那段退避重试最长约 6.75 秒,应用在窗口内被关掉就会
             // 丢掉用户的首条消息,而对端会话已经建好了(第 33 轮 P1)。
+            //
+            // 远程普通首条在草稿路由直接交给 makerChatStore 的远程发件队列,不再绑在
+            // SessionView hydrate 上:队列由 store 驱动、不随视图卸载停止,发送后立刻切走
+            // 也会送达(手机端 newSessionCreation 同口径)。旧做法把首条放进 60s 的内存
+            // pending 等视图来取,用户切走超过 60s 首条就丢了,对端只剩一个空的未命名任务。
+            // 仍交给 SessionView 的只有两类(识别窗口与本机分支一致):
+            //  · 开了协同 —— 首轮必须排在被控端起 Worker 之后,等待与输入锁都在视图里;
+            //  · 斜杠命令首条 —— 需要 SessionView 的完整命令分派。
+            // 侧栏「首条已发出」标记只给直接发送这一条:它的每个终态(受理 / 未受理 / 投递
+            // 失败 / 抛错)都在本函数内可见并能撤回;视图交接的失败分支散在 SessionView 里,
+            // 不登记就不会留下撤不回的标记。
+            const remoteSendWorkingDir = created?.workDir ?? remoteWorkingDir;
+            const remoteSlashFirst =
+              /^\/(\S+)(?:\s+(.*))?$/s.test(message) ||
+              (capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message));
+            const remoteDirectSend =
+              !shouldEnableCollab && !remoteSlashFirst && !!remoteSendWorkingDir;
             commitRemoteSessionHandoff({
               deviceId,
               deviceName,
@@ -3705,6 +3722,7 @@ export function NewMakerDraftRoute() {
               createArgs,
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
+              markFirstSend: remoteDirectSend,
             });
             markedStartingSessionId = remoteSessionId;
             // 草稿里选中的那条收藏跟着会话走(见 carryDraftFavoriteAnchorToSession)。锚点是
@@ -3736,18 +3754,8 @@ export function NewMakerDraftRoute() {
             if (!isCurrentDataOwner()) {
               throw new RemotePrecreatedWorktreeOwnerChangedError();
             }
-            // 远程普通首条在草稿路由直接交给 makerChatStore 的远程发件队列,不再绑在
-            // SessionView hydrate 上:队列由 store 驱动、不随视图卸载停止,发送后立刻切走
-            // 也会送达(手机端 newSessionCreation 同口径)。旧做法把首条放进 60s 的内存
-            // pending 等视图来取,用户切走超过 60s 首条就丢了,对端只剩一个空的未命名任务。
-            // 仍交给 SessionView 的只有两类(识别窗口与本机分支一致):
-            //  · 开了协同 —— 首轮必须排在被控端起 Worker 之后,等待与输入锁都在视图里;
-            //  · 斜杠命令首条 —— 需要 SessionView 的完整命令分派。
-            const remoteSendWorkingDir = created?.workDir ?? remoteWorkingDir;
-            const remoteSlashFirst =
-              /^\/(\S+)(?:\s+(.*))?$/s.test(message) ||
-              (capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message));
-            if (!shouldEnableCollab && !remoteSlashFirst && remoteSendWorkingDir) {
+            // 远程普通首条直接发送(判据与理由见上方 remoteDirectSend)。
+            if (remoteDirectSend && remoteSendWorkingDir) {
               // 视图还没 hydrate 被控端的行:createOpts 读 store 里的运行时,先按刚提交的
               // args 确定性 seed(本机首条同款)。
               makerChatStore.setSessionRuntime(remoteSessionId, {
@@ -3814,7 +3822,8 @@ export function NewMakerDraftRoute() {
                 navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
                 return;
               }
-              // 没受理(归属切换 / 会话已删等):退回下面的视图交接,与改动前行为一致。
+              // 没受理(归属切换 / 会话已删等):撤回首条标记,退回下面的视图交接,与改动前行为一致。
+              remoteProjectsStore.clearPendingFirstSend(remoteSessionId);
             }
             setPending(remoteSessionId, {
               text: message,

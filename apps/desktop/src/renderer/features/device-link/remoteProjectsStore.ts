@@ -943,7 +943,7 @@ const actions = {
   },
 
   /**
-   * 远程会话的首条(或目标首轮)已交给发送链路时登记(见 {@link pendingFirstSendAt})。
+   * 远程新建会话的首条直接交给发件队列时登记(见 {@link pendingFirstSendAt});登记方负责在未受理 / 投递失败时撤回。
    * 被控端写下真实 userSendAt 后自动让位。
    */
   setPendingFirstSend(sessionId: string, sentAtIso: string): void {

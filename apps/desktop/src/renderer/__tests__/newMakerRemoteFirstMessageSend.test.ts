@@ -41,8 +41,9 @@ describe('NewMakerDraftRoute remote first-message send', () => {
 
   it('keeps collaboration and slash-command first messages on the SessionView handoff', () => {
     const gate = source.slice(remoteFence, remoteSend);
-    expect(gate).toContain('if (!shouldEnableCollab && !remoteSlashFirst && remoteSendWorkingDir)');
+    expect(gate).toContain('!shouldEnableCollab && !remoteSlashFirst && !!remoteSendWorkingDir');
     expect(gate).toContain("capabilityAgentKind === 'pi' && !!leadingSlashInvocation(message)");
+    expect(gate).toContain('if (remoteDirectSend && remoteSendWorkingDir) {');
   });
 
   it('seeds the chat runtime from the submitted args before the pre-hydration send', () => {
@@ -63,14 +64,35 @@ describe('NewMakerDraftRoute remote first-message send', () => {
     expect(block).toContain('remoteProjectsStore.clearPendingFirstSend(remoteSessionId)');
   });
 
-  it('marks the first send in the mirror before the provisional row and refresh land', () => {
+  it('marks the first send only for the direct path, before the provisional row and refresh land', () => {
     const mark = handoffSource.indexOf(
-      'remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso)',
+      'if (p.markFirstSend) remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);',
     );
     const provisional = handoffSource.indexOf('buildProvisionalRemoteSession({', mark);
     const refresh = handoffSource.indexOf('void refreshRemoteDeviceSessions(', mark);
     expect(mark).toBeGreaterThan(-1);
     expect(provisional).toBeGreaterThan(mark);
     expect(refresh).toBeGreaterThan(mark);
+
+    // 发送路径按直接发送判据登记;目标路径交给 SessionView,失败分支不在草稿路由手里,不登记。
+    const sendCommit = source.slice(
+      source.indexOf('commitRemoteSessionHandoff({', remoteFence),
+      source.indexOf("logTag: 'draft send'", remoteFence) + 120,
+    );
+    expect(sendCommit).toContain('markFirstSend: remoteDirectSend');
+    const goalCommit = source.slice(
+      source.indexOf("logTag: 'draft goal'") - 400,
+      source.indexOf("logTag: 'draft goal'") + 40,
+    );
+    expect(goalCommit).not.toContain('markFirstSend');
+  });
+
+  it('withdraws the first-send mark before falling back to the SessionView handoff', () => {
+    const fallback = source.indexOf(
+      'remoteProjectsStore.clearPendingFirstSend(remoteSessionId);\n            }',
+      remoteSend,
+    );
+    expect(fallback).toBeGreaterThan(remoteNavigate);
+    expect(fallback).toBeLessThan(remotePending);
   });
 });
