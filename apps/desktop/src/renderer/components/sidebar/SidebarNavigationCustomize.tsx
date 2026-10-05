@@ -163,7 +163,7 @@ export function SidebarNavigationCustomize({ onDone }: SidebarNavigationCustomiz
     <div
       role="dialog"
       aria-label={t('sidebar.navigation.customize.title')}
-      className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[var(--shadow-menu)]"
+      className="mx-2 mb-2 rounded-xl border border-sidebar-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]"
     >
       <div className="mb-2 flex items-center justify-between gap-2 px-1">
         <h2 className="text-sm font-medium text-[var(--text-primary)]">
