@@ -63,7 +63,9 @@ vi.mock('@/lib/makerTransport', () => ({
   isRemoteSessionSticky: () => false,
   getWorkflowProgressFor: getWorkflowProgressForMock,
   readBackgroundTaskOutputTailFor: vi.fn().mockResolvedValue({ ok: false, reason: 'unavailable' }),
-  stopAgentTaskFor: stopAgentTaskForMock,
+}));
+vi.mock('@/lib/backgroundTaskStop', () => ({
+  stopBackgroundTask: stopAgentTaskForMock,
 }));
 vi.mock('@/lib/backgroundTaskStopFailure', () => ({
   reportBackgroundTaskStopFailure: reportStopFailureMock,

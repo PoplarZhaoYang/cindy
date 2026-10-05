@@ -31,12 +31,9 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import { stopBackgroundTask } from '@/lib/backgroundTaskStop';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
-import {
-  getWorkflowProgressFor,
-  isRemoteSessionSticky,
-  stopAgentTaskFor,
-} from '@/lib/makerTransport';
+import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
 import { extractWorkflowTaskId } from '@/features/right-sidebar/plugins/background-tasks/listSessionTasks';
@@ -375,7 +372,7 @@ export function AgentTaskCard({
   const handleStop = useCallback(() => {
     if (!sessionId || !update?.taskId) return;
     setStopping(true);
-    void stopAgentTaskFor(sessionId, update.taskId)
+    void stopBackgroundTask(sessionId, update.taskId)
       .catch((error: unknown) => {
         // 失败时卡片仍显示 running,用户可重试;只有远程电脑版本过旧时提示升级。
         reportBackgroundTaskStopFailure(error, t);

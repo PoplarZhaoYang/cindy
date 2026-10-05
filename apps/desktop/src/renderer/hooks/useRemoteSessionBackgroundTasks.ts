@@ -17,12 +17,8 @@ import { useTranslation } from 'react-i18next';
 
 import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
-import {
-  listSessionBackgroundTasksFor,
-  sessionBackgroundActivityFor,
-  stopAgentTaskFor,
-  stopSessionBackgroundTasksFor,
-} from '@/lib/makerTransport';
+import { stopAllBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
+import { listSessionBackgroundTasksFor, sessionBackgroundActivityFor } from '@/lib/makerTransport';
 
 import type { RunningBashTask } from './useBackgroundBashTasks';
 import { useDocumentVisible } from './useWindowVisible';
@@ -129,10 +125,10 @@ export function useRemoteSessionBackgroundTasks(
       // 与本机同语义:有模型活动 → 关闭被控端会话进程(后台命令随之终止);
       // 只有后台命令 → 逐个精确停止,不关会话进程。
       if (active) {
-        await stopSessionBackgroundTasksFor(sessionId);
+        await stopAllBackgroundTasks(sessionId);
       } else {
         const results = await Promise.allSettled(
-          tasks.map((task) => stopAgentTaskFor(sessionId, task.taskId)),
+          tasks.map((task) => stopBackgroundTask(sessionId, task.taskId)),
         );
         const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
         if (failed) throw failed.reason;

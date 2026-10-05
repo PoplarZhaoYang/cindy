@@ -58,12 +58,12 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
+import { stopBackgroundTask } from '@/lib/backgroundTaskStop';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import {
   getWorkflowProgressFor,
   isRemoteSessionSticky,
   listSessionBackgroundTasksFor,
-  stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { Message } from '@/lib/ccAgent.types';
@@ -199,7 +199,7 @@ function workflowAgentCounts(
 }
 
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + claude-code + 有 taskId。
- *  远程会话由 stopAgentTaskFor 按粘滞归属隧道到被控端执行。 */
+ *  远程会话由 stopBackgroundTask 按会话归属隧道到被控端执行。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   return (
     item.status === 'running' &&
@@ -219,7 +219,7 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
       e.stopPropagation();
       if (stopping) return;
       setStopping(true);
-      void stopAgentTaskFor(sessionId, taskId)
+      void stopBackgroundTask(sessionId, taskId)
         .catch((error: unknown) => {
           // 真失败时状态仍是 running,按钮保留可重试;只有远程电脑版本过旧时提示升级。
           reportBackgroundTaskStopFailure(error, t);

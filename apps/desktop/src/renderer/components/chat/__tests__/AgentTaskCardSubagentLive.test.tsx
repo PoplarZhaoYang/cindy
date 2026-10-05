@@ -25,6 +25,7 @@ vi.mock('@/lib/makerTransport', () => ({
   getWorkflowProgressFor: vi.fn(async () => null),
   isRemoteSessionSticky: () => false,
 }));
+vi.mock('@/lib/backgroundTaskStop', () => ({ stopBackgroundTask: vi.fn(async () => {}) }));
 
 vi.mock('@/features/right-sidebar/lib/openBackgroundTasksTab', () => ({
   openBackgroundTasksTab: vi.fn(),

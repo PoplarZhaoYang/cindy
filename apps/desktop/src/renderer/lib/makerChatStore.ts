@@ -17515,6 +17515,16 @@ export const makerChatStore = {
     return out;
   },
   /**
+   * 停止回执收口:归属端已成功执行停止(任务被停或早已结束)时,把这些仍显示
+   * running 的 claude-code 条目标 stopped。供 device-link 远程会话使用 —— 镜像
+   * 终态事件可能在断连窗口丢失,且远程快照不能当对账权威,停止回执是唯一确定信号。
+   * 与快照对账同一收口函数;后续真实事件仍会覆盖,非终局。
+   */
+  settleStoppedAgentTasks: (sessionId: string, taskIds: ReadonlySet<string>): void => {
+    if (taskIds.size === 0 || !sessions.has(sessionId)) return;
+    setState(sessionId, (s) => reconcileStaleRunningTasks(s, [], taskIds));
+  },
+  /**
    * 捕获该会话当前的唤醒桥接代际(计数 + 置位代次)。
    * 用途:活动熄灭延迟对账 —— ①粗筛放行:桥接泄漏时 taskUpdates 里往往已无
    * running 条目(迟到终态本身就是 completed),只看 running 候选会把桥接对账

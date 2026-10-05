@@ -19,10 +19,8 @@ const mocks = vi.hoisted(() => ({
       tasks: Array<{ taskId: string; taskType?: string; title?: string; provider?: string }>;
     }>
   >(async () => ({ tasks: [] })),
-  stopTask: vi.fn<(sessionId: string, taskId: string) => Promise<{ ok: true }>>(async () => ({
-    ok: true,
-  })),
-  stopAll: vi.fn<(sessionId: string) => Promise<{ ok: true }>>(async () => ({ ok: true })),
+  stopTask: vi.fn<(sessionId: string, taskId: string) => Promise<void>>(async () => {}),
+  stopAll: vi.fn<(sessionId: string) => Promise<void>>(async () => {}),
   reportFailure: vi.fn(),
 }));
 
@@ -38,8 +36,10 @@ vi.mock('@/hooks/useWindowVisible', () => ({
 vi.mock('@/lib/makerTransport', () => ({
   sessionBackgroundActivityFor: mocks.activity,
   listSessionBackgroundTasksFor: mocks.list,
-  stopAgentTaskFor: mocks.stopTask,
-  stopSessionBackgroundTasksFor: mocks.stopAll,
+}));
+vi.mock('@/lib/backgroundTaskStop', () => ({
+  stopBackgroundTask: mocks.stopTask,
+  stopAllBackgroundTasks: mocks.stopAll,
 }));
 vi.mock('@/lib/backgroundTaskStopFailure', () => ({
   reportBackgroundTaskStopFailure: mocks.reportFailure,
