@@ -40,11 +40,10 @@ export async function stopBackgroundTask(sessionId: string, taskId: string): Pro
  * PI durable 子任务可刻意活过会话进程,不在这里收口。
  */
 export async function stopAllBackgroundTasks(sessionId: string): Promise<void> {
+  // 发起前冻结待收口集合:回执迟到期间别的控制端重启了会话的话,新任务不在这批里。
+  const candidates = makerChatStore.captureRunningClaudeTaskIds(sessionId);
   await stopSessionBackgroundTasksFor(sessionId);
   if (isRemoteSessionSticky(sessionId)) {
-    makerChatStore.settleStoppedAgentTasks(
-      sessionId,
-      makerChatStore.captureRunningClaudeTaskIds(sessionId),
-    );
+    makerChatStore.settleStoppedAgentTasks(sessionId, candidates);
   }
 }

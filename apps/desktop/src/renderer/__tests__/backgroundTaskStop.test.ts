@@ -54,6 +54,17 @@ describe('backgroundTaskStop', () => {
     expect(mocks.settle).toHaveBeenCalledWith('remote-s', new Set(['r1', 'r2']));
   });
 
+  it('全部停止在发起前冻结收口集合:回执期间新出现的任务不被误标', async () => {
+    mocks.running.mockReturnValueOnce(new Set(['old']));
+    mocks.stopAll.mockImplementationOnce(async () => {
+      // 回执返回前,会话被别处重启出新任务。
+      mocks.running.mockReturnValue(new Set(['old', 'new']));
+      return { ok: true as const };
+    });
+    await stopAllBackgroundTasks('remote-s');
+    expect(mocks.settle).toHaveBeenCalledWith('remote-s', new Set(['old']));
+  });
+
   it('本机会话不改本地状态', async () => {
     await stopBackgroundTask('local-s', 't1');
     await stopAllBackgroundTasks('local-s');
