@@ -12,6 +12,7 @@ import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { resolveAppThemeIsDark } from '../resolved-app-theme';
 import { readWindowThemeSnapshot } from '../window-theme-mode-store';
+import { escapeHtml } from './privacyScreenHtml';
 
 const log = createLogger('remote-desktop:overlay');
 
@@ -21,8 +22,10 @@ const TOP_MARGIN = 12;
 // Renderer crashes / load failures tolerated per lease before giving up.
 const MAX_FAILURES = 3;
 // Never loaded: the page has no script, so its only way to talk to Main is
-// a link click, which will-navigate cancels and recognizes by this exact URL.
-const REVOKE_URL = 'https://cindy-overlay.invalid/revoke';
+// its revoke link, which will-navigate cancels and recognizes by this prefix.
+const REVOKE_URL = 'https://cindy-overlay.invalid/revoke?peer=';
+// Constant code only: every label is rendered into the page markup itself.
+const MEASURE_SCRIPT = "Math.ceil(document.querySelector('main').getBoundingClientRect().width)";
 
 export interface ControlledOverlayTarget {
   displayId: string;
@@ -33,8 +36,8 @@ export interface ControlledOverlayTarget {
 }
 
 /** Isolated data page: mirrors surface / border / text / chip-neutral / Thinking Orange tokens (DESIGN.md §2, §10). */
-function overlayHtml(): string {
-  return `<!doctype html><html><head><meta charset="utf-8">
+function overlayHtml(text: string, label: string, dark: boolean, peer: string): string {
+  return `<!doctype html><html${dark ? ' class="dark"' : ''}><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <style>
 :root{color-scheme:light;--surface:#ffffff;--border:#d7d7d4;--text-primary:#262626;--accent:#ea6b17;--chip:#e5e5e5}
@@ -43,30 +46,28 @@ html,body{margin:0;height:100%;overflow:hidden;background:transparent}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none;cursor:default;-webkit-app-region:drag}
 main{display:inline-flex;align-items:center;gap:8px;box-sizing:border-box;height:${HEIGHT}px;padding:0 4px 0 12px;border:1px solid var(--border);border-radius:${HEIGHT / 2}px;background:var(--surface);color:var(--text-primary);font-size:12px;white-space:nowrap}
 i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--accent);animation:breathe 1.5s ease-in-out infinite}
-#text{max-width:260px;overflow:hidden;text-overflow:ellipsis}
+span{max-width:260px;overflow:hidden;text-overflow:ellipsis}
 a{flex:none;-webkit-app-region:no-drag;display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:10px;background:var(--chip);color:var(--text-primary);text-decoration:none;-webkit-user-drag:none}
 a:hover{opacity:.8}
 @keyframes breathe{0%,100%{opacity:.3}50%{opacity:1}}
 @media(prefers-reduced-motion:reduce){i{animation:none}}
-</style></head><body><main><i></i><span id="text"></span><a id="revoke" href="${REVOKE_URL}" draggable="false"></a></main></body></html>`;
+</style></head><body><main><i></i><span>${escapeHtml(text)}</span><a href="${escapeHtml(REVOKE_URL + encodeURIComponent(peer))}" draggable="false">${escapeHtml(label)}</a></main></body></html>`;
+}
+
+/** The device named on the page whose revoke link was clicked. */
+function revokedPeer(url: string): string | null {
+  if (!url.startsWith(REVOKE_URL)) return null;
+  try {
+    return decodeURIComponent(url.slice(REVOKE_URL.length)) || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Cindy's selected Light / Dark mode, not just the OS appearance. */
 function overlayIsDark(): boolean {
   const theme = readWindowThemeSnapshot();
   return resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors, theme.mode, theme.resolvedIsDark);
-}
-
-const UNSAFE_LITERAL_CHARS: Record<string, string> = {
-  '<': '\\u003C',
-  '>': '\\u003E',
-  '/': '\\u002F',
-  '\u2028': '\\u2028',
-  '\u2029': '\\u2029',
-};
-/** A JS string literal safe to embed in generated code (device names come from another device). */
-function scriptLiteral(value: string): string {
-  return JSON.stringify(value).replace(/[<>/\u2028\u2029]/g, (char) => UNSAFE_LITERAL_CHARS[char]);
 }
 
 function clamp(bounds: Rectangle, area: Rectangle): Rectangle {
@@ -77,21 +78,23 @@ function clamp(bounds: Rectangle, area: Rectangle): Rectangle {
 
 /** Local-only reminder that this desktop is shared: above every app, draggable,
  * and excluded from what the viewer receives. Frameless and never focused, it
- * has no close affordance; the lease alone decides its lifetime. Its revoke
- * button always asks in a visible system dialog first, so a blind click from
- * the viewer (who cannot see the overlay) cannot revoke anything by itself.
+ * has no close affordance; the lease alone decides its lifetime.
+ *
+ * Every label change loads a fresh static page whose revoke link carries the
+ * device it names, so a click always revokes exactly the device on screen.
+ * The revoke button first asks in a visible system dialog, so a blind click
+ * from the viewer (who cannot see the overlay) cannot revoke anything itself.
  * (`closable: false` is avoided: on macOS it cancels window-list closes.)
  */
 export class ControlledOverlay {
   private window: BrowserWindow | null = null;
   private target: ControlledOverlayTarget | null = null;
-  /** The target whose label the page currently shows; revoke acts on this one. */
-  private displayed: ControlledOverlayTarget | null = null;
+  private shown = false;
   private failures = 0;
-  /** Label key the page has confirmed showing, and the one still being written. */
-  private committed = '';
-  private pending = '';
-  private loaded = false;
+  /** Page currently loaded, and the one being loaded (superseded loads are ignored). */
+  private loadedKey = '';
+  private loadingKey = '';
+  private loadSeq = 0;
   private placedDisplay: string | null = null;
   private generation = 0;
   private partitionConfigured = false;
@@ -118,8 +121,11 @@ export class ControlledOverlay {
       if (this.failures < MAX_FAILURES) void this.create(this.generation + 1);
       return;
     }
-    // Until the page loads, create() renders the latest target itself.
-    if (this.loaded) void this.render(window, this.generation);
+    // Until it is shown, create() renders the latest target itself.
+    if (this.shown) {
+      const generation = this.generation;
+      void this.render(window, generation).catch((error) => this.fail(window, generation, error));
+    }
   }
 
   stop(): void {
@@ -128,13 +134,20 @@ export class ControlledOverlay {
     const window = this.window;
     if (!window) return;
     this.window = null;
-    this.displayed = null;
-    this.committed = '';
-    this.pending = '';
-    this.loaded = false;
+    this.shown = false;
+    this.loadedKey = '';
+    this.loadingKey = '';
     this.placedDisplay = null;
     if (!window.isDestroyed()) window.destroy();
     this.excluded([]);
+  }
+
+  /** The only failure path: counts against the lease that owns this window. */
+  private fail(window: BrowserWindow, generation: number, error: unknown): void {
+    if (generation !== this.generation || this.window !== window) return;
+    log.warn('overlay unavailable', error);
+    this.failures++;
+    this.stop();
   }
 
   private display(): Display {
@@ -175,53 +188,49 @@ export class ControlledOverlay {
       window.setBounds(next, false);
   }
 
-  /** True once the page shows the current target; failures leave state for a retry. */
-  private async render(window: BrowserWindow, generation: number): Promise<boolean> {
+  /** Loads the page for the current target. Throws on real failure; a load
+   * superseded by a newer target or lease returns quietly. */
+  private async render(window: BrowserWindow, generation: number): Promise<void> {
     const target = this.target;
-    const controlling = target?.controlling === true;
-    const name = target?.name;
-    const text = name
+    if (!target || generation !== this.generation || this.window !== window) return;
+    const text = target.name
       ? t(
-          controlling ? 'remoteDesktop.controlledByDevice' : 'remoteDesktop.viewedByDevice',
-        ).replaceAll('{{name}}', name)
-      : t(controlling ? 'remoteDesktop.beingControlled' : 'remoteDesktop.beingViewed');
+          target.controlling ? 'remoteDesktop.controlledByDevice' : 'remoteDesktop.viewedByDevice',
+        ).replaceAll('{{name}}', target.name)
+      : t(target.controlling ? 'remoteDesktop.beingControlled' : 'remoteDesktop.beingViewed');
     const label = t('remoteDevice.revokeAccess');
     const dark = overlayIsDark();
-    const key = JSON.stringify([text, label, dark]);
-    if (key === this.committed && !this.pending) {
-      // Same visible label: the shown device is indistinguishable from the target.
-      this.displayed = target;
+    const key = JSON.stringify([text, label, dark, target.peer]);
+    if (key === this.loadedKey) {
       if (this.placedDisplay !== String(this.display().id)) this.layout(window);
-      return true;
+      return;
     }
-    // Already being written: only its own result may move the revoke target.
-    if (key === this.pending) return false;
-    this.pending = key;
-    // executeJavaScript calls run in order, so the last size always matches the last text.
-    const measured: unknown = await window.webContents
-      .executeJavaScript(
-        `(() => { document.documentElement.classList.toggle('dark', ${dark});
-          document.getElementById('text').textContent = ${scriptLiteral(text)};
-          document.getElementById('revoke').textContent = ${scriptLiteral(label)};
-          return Math.ceil(document.querySelector('main').getBoundingClientRect().width); })()`,
-      )
-      .catch(() => null);
-    if (generation !== this.generation || window.isDestroyed()) return false;
-    if (this.pending === key) this.pending = '';
-    if (typeof measured !== 'number' || !Number.isFinite(measured) || measured <= 0) {
-      // Not shown: keep the previous device as the revoke target and retry next sync.
-      return false;
+    if (key === this.loadingKey) return;
+    const seq = ++this.loadSeq;
+    this.loadingKey = key;
+    const current = () =>
+      seq === this.loadSeq && generation === this.generation && !window.isDestroyed();
+    try {
+      await window.loadURL(
+        `data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml(text, label, dark, target.peer))}`,
+      );
+    } catch (error) {
+      // A newer load aborts this one (ERR_ABORTED); that is not a failure.
+      if (!current()) return;
+      throw error;
     }
-    this.committed = key;
-    this.displayed = target;
-    this.layout(window, measured);
-    return true;
+    if (!current()) return;
+    const width: unknown = await window.webContents.executeJavaScript(MEASURE_SCRIPT);
+    if (!current()) return;
+    if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0)
+      throw new Error('overlay label unavailable');
+    this.loadingKey = '';
+    this.loadedKey = key;
+    this.layout(window, width);
   }
 
-  /** Revokes the device shown when the button was clicked, never a later one. */
-  private async confirmRevoke(): Promise<void> {
-    const target = this.displayed;
-    if (!target || this.confirming) return;
+  private async confirmRevoke(peer: string): Promise<void> {
+    if (this.confirming) return;
     this.confirming = true;
     try {
       app.focus({ steal: true });
@@ -234,7 +243,7 @@ export class ControlledOverlay {
         cancelId: 0,
         noLink: true,
       });
-      if (response === 1) await this.revoke(target.peer);
+      if (response === 1) await this.revoke(peer);
     } catch (error) {
       log.warn('overlay revoke failed', error);
     } finally {
@@ -298,7 +307,7 @@ export class ControlledOverlay {
     }
     this.window = window;
     const relayout = () => {
-      if (this.window === window && this.loaded && !window.isDestroyed()) this.layout(window);
+      if (this.window === window && this.shown && !window.isDestroyed()) this.layout(window);
     };
     screen.on('display-metrics-changed', relayout);
     window.on('moved', () => {
@@ -311,46 +320,41 @@ export class ControlledOverlay {
       screen.removeListener('display-metrics-changed', relayout);
       if (this.window !== window) return;
       this.window = null;
-      this.displayed = null;
-      this.committed = '';
-      this.pending = '';
-      this.loaded = false;
+      this.shown = false;
+      this.loadedKey = '';
+      this.loadingKey = '';
       this.placedDisplay = null;
       this.excluded([]);
     });
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.webContents.on('will-navigate', (event) => {
+      event.preventDefault();
+      const peer = revokedPeer(event.url);
+      if (peer && this.window === window) void this.confirmRevoke(peer);
+    });
+    window.webContents.on('render-process-gone', () =>
+      this.fail(window, generation, new Error('overlay renderer gone')),
+    );
     try {
       window.setMenuBarVisibility(false);
-      await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(overlayHtml())}`);
-      if (generation !== this.generation || window.isDestroyed()) return;
-      window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      window.webContents.on('will-navigate', (event) => {
-        event.preventDefault();
-        if (event.url === REVOKE_URL) void this.confirmRevoke();
-      });
-      window.webContents.on('render-process-gone', () => {
-        this.failures++;
-        if (!window.isDestroyed()) window.destroy();
-      });
       window.setContentProtection(true);
       window.setVisibleOnAllWorkspaces(true, {
         visibleOnFullScreen: true,
         skipTransformProcessType: true,
       });
       window.setAlwaysOnTop(true, 'screen-saver');
-      this.loaded = true;
-      const shown = await this.render(window, generation);
-      if (generation !== this.generation || window.isDestroyed()) return;
-      if (!shown) throw new Error('overlay label unavailable');
+      await this.render(window, generation);
+      // Pick up a target that changed while the first page loaded.
+      await this.render(window, generation);
+      if (generation !== this.generation || window.isDestroyed() || !this.loadedKey) return;
       const id = Number(window.getMediaSourceId().split(':')[1]);
       if (!Number.isSafeInteger(id) || id <= 0) throw new Error('overlay window id unavailable');
       // Install the capture filter before the first visible frame.
       this.excluded([id]);
       window.showInactive();
+      this.shown = true;
     } catch (error) {
-      log.warn('overlay unavailable', error);
-      this.failures++;
-      if (this.window === window) this.stop();
-      else if (!window.isDestroyed()) window.destroy();
+      this.fail(window, generation, error);
     }
   }
 }
