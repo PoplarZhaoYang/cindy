@@ -339,3 +339,38 @@ it('embeds remote device names as escaped literals in the generated script', asy
   const literal = /getElementById\('text'\)\.textContent = (".*?");/.exec(code)?.[1];
   expect(JSON.parse(literal!)).toBe(`remoteDesktop.controlledByDevice:${name}`);
 });
+
+it('keeps the shown device and retries when a label update fails', async () => {
+  const { overlay, revoke } = fixture();
+  const phone = { displayId: '1', controlling: true, peer: 'phone', name: 'iPhone' };
+  const laptop = { displayId: '1', controlling: true, peer: 'laptop', name: 'MacBook' };
+  overlay.update(phone);
+  await settle();
+  const window = state.windows[0];
+  const run = window.webContents.executeJavaScript;
+  run.mockRejectedValueOnce(new Error('renderer busy'));
+  overlay.update(laptop);
+  await settle();
+  navigate(window, 'https://cindy-overlay.invalid/revoke');
+  await settle();
+  expect(revoke).toHaveBeenLastCalledWith('phone');
+  // The next sync retries the same label instead of treating it as shown.
+  overlay.update(laptop);
+  await settle();
+  expect(run).toHaveBeenCalledTimes(3);
+  navigate(window, 'https://cindy-overlay.invalid/revoke');
+  await settle();
+  expect(revoke).toHaveBeenLastCalledWith('laptop');
+});
+
+it('never shows a window whose first label could not be rendered', async () => {
+  const { overlay, excluded } = fixture();
+  state.load = async () => {
+    state.windows.at(-1)!.webContents.executeJavaScript.mockRejectedValueOnce(new Error('x'));
+  };
+  overlay.update({ displayId: '1', controlling: true, peer: 'phone' });
+  await settle();
+  expect(state.windows[0].destroyed).toBe(true);
+  expect(state.windows[0].isVisible()).toBe(false);
+  expect(excluded).not.toHaveBeenCalledWith([101]);
+});

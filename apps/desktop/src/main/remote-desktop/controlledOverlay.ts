@@ -16,7 +16,7 @@ import { readWindowThemeSnapshot } from '../window-theme-mode-store';
 const log = createLogger('remote-desktop:overlay');
 
 const HEIGHT = 28;
-const FALLBACK_WIDTH = 220;
+const INITIAL_WIDTH = 220;
 const TOP_MARGIN = 12;
 // Renderer crashes / load failures tolerated per lease before giving up.
 const MAX_FAILURES = 3;
@@ -172,7 +172,8 @@ export class ControlledOverlay {
       window.setBounds(next, false);
   }
 
-  private async render(window: BrowserWindow, generation: number): Promise<void> {
+  /** True once the page shows the current target; failures leave state for a retry. */
+  private async render(window: BrowserWindow, generation: number): Promise<boolean> {
     const target = this.target;
     const controlling = target?.controlling === true;
     const name = target?.name;
@@ -188,7 +189,7 @@ export class ControlledOverlay {
       // Same visible label: the shown device is indistinguishable from the target.
       this.displayed = target;
       if (this.placedDisplay !== String(this.display().id)) this.layout(window);
-      return;
+      return true;
     }
     this.rendered = key;
     // executeJavaScript calls run in order, so the last size always matches the last text.
@@ -200,13 +201,15 @@ export class ControlledOverlay {
           return Math.ceil(document.querySelector('main').getBoundingClientRect().width); })()`,
       )
       .catch(() => null);
-    if (generation !== this.generation || window.isDestroyed()) return;
+    if (generation !== this.generation || window.isDestroyed()) return false;
+    if (typeof measured !== 'number' || !Number.isFinite(measured) || measured <= 0) {
+      // Not shown: keep the previous device as the revoke target and retry next sync.
+      if (this.rendered === key) this.rendered = '';
+      return false;
+    }
     this.displayed = target;
-    const width =
-      typeof measured === 'number' && Number.isFinite(measured) && measured > 0
-        ? measured
-        : FALLBACK_WIDTH;
-    this.layout(window, width);
+    this.layout(window, measured);
+    return true;
   }
 
   /** Revokes the device shown when the button was clicked, never a later one. */
@@ -249,7 +252,7 @@ export class ControlledOverlay {
     let window: BrowserWindow;
     try {
       window = new BrowserWindow({
-        width: FALLBACK_WIDTH,
+        width: INITIAL_WIDTH,
         height: HEIGHT,
         show: false,
         // A non-activating panel joins full-screen Spaces without converting
@@ -328,8 +331,9 @@ export class ControlledOverlay {
       });
       window.setAlwaysOnTop(true, 'screen-saver');
       this.loaded = true;
-      await this.render(window, generation);
+      const shown = await this.render(window, generation);
       if (generation !== this.generation || window.isDestroyed()) return;
+      if (!shown) throw new Error('overlay label unavailable');
       const id = Number(window.getMediaSourceId().split(':')[1]);
       if (!Number.isSafeInteger(id) || id <= 0) throw new Error('overlay window id unavailable');
       // Install the capture filter before the first visible frame.
