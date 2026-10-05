@@ -564,6 +564,46 @@ describe('Claude Code tool-loop guard runtime integration', () => {
     }
   });
 
+  it('等待用户确认期间丢弃迟到的复核 stop', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);
+    type CanUseTool = (tool: string, input: Record<string, unknown>, opts: { toolUseID: string; signal?: AbortSignal }) => Promise<unknown>;
+    const canUseTool = (sdkMock.query.mock.calls.at(-1)?.[0] as { options?: { canUseTool?: CanUseTool } } | undefined)
+      ?.options?.canUseTool;
+    expect(canUseTool).toBeTypeOf('function');
+    handle.setInteractionResolver?.(() => new Promise(() => {}));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      await handle.send({ type: 'user', content: 'wait for the run' });
+      for (let i = 0; i < 4; i++) {
+        const id = `ask-${i}`;
+        stream.emit({
+          type: 'assistant', parent_tool_use_id: null,
+          message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'gh run view 1' } }] },
+        });
+        stream.emit({
+          type: 'user', parent_tool_use_id: null,
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'in_progress' }] },
+        });
+        await pumpUntil(() => events.filter(e => e.type === 'tool_result_full').length === i + 1, 'bash delivered');
+      }
+      expect(reviewer).toHaveBeenCalledOnce();
+      // 复核未返回时进入权限确认,用户正在看确认卡。
+      void canUseTool!('Bash', { command: 'rm -rf build' }, { toolUseID: 'needs-approval' });
+      await vi.advanceTimersByTimeAsync(0);
+      decide('stop');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+      expect(toolLoopError(events)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      stream.end();
+      await handle.close().catch(() => undefined);
+      await collected;
+    }
+  });
+
   it('同一 turn 中途切换模型不重置复核次数', async () => {
     const reviewer = vi.fn<ToolLoopReviewer>(async () => 'continue');
     const { handle, stream, events, fakeQuery, collected } = await startSessionWithStream('claude-opus-4-6', reviewer);

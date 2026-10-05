@@ -230,6 +230,30 @@ describe.each(['pi', 'codex'] as const)('%s Session tool loop coverage', (agentK
     expect(t.handle.abort).toHaveBeenCalledOnce();
   });
 
+  it('emits a reviewed stop only after the pending result summary', async () => {
+    let decide!: (decision: 'continue' | 'stop') => void;
+    const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));
+    const t = setup(agentKind, false, reviewer);
+    await t.session.send('investigate');
+    for (let i = 0; i < 3; i++) await t.tool(String(i));
+    t.queue.push({ type: 'tool_use', source: agentKind, data: { toolUseId: 'last', toolName: 'read', input: { path: 'same.ts' } } });
+    t.queue.push({ type: 'tool_result_full', source: agentKind, data: { toolUseId: 'last', fullText: 'same result' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reviewer).toHaveBeenCalledOnce();
+    decide('stop');
+    await vi.advanceTimersByTimeAsync(0);
+    // 完整结果已送达、摘要未到:终态必须等摘要。
+    expect(t.errors()).toHaveLength(0);
+    t.queue.push({ type: 'tool_result', source: agentKind, data: { toolUseIds: ['last'], summary: 'done' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.errors()).toHaveLength(1);
+    const summaryIndex = t.seen.findIndex((e) => e.type === 'tool_result'
+      && (e.data as { toolUseIds?: string[] }).toolUseIds?.includes('last'));
+    expect(summaryIndex).toBeGreaterThanOrEqual(0);
+    expect(summaryIndex).toBeLessThan(t.seen.indexOf(t.errors()[0]!));
+    expect(t.handle.abort).toHaveBeenCalledOnce();
+  });
+
   it('discards a reviewed stop that arrives after detachment starts', async () => {
     let decide!: (decision: 'continue' | 'stop') => void;
     const reviewer = vi.fn<ToolLoopReviewer>(() => new Promise((resolve) => { decide = resolve; }));

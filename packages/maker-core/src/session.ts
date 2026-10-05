@@ -375,6 +375,8 @@ type TurnControlState = {
   generation: number;
   toolLoopMonitor: ToolLoopMonitor | null;
   pendingToolLoop: { toolUseId: string; verdict: HardToolLoopVerdict } | null;
+  /** 已送达完整结果、尚未送达结果摘要的工具;终态错误必须排在它们的摘要之后。 */
+  awaitingToolResultSummaries: Set<string>;
   activeToolIds: Set<string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
@@ -2205,6 +2207,7 @@ export class Session {
         logger: this.logger,
       }),
       pendingToolLoop: null,
+      awaitingToolResultSummaries: new Set(),
       activeToolIds: new Set(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
@@ -2807,12 +2810,14 @@ export class Session {
 
   private observeToolLoop(event: AgentEvent, generation: number): void {
     if (event.type !== 'tool_use' && event.type !== 'tool_result_full' && event.type !== 'tool_result') return;
-    const control = this.toolLoopControlFor(generation);
-    if (!control?.toolLoopMonitor ||
-      event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId) return;
+    if (event.turnScope === 'background' || event.sessionInstanceId !== this.instanceId) return;
     const data = event.data && typeof event.data === 'object'
       ? event.data as Record<string, unknown> : {};
     if (data.runtimeActivity === 'snapshot') return;
+    // 摘要配对记账不受检测暂停(等人确认等)影响,否则复核终态可能等一个早已送达的摘要。
+    this.trackToolResultSummaries(event, data, generation);
+    const control = this.toolLoopControlFor(generation);
+    if (!control?.toolLoopMonitor) return;
     if (event.type === 'tool_result') {
       const pending = control.pendingToolLoop;
       if (!pending || !Array.isArray(data.toolUseIds) || !data.toolUseIds.includes(pending.toolUseId)) return;
@@ -2834,6 +2839,16 @@ export class Session {
     control.pendingToolLoop = { toolUseId: data.toolUseId, verdict };
   }
 
+  private trackToolResultSummaries(event: AgentEvent, data: Record<string, unknown>, generation: number): void {
+    const control = this.turnControlState;
+    if (!control || control.generation !== generation) return;
+    if (event.type === 'tool_result_full' && typeof data.toolUseId === 'string') {
+      control.awaitingToolResultSummaries.add(data.toolUseId);
+    } else if (event.type === 'tool_result' && Array.isArray(data.toolUseIds)) {
+      for (const id of data.toolUseIds) if (typeof id === 'string') control.awaitingToolResultSummaries.delete(id);
+    }
+  }
+
   /**
    * 后台复核判定 stop 时,结果可能晚于 turn 结束、接管或关闭到达。只有同一 turn
    * 仍满足 observeToolLoop 的全部前提时才中断;否则丢弃。
@@ -2841,6 +2856,12 @@ export class Session {
   private interruptReviewedToolLoop(verdict: HardToolLoopVerdict, generation: number): void {
     const control = this.toolLoopControlFor(generation);
     if (!control || control.pendingToolLoop) return;
+    // 与同步判定同一顺序约束:还有完整结果未配上摘要时,等最后一个摘要送达再发终态。
+    const awaiting = [...control.awaitingToolResultSummaries].at(-1);
+    if (awaiting !== undefined) {
+      control.pendingToolLoop = { toolUseId: awaiting, verdict };
+      return;
+    }
     this.interruptToolLoop(verdict, generation);
   }
 

@@ -2857,7 +2857,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         }),
         // 复核结果晚到时,guard 可能已随新 turn 重置;只处理仍在位的同一 monitor。
         onReviewedStop: (verdict) => {
-          if (closed || toolLoopMonitors.get(scopeKey) !== monitor || !turnInFlight || turnState.interruptRequested) return;
+          // 与 Pi/Codex 的 toolLoopControlFor 同一前提:等用户确认期间不中断。
+          if (closed || toolLoopMonitors.get(scopeKey) !== monitor || !turnInFlight ||
+            turnState.interruptRequested || pendingInteractions.size > 0) return;
           interruptForToolLoop(verdict, parentToolUseId);
         },
         logger: log,
