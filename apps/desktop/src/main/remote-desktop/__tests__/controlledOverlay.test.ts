@@ -327,3 +327,15 @@ it("follows Cindy's selected appearance rather than only the OS", async () => {
   await settle();
   expect(run).toHaveBeenLastCalledWith(expect.stringContaining("toggle('dark', false)"));
 });
+
+it('embeds remote device names as escaped literals in the generated script', async () => {
+  const { overlay } = fixture();
+  const name = 'x</script> y';
+  overlay.update({ displayId: '1', controlling: true, peer: 'phone', name });
+  await settle();
+  const code = String(state.windows[0].webContents.executeJavaScript.mock.calls.at(-1)?.[0]);
+  expect(code).not.toContain('</script>');
+  expect(code).not.toContain(' ');
+  const literal = /getElementById\('text'\)\.textContent = (".*?");/.exec(code)?.[1];
+  expect(JSON.parse(literal!)).toBe(`remoteDesktop.controlledByDevice:${name}`);
+});

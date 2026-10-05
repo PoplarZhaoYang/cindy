@@ -57,6 +57,18 @@ function overlayIsDark(): boolean {
   return resolveAppThemeIsDark(nativeTheme.shouldUseDarkColors, theme.mode, theme.resolvedIsDark);
 }
 
+const UNSAFE_LITERAL_CHARS: Record<string, string> = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029',
+};
+/** A JS string literal safe to embed in generated code (device names come from another device). */
+function scriptLiteral(value: string): string {
+  return JSON.stringify(value).replace(/[<>/\u2028\u2029]/g, (char) => UNSAFE_LITERAL_CHARS[char]);
+}
+
 function clamp(bounds: Rectangle, area: Rectangle): Rectangle {
   const x = Math.min(Math.max(bounds.x, area.x), area.x + area.width - bounds.width);
   const y = Math.min(Math.max(bounds.y, area.y), area.y + area.height - bounds.height);
@@ -183,8 +195,8 @@ export class ControlledOverlay {
     const measured: unknown = await window.webContents
       .executeJavaScript(
         `(() => { document.documentElement.classList.toggle('dark', ${dark});
-          document.getElementById('text').textContent = ${JSON.stringify(text)};
-          document.getElementById('revoke').textContent = ${JSON.stringify(label)};
+          document.getElementById('text').textContent = ${scriptLiteral(text)};
+          document.getElementById('revoke').textContent = ${scriptLiteral(label)};
           return Math.ceil(document.querySelector('main').getBoundingClientRect().width); })()`,
       )
       .catch(() => null);
