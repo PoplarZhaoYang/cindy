@@ -231,6 +231,18 @@ it('rechecks an interrupted probe on keyboard focus and keeps retrying while it 
   expect(invoke).toHaveBeenCalledTimes(4);
 });
 
+it('reports a relay offline reply as offline and checks again when revealed', async () => {
+  invoke.mockRejectedValueOnce(new Error('[DEVICE_LINK_DEVICE_OFFLINE] target device is offline'));
+  render(header());
+  await act(async () => {});
+  expect(
+    screen.getByRole('button', { name: /^Remote desktop unavailable:/ }).getAttribute('aria-label'),
+  ).toContain('This computer is offline.');
+  await hover();
+  expect(invoke).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('button', { name: 'Open remote desktop' })).toBeTruthy();
+});
+
 it('does not recheck a definitive failure on hover', async () => {
   invoke.mockResolvedValue({ ...capabilities, enabled: false });
   render(header());

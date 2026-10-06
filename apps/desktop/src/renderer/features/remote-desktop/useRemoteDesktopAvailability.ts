@@ -11,6 +11,10 @@ import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDev
 import { isTransientRemoteError } from '@/features/device-link/refreshRemoteSessions';
 
 const CHECK_INTERRUPTED = 'remoteDesktop.shortcut.checkInterrupted';
+const OFFLINE = 'remoteDesktop.shortcut.offline';
+// Probe outcomes that may change without a presence edge: repeat them when the
+// shortcut is revealed instead of keeping a stale failure.
+const RETRYABLE_PROBE_REASONS = new Set([CHECK_INTERRUPTED, OFFLINE]);
 
 export function remoteDesktopUnavailableReason(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -50,7 +54,7 @@ export function remoteDesktopAvailabilityError(error: unknown): string {
   if (code.includes('REMOTE_DISABLED')) return 'remoteDesktop.remoteDisabled';
   if (code.includes('CHANNEL_NOT_ALLOWED')) return 'remoteDesktop.upgrade';
   if (code.includes('DESKTOP_DISABLED')) return 'remoteDesktop.disabled';
-  if (code.includes('PEER_OFFLINE')) return 'remoteDesktop.shortcut.offline';
+  if (code.includes('PEER_OFFLINE') || code.includes('DEVICE_OFFLINE')) return OFFLINE;
   // A link that is reconnecting, congested or behind an open circuit says
   // nothing about the remote desktop itself; the user can check again.
   if (
@@ -136,7 +140,10 @@ export function useRemoteDesktopAvailability(deviceId: string) {
     checking: !reason && checked?.scope !== scope,
     available: !blockedReason && checked?.scope === scope && checked.reason === null,
     reason,
-    retryable: reason === CHECK_INTERRUPTED,
+    retryable:
+      !blockedReason &&
+      checked?.scope === scope &&
+      RETRYABLE_PROBE_REASONS.has(checked.reason ?? ''),
     retry,
     markUnavailable: (error: unknown) => {
       setChecked({ scope, reason: remoteDesktopAvailabilityError(error) });
