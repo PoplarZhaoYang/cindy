@@ -288,6 +288,8 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(SEND_TO_LEAD_TOOL_DESCRIPTION).toContain('final report or one blocking question');
     expect(SEND_TO_LEAD_TOOL_DESCRIPTION).toContain('After a question, stop and wait for send_to_worker');
     expect(SEND_TO_LEAD_TOOL_DESCRIPTION).toContain('do not send progress');
+    expect(SEND_TO_LEAD_TOOL_DESCRIPTION).toContain('delivery=steer');
+    expect(SEND_TO_LEAD_TOOL_DESCRIPTION).toContain('otherwise keep the default');
     expect(SEND_TO_LEAD_TOOL_DESCRIPTION).not.toContain('root Orca Worker');
     expect(SEND_TO_LEAD_TOOL_DESCRIPTION.length).toBeLessThan(700);
   });
@@ -570,47 +572,81 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(lead.sent).toHaveLength(1);
   });
 
-  it.each(['dispatched', 'queued'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {
+  it.each(['dispatched', 'queued', 'steered'] as const)('settles host-owned %s reports without waiting for lead completion', async mode => {
     const lead = makeSession('lead-1');
     lead.turnRunning = true;
     let accepted: (() => void | Promise<void>) | undefined;
-    const dispatch: NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']> = async params => {
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async params => {
       accepted = params.onAccepted;
       if (mode === 'dispatched') await accepted?.();
       return { ok: true, mode, clientId: 'report-client' };
-    };
+    });
     const h = makeWorkerBridgeLeadHarness(lead, dispatch);
-    __testing.setAutoBridgePending('worker-1', true);
-    try {
-      expect(parseToolJson(await h.server._registeredTools.send_to_lead.handler({
-        worker_id: 'worker-1', message: 'Completed work',
-      }))).toMatchObject({ ok: true });
-      expect(lead.isTurnRunning()).toBe(true);
-      expect(lead.sent).toEqual([]);
-      expect(__testing.hasAutoBridgePending('worker-1')).toBe(false);
-      expect(__testing.autoBridgeStateCount()).toBe(0);
-      expect(h.statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
-      // A retained queue row can drain after the worker has received a new task.
-      // Its old accepted callback must not settle that newer task again.
-      await accepted?.();
-      expect(h.statusUpdates).toHaveLength(1);
-    } finally {
-      __testing.clearAutoBridgeState('worker-1');
-    }
+    const json = parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1', message: 'Completed work',
+      ...(mode === 'steered' ? { delivery: 'steer' } : {}),
+    }));
+    expect(json).toMatchObject({ ok: true });
+    expect(json.queued).toBe(mode === 'queued' ? true : undefined);
+    expect(json.steered).toBe(mode === 'steered' ? true : undefined);
+    expect(json).not.toHaveProperty('steer_fallback_reason');
+    expect(lead.isTurnRunning()).toBe(true);
+    expect(lead.sent).toEqual([]);
+    expect(h.statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+    // A retained queue row can drain after the worker has received a new task.
+    // Its old accepted callback must not settle that newer task again.
+    await accepted?.();
+    expect(h.statusUpdates).toHaveLength(1);
   });
 
-  it('keeps automatic completion reporting pending when host steering is rejected', async () => {
+  it('forwards explicit send_to_lead delivery and omits it when the worker keeps the default', async () => {
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async () => ({
+      ok: true,
+      mode: 'queued',
+      clientId: 'report-client',
+    }));
+    const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), dispatch);
+
+    await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'plain report' });
+    expect(dispatch.mock.calls[0]?.[0]).not.toHaveProperty('delivery');
+
+    await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1', message: 'urgent correction', delivery: 'steer',
+    });
+    expect(dispatch.mock.calls[1]?.[0]).toMatchObject({
+      rawContent: 'urgent correction',
+      source: 'worker',
+      delivery: 'steer',
+    });
+  });
+
+  it('reports a queued steer fallback reason and still settles the worker report', async () => {
+    const dispatch = vi.fn<NonNullable<OrcaBridgeMcpDeps['dispatchInterAgentMessage']>>(async () => ({
+      ok: true,
+      mode: 'queued',
+      clientId: 'report-client',
+      steerFallbackReason: 'STEER_UNSUPPORTED',
+    }));
+    const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), dispatch);
+
+    expect(parseToolJson(await h.server._registeredTools.send_to_lead.handler({
+      worker_id: 'worker-1', message: 'urgent correction', delivery: 'steer',
+    }))).toEqual({
+      ok: true,
+      queued: true,
+      steer_fallback_reason: 'STEER_UNSUPPORTED',
+      worker_id: 'worker-1',
+      lead_session_id: 'lead-1',
+    });
+    expect(h.statusUpdates).toEqual([{ workerId: 'worker-1', status: 'done' }]);
+  });
+
+  it('does not settle the worker report when host dispatch is rejected', async () => {
     const h = makeWorkerBridgeLeadHarness(makeSession('lead-1'), async () => ({ ok: false,
       dispatchOutcome: { kind: 'host-send', accepted: false, code: 'SEND_FAILED', message: 'rejected' },
     }));
-    __testing.setAutoBridgePending('worker-1', true);
-    try {
-      expectToolError(await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'result' }));
-      expect(__testing.hasAutoBridgePending('worker-1')).toBe(true);
-      expect(h.statusUpdates).toEqual([]);
-    } finally {
-      __testing.clearAutoBridgeState('worker-1');
-    }
+    expectToolError(await h.server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'result' }));
+    expect(h.statusUpdates).toEqual([]);
   });
 
   it('hydrates lead provider route before cold send_to_lead creates the lead session', async () => {
