@@ -133,6 +133,26 @@ describe('UsageLimitAutoResume', () => {
     expect(h.deps.cancel).toHaveBeenCalledWith('s1', 1);
   });
 
+  it('withdraws the wait when the continuation does not start', async () => {
+    for (const continueSession of [
+      vi.fn(async () => 'no-progress' as const),
+      vi.fn(async () => {
+        throw new Error('db read failed');
+      }),
+    ]) {
+      const h = harness({ continueSession });
+      h.guard.onTurnError('s1', LIMIT);
+      await h.flush();
+      await h.fireLast();
+      expect(h.deps.cancel).toHaveBeenCalledWith('s1', 1);
+    }
+    const ok = harness();
+    ok.guard.onTurnError('s1', LIMIT);
+    await ok.flush();
+    await ok.fireLast();
+    expect(ok.deps.cancel).not.toHaveBeenCalled();
+  });
+
   it('stops after the consecutive cap until progress or a human action resets it', async () => {
     const h = harness();
     for (let i = 0; i < USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES; i += 1) {

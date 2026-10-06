@@ -150,8 +150,11 @@ export class UsageLimitAutoResume {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
       });
+      this.deps.cancel(sessionId, token);
       return;
     }
+    // 没真正续上(如判断不了有无产出):撤掉已过点的提示,保留原错误与手动重试,不再自动等待。
+    if (outcome !== 'resumed') this.deps.cancel(sessionId, token);
     this.deps.log('usage-limit auto-resume fired', { sessionId, outcome, attempt });
   }
 
