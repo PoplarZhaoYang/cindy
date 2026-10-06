@@ -73,6 +73,7 @@ import {
   sanitizeQueuedMessageForPersistence,
   updateQueuedMessageContent,
   updateQueuedMessageText,
+  USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
 } from '../../shared/agentInputQueue.js';
 import { CONTINUE_AFTER_ERROR_PROMPT, syntheticTriggerKind } from '../../shared/interruptedTurn.js';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
@@ -5576,6 +5577,11 @@ export class AgentInputCoordinator {
     state: SessionInputState,
     item: AgentInputQueuedMessage,
   ): boolean {
+    // 额度重置后的续跑没有中断自愈令牌(sessionTotal 刻意为 0):以派发前回滚记录仍在为准,
+    // 用户接手 / 清空会话都会撤掉它。
+    if (item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) {
+      return this.pendingAutoResumeRecoveries.get(item.clientId)?.stateRef === state;
+    }
     const attemptToken = item.autoResumeInfo?.sessionTotal;
     return typeof attemptToken === 'number' && state.autoResumeAttemptToken === attemptToken;
   }

@@ -13,7 +13,10 @@ import {
   isXaiWeeklyUsageCurrent,
   matchScopedWindowForModel,
 } from '@cindy/maker-shared/subscription-usage';
-import type { NativeSubscriptionAuth } from '@cindy/model-providers';
+import {
+  NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS,
+  type NativeSubscriptionAuth,
+} from '@cindy/model-providers';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -148,6 +151,10 @@ export function subscriptionFamilyOf(
   providerId: string | null | undefined,
 ): NativeSubscriptionAuth | null {
   if (!providerId) return agentKind === 'codex' ? 'codex' : null;
+  // 内置默认账号(openai / anthropic / xai)不带 auth.native,按固定 id 识别;独立账号才带。
+  for (const [family, id] of Object.entries(NATIVE_SUBSCRIPTION_DEFAULT_PROVIDER_IDS)) {
+    if (id === providerId) return family as NativeSubscriptionAuth;
+  }
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
   return provider?.auth.native ?? null;
 }

@@ -157,12 +157,19 @@ describe('xaiAccountUsageLimit', () => {
 
 describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
   it('maps a provider to its subscription family, independent of the agent', () => {
+    // 内置默认账号目录里不带 auth.native。
     mocks.providers = [
-      { id: 'openai', auth: { native: 'codex' } },
+      { id: 'openai', auth: {} },
+      { id: 'anthropic', auth: {} },
+      { id: 'xai', auth: {} },
+      { id: 'codex-work', auth: { native: 'codex' } },
       { id: 'kimi-coding', auth: {} },
     ];
     expect(subscriptionFamilyOf('claude-code', 'openai')).toBe('codex');
     expect(subscriptionFamilyOf('pi', 'openai')).toBe('codex');
+    expect(subscriptionFamilyOf('claude-code', 'anthropic')).toBe('claude');
+    expect(subscriptionFamilyOf('pi', 'xai')).toBe('xai');
+    expect(subscriptionFamilyOf('codex', 'codex-work')).toBe('codex');
     expect(subscriptionFamilyOf('claude-code', 'kimi-coding')).toBeNull();
     // 旧会话缺省 provider:只有 Codex 能确定是 ChatGPT 默认账号。
     expect(subscriptionFamilyOf('codex', null)).toBe('codex');
