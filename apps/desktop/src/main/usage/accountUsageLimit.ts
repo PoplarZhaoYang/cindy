@@ -8,6 +8,8 @@
  * 快照只是兜底：限额错误自带或文案里写明的重置时刻更准，调用方应优先用那个。
  */
 
+import { matchCodexBucketForModel } from '@cindy/maker-shared/codex-usage-buckets';
+import { matchScopedWindowForModel } from '@cindy/maker-shared/subscription-usage';
 import type { NativeSubscriptionAuth } from '@cindy/model-providers';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
@@ -56,17 +58,28 @@ function codexWindows(snapshot: RateLimitSnapshot | null | undefined): UsageWind
     .map((w) => ({ usedPercent: w.usedPercent, resetsAtSec: w.resetsAt }));
 }
 
-/** ChatGPT 订阅：顶层兼容位、web 槽与 app-server 各桶一起看（限流可能来自任一桶）。 */
-export function codexAccountUsageLimit(payload: CodexAccountUsagePayload | null): AccountUsageLimit | null {
+/**
+ * ChatGPT 订阅：只看当前会话实际消耗的那一份额度，别的模型桶用满不影响本会话。
+ *  - Codex 原生会话：按模型匹配 app-server 桶（没有桶表时退回顶层兼容位）；
+ *  - Claude Code bridge / Pi：走 ChatGPT web 额度（WHAM 槽）。
+ */
+export function codexAccountUsageLimit(
+  payload: CodexAccountUsagePayload | null,
+  session: { agentKind: string; modelId?: string | null },
+): AccountUsageLimit | null {
   if (!payload) return null;
-  const snapshots: RateLimitSnapshot[] = [
-    payload,
-    ...(payload.webSnapshot ? [payload.webSnapshot] : []),
-    ...Object.values(payload.appServerBuckets ?? {}),
-  ];
-  const windows = snapshots.flatMap(codexWindows);
-  if (windows.length === 0) return null;
-  return fromWindows(windows, snapshots.some((s) => s.rateLimitReachedType != null));
+  let snapshot: RateLimitSnapshot | null;
+  if (session.agentKind === 'codex') {
+    const buckets = payload.appServerBuckets;
+    snapshot = buckets && Object.keys(buckets).length > 0
+      ? matchCodexBucketForModel(buckets, session.modelId)
+      : payload;
+  } else {
+    snapshot = payload.webSnapshot ?? null;
+  }
+  const windows = codexWindows(snapshot);
+  if (!snapshot || windows.length === 0) return null;
+  return fromWindows(windows, snapshot.rateLimitReachedType != null);
 }
 
 const CLAUDE_REJECTED_CLAIM_TO_WINDOW = {
@@ -74,11 +87,14 @@ const CLAUDE_REJECTED_CLAIM_TO_WINDOW = {
   seven_day: 'sevenDay',
 } as const;
 
+/** Claude 订阅：总窗口 + 仅当前模型的专属周窗口（别的模型的专属窗口用满不影响本会话）。 */
 export function claudeAccountUsageLimit(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,
+  modelId?: string | null,
 ): AccountUsageLimit | null {
   if (!snapshot) return null;
-  const windows: UsageWindow[] = [snapshot.fiveHour, snapshot.sevenDay, ...(snapshot.scoped ?? [])]
+  const scoped = matchScopedWindowForModel(snapshot.scoped, modelId);
+  const windows: UsageWindow[] = [snapshot.fiveHour, snapshot.sevenDay, scoped]
     .filter((w): w is NonNullable<typeof w> => !!w && typeof w.utilization === 'number')
     .map((w) => ({ usedPercent: w.utilization, resetsAtSec: w.resetsAt }));
   // headers 源被拒时只报状态和「最紧窗口」名，不带用量；把那个窗口视为已用满。
@@ -121,15 +137,19 @@ export function subscriptionFamilyOf(
 export async function readAccountUsageLimit(
   agentKind: string,
   providerId: string | null | undefined,
+  modelId?: string | null,
 ): Promise<AccountUsageLimit | null | undefined> {
   const family = subscriptionFamilyOf(agentKind, providerId);
   switch (family) {
     case 'codex':
-      return codexAccountUsageLimit(await readCodexAccountUsageSnapshot(providerId ?? undefined));
+      return codexAccountUsageLimit(await readCodexAccountUsageSnapshot(providerId ?? undefined), {
+        agentKind,
+        modelId,
+      });
     case 'claude':
       // 独立 Claude 账号已停用，只有内置默认账号有快照。
       return providerId === 'anthropic' || !providerId
-        ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshot())
+        ? claudeAccountUsageLimit(await readClaudeSubscriptionUsageSnapshot(), modelId)
         : null;
     case 'xai':
       return xaiAccountUsageLimit(

@@ -39,8 +39,11 @@ export interface UsageLimitAutoResumeDeps {
   isEligible(sessionId: string): Promise<boolean>;
   /** 会话所用账号的重置时刻（unix ms）：错误自带 → 报错原文 → 订阅快照；拿不到为 null。 */
   resolveResetAt(sessionId: string, signals: InterruptedTurnErrorSignals): Promise<number | null>;
-  arm(sessionId: string, resumeAt: number): number | null;
+  /** 用终态错误时 coordinator 下发的候选令牌挂上等待；false = 那次错误已不是当前状态。 */
+  arm(sessionId: string, token: number, resumeAt: number): boolean;
   isCurrent(sessionId: string, token: number): boolean;
+  /** 放弃这一次等待（到点时已不归本机制管），撤掉横幅上的自动继续提示。 */
+  cancel(sessionId: string, token: number): void;
   continueSession(
     sessionId: string,
     token: number,
@@ -57,22 +60,25 @@ export function isAccountUsageLimitError(signals: InterruptedTurnErrorSignals): 
 export class UsageLimitAutoResume {
   private readonly timers = new Map<string, { token: number; handle: unknown }>();
   private readonly consecutive = new Map<string, number>();
-  /** 每次新错误递增；迟到的异步解析结果据此丢弃。 */
+  /** 每次新错误 / 用户接手 / 任务关闭都递增；迟到的异步解析结果据此丢弃。 */
   private readonly generations = new Map<string, number>();
   private disposed = false;
 
   constructor(private readonly deps: UsageLimitAutoResumeDeps) {}
 
-  onTurnError(sessionId: string, signals: InterruptedTurnErrorSignals): void {
+  onTurnError(
+    sessionId: string,
+    signals: InterruptedTurnErrorSignals,
+    candidateToken: number,
+  ): void {
     if (this.disposed || !isAccountUsageLimitError(signals)) return;
     const used = this.consecutive.get(sessionId) ?? 0;
     if (used >= USAGE_LIMIT_MAX_CONSECUTIVE_RESUMES) {
       this.deps.log('usage-limit auto-resume exhausted', { sessionId, used });
       return;
     }
-    const generation = (this.generations.get(sessionId) ?? 0) + 1;
-    this.generations.set(sessionId, generation);
-    void this.schedule(sessionId, signals, generation).catch((err) => {
+    const generation = this.bumpGeneration(sessionId);
+    void this.schedule(sessionId, signals, candidateToken, generation).catch((err) => {
       this.deps.log('usage-limit auto-resume scheduling failed', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
@@ -80,9 +86,16 @@ export class UsageLimitAutoResume {
     });
   }
 
+  private bumpGeneration(sessionId: string): number {
+    const generation = (this.generations.get(sessionId) ?? 0) + 1;
+    this.generations.set(sessionId, generation);
+    return generation;
+  }
+
   private async schedule(
     sessionId: string,
     signals: InterruptedTurnErrorSignals,
+    token: number,
     generation: number,
   ): Promise<void> {
     if (!(await this.deps.isEligible(sessionId))) return;
@@ -101,8 +114,7 @@ export class UsageLimitAutoResume {
       Math.max(resetAt, now) +
       USAGE_LIMIT_RESUME_BUFFER_MS +
       Math.floor(this.deps.random() * USAGE_LIMIT_RESUME_JITTER_MS);
-    const token = this.deps.arm(sessionId, resumeAt);
-    if (token === null) return;
+    if (!this.deps.arm(sessionId, token, resumeAt)) return;
     this.clear(sessionId);
     const handle = this.deps.setTimer(() => {
       void this.fire(sessionId, token);
@@ -115,8 +127,12 @@ export class UsageLimitAutoResume {
     const pending = this.timers.get(sessionId);
     if (pending?.token === token) this.timers.delete(sessionId);
     if (this.disposed || !this.deps.isCurrent(sessionId, token)) return;
-    // 等待期间可能开了目标模式等：到点再判一次归属。
-    if (!(await this.deps.isEligible(sessionId))) return;
+    // 等待期间可能开了目标模式、暂停了执行等：到点再判一次归属。放弃时撤掉提示，
+    // 不留下一个过了点却不会执行的「将于 X 自动继续」。
+    if (!(await this.deps.isEligible(sessionId))) {
+      this.deps.cancel(sessionId, token);
+      return;
+    }
     const attempt = (this.consecutive.get(sessionId) ?? 0) + 1;
     this.consecutive.set(sessionId, attempt);
     let outcome: UsageLimitContinueOutcome;
@@ -144,9 +160,16 @@ export class UsageLimitAutoResume {
     this.consecutive.delete(sessionId);
   }
 
-  /** 用户亲自接手（发消息 / 手动重试）：撤掉定时器并重置次数。 */
+  /** 用户亲自接手（发消息 / 手动重试）：作废在途查询、撤掉定时器并重置次数。 */
   noteUserAction(sessionId: string): void {
     this.consecutive.delete(sessionId);
+    this.bumpGeneration(sessionId);
+    this.clear(sessionId);
+  }
+
+  /** 任务被关闭：作废在途查询与定时器（coordinator 侧等待同时撤销）。 */
+  noteSessionClosed(sessionId: string): void {
+    this.bumpGeneration(sessionId);
     this.clear(sessionId);
   }
 

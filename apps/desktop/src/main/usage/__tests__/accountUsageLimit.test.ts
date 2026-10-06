@@ -28,8 +28,10 @@ import {
   xaiAccountUsageLimit,
 } from '../accountUsageLimit';
 
-const RESET_5H = 1_791_202_800;
-const RESET_WEEK = 1_791_600_000;
+// 必须在未来:过期窗口的 app-server 桶会被选桶逻辑当作陈旧桶跳过。
+const NOW_SEC = Math.floor(Date.now() / 1000);
+const RESET_5H = NOW_SEC + 3 * 60 * 60;
+const RESET_WEEK = NOW_SEC + 5 * 24 * 60 * 60;
 
 beforeEach(() => {
   mocks.providers = [];
@@ -40,32 +42,47 @@ beforeEach(() => {
 });
 
 describe('codexAccountUsageLimit', () => {
-  it('uses the latest exhausted window across top-level, web and app-server buckets', () => {
+  const buckets = {
+    codex: { limitId: 'codex', primary: { usedPercent: 40, resetsAt: RESET_5H } },
+    spark: {
+      limitId: 'spark',
+      limitName: 'GPT-5.3-Codex-Spark',
+      primary: { usedPercent: 100, resetsAt: RESET_WEEK },
+    },
+  };
+
+  it('only looks at the bucket matching the Codex session model', () => {
     expect(
-      codexAccountUsageLimit({
-        primary: { usedPercent: 40, resetsAt: RESET_5H },
-        webSnapshot: { secondary: { usedPercent: 100, resetsAt: RESET_WEEK } },
-        appServerBuckets: { spark: { primary: { usedPercent: 100, resetsAt: RESET_5H } } },
-      }),
+      codexAccountUsageLimit({ appServerBuckets: buckets }, { agentKind: 'codex', modelId: 'gpt-5.5' }),
+    ).toEqual({ limited: false, resetAtMs: RESET_5H * 1000 });
+    expect(
+      codexAccountUsageLimit(
+        { appServerBuckets: buckets },
+        { agentKind: 'codex', modelId: 'gpt-5.3-codex-spark' },
+      ),
     ).toEqual({ limited: true, resetAtMs: RESET_WEEK * 1000 });
   });
 
-  it('reports not limited but keeps the latest reset when no window is full', () => {
+  it('reads the ChatGPT web slot for bridge / Pi sessions', () => {
     expect(
-      codexAccountUsageLimit({
-        primary: { usedPercent: 40, resetsAt: RESET_5H },
-        secondary: { usedPercent: 70, resetsAt: RESET_WEEK },
-      }),
-    ).toEqual({ limited: false, resetAtMs: RESET_WEEK * 1000 });
+      codexAccountUsageLimit(
+        {
+          appServerBuckets: buckets,
+          webSnapshot: { secondary: { usedPercent: 100, resetsAt: RESET_WEEK } },
+        },
+        { agentKind: 'claude-code', modelId: 'gpt-5.5' },
+      ),
+    ).toEqual({ limited: true, resetAtMs: RESET_WEEK * 1000 });
+    expect(codexAccountUsageLimit({ appServerBuckets: buckets }, { agentKind: 'pi' })).toBeNull();
   });
 
-  it('honours the upstream reached flag', () => {
+  it('falls back to the top-level snapshot without a bucket table and honours the reached flag', () => {
     expect(
-      codexAccountUsageLimit({
-        rateLimitReachedType: 'primary',
-        primary: { usedPercent: 99, resetsAt: RESET_5H },
-      })?.limited,
-    ).toBe(true);
+      codexAccountUsageLimit(
+        { rateLimitReachedType: 'primary', primary: { usedPercent: 99, resetsAt: RESET_5H } },
+        { agentKind: 'codex' },
+      ),
+    ).toEqual({ limited: true, resetAtMs: RESET_5H * 1000 });
   });
 });
 
@@ -81,13 +98,16 @@ describe('claudeAccountUsageLimit', () => {
     ).toEqual({ limited: true, resetAtMs: RESET_5H * 1000 });
   });
 
-  it('includes model-scoped weekly windows', () => {
-    expect(
-      claudeAccountUsageLimit({
-        fiveHour: { utilization: 10, resetsAt: RESET_5H },
-        scoped: [{ utilization: 100, resetsAt: RESET_WEEK, modelDisplayName: 'Opus' }],
-      }),
-    ).toEqual({ limited: true, resetAtMs: RESET_WEEK * 1000 });
+  it('only counts the model-scoped window of the session model', () => {
+    const snapshot = {
+      fiveHour: { utilization: 10, resetsAt: RESET_5H },
+      scoped: [{ utilization: 100, resetsAt: RESET_WEEK, modelDisplayName: 'Opus' }],
+    };
+    expect(claudeAccountUsageLimit(snapshot, 'claude-opus-5-5')).toEqual({
+      limited: true,
+      resetAtMs: RESET_WEEK * 1000,
+    });
+    expect(claudeAccountUsageLimit(snapshot, 'claude-sonnet-5')?.limited).toBe(false);
   });
 });
 
@@ -124,7 +144,7 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
   it('reads the ChatGPT snapshot of the session provider', async () => {
     mocks.providers = [{ id: 'codex-work', auth: { native: 'codex' } }];
     mocks.codex.mockResolvedValue({ primary: { usedPercent: 100, resetsAt: RESET_5H } });
-    await expect(readAccountUsageLimit('codex', 'codex-work')).resolves.toEqual({
+    await expect(readAccountUsageLimit('codex', 'codex-work', 'gpt-5.5')).resolves.toEqual({
       limited: true,
       resetAtMs: RESET_5H * 1000,
     });

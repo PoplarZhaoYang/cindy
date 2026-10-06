@@ -15600,7 +15600,7 @@ function cancelUsageLimitWait(sessionId: string): void {
       ? input.cancelUsageLimitWait(sessionId, boundaryOpts)
       : input.cancelUsageLimitWait(sessionId),
   ).catch((err) => log.warn('cancelUsageLimitWait failed:', err));
-  setState(sessionId, (s) => (s.usageLimitWait ? { ...s, usageLimitWait: null } : s));
+  // 不乐观清除：以主进程返回的投影为准。取消失败时等待仍会到点执行，提示必须留着。
 }
 
 /**

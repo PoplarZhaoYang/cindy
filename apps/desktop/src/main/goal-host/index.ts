@@ -18,6 +18,7 @@ import {
 } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
+import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { readAccountUsageLimit } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
@@ -93,8 +94,12 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     // 主动配额检测:按会话所用订阅账号读用量快照(ChatGPT 订阅无论跑在 Codex、Claude Code
     // bridge 还是 Pi 上都读同一份额度),判 limited + 取 resetAt(unix ms)。
     getAccountLimit: async (agentKind, sessionId) => {
-      const subscription = await readAccountUsageLimit(agentKind, getSessionProvider(sessionId))
-        .catch(() => null);
+      const row = await getSessionRowSnapshot(sessionId);
+      const subscription = await readAccountUsageLimit(
+        agentKind,
+        getSessionProvider(sessionId) ?? row?.providerId ?? null,
+        row?.model ?? null,
+      ).catch(() => null);
       if (subscription !== undefined) return subscription;
       // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {

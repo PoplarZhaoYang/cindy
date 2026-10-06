@@ -13312,32 +13312,35 @@ describe('usage-limit wait (ordinary tasks)', () => {
     h.setRunning(false);
     h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
     await flush();
-    return h;
+    const candidate = h.onUsageLimitedTurnError.mock.calls.at(-1)?.[3] as number;
+    return { h, candidate };
   }
 
-  it('reports the limit error to the host and keeps the normal error banner', async () => {
+  it('reports the limit error with a candidate token and keeps the normal error banner', async () => {
     const sid = 'usage-wait-notify';
-    const h = await failWithLimit(sid, true);
+    const { h, candidate } = await failWithLimit(sid, true);
     expect(h.onUsageLimitedTurnError).toHaveBeenCalledWith(
       sid,
       expect.objectContaining({ message: "You've hit your session limit", ...LIMIT_SIGNALS }),
       expect.objectContaining({ clientId: 'q-first' }),
+      expect.any(Number),
     );
+    expect(typeof candidate).toBe('number');
     const projection = latestProjection(h.projections);
     expect(projection.error).toBe("You've hit your session limit");
+    // 候选还没排期,不显示等待。
     expect(projection.usageLimitWait).toBeNull();
   });
 
   it('projects the wait alongside the error and continues with the hidden prompt when it fires', async () => {
     const sid = 'usage-wait-continue';
-    const h = await failWithLimit(sid, true);
-    const token = h.coordinator.armUsageLimitWait(sid, 9_000_000);
-    expect(token).not.toBeNull();
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
     const projection = latestProjection(h.projections);
     expect(projection.error).not.toBeNull();
     expect(projection.usageLimitWait).toEqual({ resumeAt: 9_000_000 });
 
-    expect(await h.coordinator.continueAfterUsageLimitReset(sid, token!, INFO)).toBe('resumed');
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
@@ -13350,53 +13353,78 @@ describe('usage-limit wait (ordinary tasks)', () => {
       ...INFO,
       error: "You've hit your session limit",
     });
-    // 自动动作不冒充用户点击，也不把原 Plan 选项改掉。
+    // 自动动作不冒充用户点击。
     expect(h.onUiRetry).toHaveBeenLastCalledWith(sid, expect.any(String), 'auto', undefined);
     expect(latestProjection(h.projections).usageLimitWait).toBeNull();
   });
 
   it('re-sends the original input when the failed turn made no progress', async () => {
     const sid = 'usage-wait-clone';
-    const h = await failWithLimit(sid, false);
-    const token = h.coordinator.armUsageLimitWait(sid, 9_000_000)!;
-    expect(await h.coordinator.continueAfterUsageLimitReset(sid, token, INFO)).toBe('resumed');
+    const { h, candidate } = await failWithLimit(sid, false);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
     await flush();
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.content).toBe('original long task');
   });
 
-  it('is invalidated by user actions and by an explicit cancel', async () => {
+  it('is invalidated by user actions, an explicit cancel and closing the task', async () => {
     const cleared = await failWithLimit('usage-wait-clear', true);
-    const clearedToken = cleared.coordinator.armUsageLimitWait('usage-wait-clear', 9_000_000)!;
-    cleared.coordinator.clearError('usage-wait-clear');
-    expect(latestProjection(cleared.projections).usageLimitWait).toBeNull();
-    expect(cleared.coordinator.isUsageLimitWaitCurrent('usage-wait-clear', clearedToken)).toBe(false);
+    expect(cleared.h.coordinator.armUsageLimitWait('usage-wait-clear', cleared.candidate, 9_000_000)).toBe(true);
+    cleared.h.coordinator.clearError('usage-wait-clear');
+    expect(latestProjection(cleared.h.projections).usageLimitWait).toBeNull();
+    expect(cleared.h.coordinator.isUsageLimitWaitCurrent('usage-wait-clear', cleared.candidate)).toBe(false);
     expect(
-      await cleared.coordinator.continueAfterUsageLimitReset('usage-wait-clear', clearedToken, INFO),
+      await cleared.h.coordinator.continueAfterUsageLimitReset('usage-wait-clear', cleared.candidate, INFO),
     ).toBe('superseded');
 
     const sent = await failWithLimit('usage-wait-user-send', true);
-    const sentToken = sent.coordinator.armUsageLimitWait('usage-wait-user-send', 9_000_000)!;
-    sent.coordinator.enqueue('usage-wait-user-send', makeItem('q-second', 'do something else'));
+    expect(sent.h.coordinator.armUsageLimitWait('usage-wait-user-send', sent.candidate, 9_000_000)).toBe(true);
+    sent.h.coordinator.enqueue('usage-wait-user-send', makeItem('q-second', 'do something else'));
     await flush();
-    expect(sent.coordinator.isUsageLimitWaitCurrent('usage-wait-user-send', sentToken)).toBe(false);
+    expect(sent.h.coordinator.isUsageLimitWaitCurrent('usage-wait-user-send', sent.candidate)).toBe(false);
 
     const cancelled = await failWithLimit('usage-wait-cancel', true);
-    const cancelToken = cancelled.coordinator.armUsageLimitWait('usage-wait-cancel', 9_000_000)!;
-    const projection = cancelled.coordinator.cancelUsageLimitWait('usage-wait-cancel');
+    expect(cancelled.h.coordinator.armUsageLimitWait('usage-wait-cancel', cancelled.candidate, 9_000_000)).toBe(true);
+    const projection = cancelled.h.coordinator.cancelUsageLimitWait('usage-wait-cancel');
     expect(projection.usageLimitWait).toBeNull();
     // 错误与手动重试入口保留。
     expect(projection.error).not.toBeNull();
     expect(projection.recovery?.kind).toBe('active-turn');
     expect(
-      await cancelled.coordinator.continueAfterUsageLimitReset('usage-wait-cancel', cancelToken, INFO),
+      await cancelled.h.coordinator.continueAfterUsageLimitReset('usage-wait-cancel', cancelled.candidate, INFO),
     ).toBe('superseded');
-    expect(cancelled.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(cancelled.h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    const closed = await failWithLimit('usage-wait-closed', true);
+    expect(closed.h.coordinator.armUsageLimitWait('usage-wait-closed', closed.candidate, 9_000_000)).toBe(true);
+    closed.h.coordinator.onSessionClosed('usage-wait-closed');
+    expect(closed.h.coordinator.getProjection('usage-wait-closed').usageLimitWait).toBeNull();
+    expect(
+      await closed.h.coordinator.continueAfterUsageLimitReset('usage-wait-closed', closed.candidate, INFO),
+    ).toBe('superseded');
   });
 
-  it('cannot be armed when there is no recoverable error', async () => {
-    const h = createHarness();
-    expect(h.coordinator.armUsageLimitWait('usage-wait-none', 9_000_000)).toBeNull();
+  it('rejects an arm for a superseded candidate even if a newer error is showing', async () => {
+    const sid = 'usage-wait-stale';
+    const { h, candidate } = await failWithLimit(sid, true);
+    // 用户手动重试,随后新的一轮以非限额错误结束。
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'some other failure');
+    await flush();
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(false);
+    expect(latestProjection(h.projections).usageLimitWait).toBeNull();
+  });
+
+  it('only cancels the matching wait when a token is given', async () => {
+    const sid = 'usage-wait-token-cancel';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(h.coordinator.cancelUsageLimitWait(sid, candidate + 1000).usageLimitWait).toEqual({
+      resumeAt: 9_000_000,
+    });
+    expect(h.coordinator.cancelUsageLimitWait(sid, candidate).usageLimitWait).toBeNull();
   });
 });
-

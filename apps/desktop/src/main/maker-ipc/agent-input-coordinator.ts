@@ -421,6 +421,8 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     signals: InterruptedTurnErrorSignals,
     item: AgentInputQueuedMessage,
+    /** 绑定本次错误 recovery 的令牌；`armUsageLimitWait` 只认这个令牌。 */
+    candidateToken: number,
   ) => void;
   /**
    * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
@@ -729,12 +731,13 @@ interface SessionInputState {
   /** 最新自动接管 attempt；展示态落库后仍保留到 vendor accepted 或明确失败。 */
   autoResumeAttemptToken: number | null;
   /**
-   * 账号限额等待计划（见 `armUsageLimitWait`）。只在挂上时的那个 recovery 仍在、错误仍在
-   * 时有效：用户发新消息 / 重试 / 收下错误 / 清空任务都会换掉 recovery，等待随之失效，
-   * 不需要在每个用户入口单独撤销。
+   * 账号限额等待计划。终态错误那一刻登记候选（`resumeAt: null`，绑定当时的 recovery），
+   * host 求出重置时刻后用同一令牌 `armUsageLimitWait` 才生效。只在那个 recovery 仍在、
+   * 错误仍在时有效：用户发新消息 / 重试 / 收下错误 / 清空任务都会换掉 recovery，等待随之
+   * 失效，不需要在每个用户入口单独撤销；迟到的旧查询也挂不到新错误上。
    */
   usageLimitWait: {
-    resumeAt: number;
+    resumeAt: number | null;
     token: number;
     recovery: NonNullable<AgentInputRecovery>;
   } | null;
@@ -864,8 +867,8 @@ function createInitialInputState(
   };
 }
 
-/** 等待计划仍代表用户所见：挂上时的 recovery 未被替换、错误仍在、没有别的自愈接管。 */
-function isUsageLimitWaitLive(state: SessionInputState, token?: number): boolean {
+/** 候选仍代表用户所见：登记时的 recovery 未被替换、错误仍在、没有别的自愈接管。 */
+function isUsageLimitCandidateCurrent(state: SessionInputState, token?: number): boolean {
   const wait = state.usageLimitWait;
   return (
     wait !== null &&
@@ -874,6 +877,11 @@ function isUsageLimitWaitLive(state: SessionInputState, token?: number): boolean
     state.error !== null &&
     state.autoResumePending === null
   );
+}
+
+/** 已排期（有自动继续时刻）且仍有效的等待。 */
+function isUsageLimitWaitLive(state: SessionInputState, token?: number): boolean {
+  return state.usageLimitWait?.resumeAt != null && isUsageLimitCandidateCurrent(state, token);
 }
 
 function readSessionInstanceId(identity: object | null | undefined): string | null {
@@ -4034,6 +4042,8 @@ export class AgentInputCoordinator {
     state.suppressedTerminalError = null;
     if (!opts?.preserveAutoResumeIntent) {
       this.supersedePendingAutoResumeRecoveries(sessionId);
+      // 任务被关闭：限额等待也一并撤销，到点不能把已关闭的任务重新拉起来。
+      state.usageLimitWait = null;
     }
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
@@ -4243,7 +4253,7 @@ export class AgentInputCoordinator {
       recovery,
       ...(autoResumePending ? { autoResumePending } : {}),
       usageLimitWait: isUsageLimitWaitLive(state)
-        ? { resumeAt: state.usageLimitWait!.resumeAt }
+        ? { resumeAt: state.usageLimitWait!.resumeAt! }
         : null,
       errorRetryText: projectionRetryText(state.pendingQueue, state.recovery),
       credentialSwitchWait: state.credentialSwitchWait
@@ -6409,8 +6419,12 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
     if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item)) return;
+    const state = this.states.get(sessionId);
+    if (!state || state.recovery?.kind !== 'active-turn' || state.error === null) return;
+    const token = ++this.usageLimitWaitSeq;
+    state.usageLimitWait = { resumeAt: null, token, recovery: state.recovery };
     try {
-      this.deps.onUsageLimitedTurnError(sessionId, { ...(signals ?? {}), message }, item);
+      this.deps.onUsageLimitedTurnError(sessionId, { ...(signals ?? {}), message }, item, token);
     } catch (err) {
       log.warn('onUsageLimitedTurnError failed', { sessionId, error: errorMessage(err) });
     }
@@ -6418,24 +6432,17 @@ export class AgentInputCoordinator {
 
   /**
    * 普通任务撞上账号限额后挂等待计划：错误与手动重试照常保留，到 `resumeAt` 仍无人处理时
-   * host 调 `continueAfterUsageLimitReset`。只在当前错误仍是可续跑的 active-turn recovery
-   * 时生效；返回令牌供到点复核，null 表示目标已不在（用户已接手等）。
+   * host 调 `continueAfterUsageLimitReset`。只认终态错误时下发的候选令牌、且那次错误的
+   * recovery 仍在；返回 false 表示目标已不在（用户已接手、任务已关闭等）。
    */
-  armUsageLimitWait(sessionId: string, resumeAt: number): number | null {
+  armUsageLimitWait(sessionId: string, token: number, resumeAt: number): boolean {
     const state = this.states.get(sessionId);
-    if (
-      !state ||
-      state.recovery?.kind !== 'active-turn' ||
-      state.error === null ||
-      state.autoResumePending !== null ||
-      state.activeTurn !== null
-    ) {
-      return null;
+    if (!state || state.activeTurn !== null || !isUsageLimitCandidateCurrent(state, token)) {
+      return false;
     }
-    const token = ++this.usageLimitWaitSeq;
-    state.usageLimitWait = { resumeAt, token, recovery: state.recovery };
+    state.usageLimitWait = { ...state.usageLimitWait!, resumeAt };
     this.emit(sessionId);
-    return token;
+    return true;
   }
 
   /** 等待计划是否仍有效（host 到点前复核用）。 */
@@ -6444,10 +6451,13 @@ export class AgentInputCoordinator {
     return state ? isUsageLimitWaitLive(state, token) : false;
   }
 
-  /** 用户取消自动继续：只撤等待，错误与手动重试入口保留。 */
-  cancelUsageLimitWait(sessionId: string): AgentInputProjection {
+  /**
+   * 撤销自动继续：只撤等待，错误与手动重试入口保留。用户取消时不带令牌；host 到点放弃时
+   * 带令牌，只撤自己那一次，不误撤之后新挂上的等待。
+   */
+  cancelUsageLimitWait(sessionId: string, token?: number): AgentInputProjection {
     const state = this.getState(sessionId);
-    if (state.usageLimitWait) {
+    if (state.usageLimitWait && (token === undefined || state.usageLimitWait.token === token)) {
       state.usageLimitWait = null;
       this.emit(sessionId);
     }

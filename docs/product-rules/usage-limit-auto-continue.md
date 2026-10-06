@@ -22,8 +22,11 @@
 3. 会话所用订阅账号的用量快照，且快照显示已用满（ChatGPT / Claude / SuperGrok；订阅家族由
    provider 的 `auth.native` 决定，与跑在哪个 Harness 上无关）。
 
-都拿不到（Coding Plan、Copilot、API key、Cindy 网关个人额度等）就**不等待、也不定时试探**，
-只报错交给用户。
+前两步也只对订阅账号生效：Coding Plan、Copilot、API key、Cindy 网关个人额度等即使报错原文带了
+重试时刻也不等（那多半是按分钟的请求速率限制），**不等待、也不定时试探**，只报错交给用户。
+
+快照只看会话模型实际受限的那一格：Codex 按模型取对应的用量桶（如 Spark 单独计），Claude 订阅
+除 5 小时 / 周窗口外只计该模型的分模型窗口，其它模型用满不影响本会话。SSH 远程会话不读本机快照。
 
 ## 边界
 

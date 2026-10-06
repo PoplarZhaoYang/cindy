@@ -905,7 +905,7 @@ import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexP
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
-import { readAccountUsageLimit } from '../usage/accountUsageLimit.js';
+import { readAccountUsageLimit, subscriptionFamilyOf } from '../usage/accountUsageLimit.js';
 import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
@@ -1322,22 +1322,25 @@ async function isUsageLimitAutoResumeEligible(sessionId: string): Promise<boolea
   return !(await goalOwnsUsageLimitProbe?.(sessionId).catch(() => false));
 }
 
-/** 会话所用账号的重置时刻:错误自带 → 报错原文 → 订阅用量快照(须显示已用满)。 */
+/**
+ * 会话所用账号的重置时刻:错误自带 → 报错原文 → 订阅用量快照(须显示已用满)。
+ * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
+ * 周期额度耗尽,按产品规则只报错不等待。
+ */
 async function resolveSessionUsageResetAt(
   sessionId: string,
   signals: InterruptedTurnErrorSignals,
 ): Promise<number | null> {
+  const row = await getSessionRowSnapshot(sessionId);
+  const agentKind = row?.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
+  if (!row || !agentKind) return null;
+  const providerId = getSessionProvider(sessionId) ?? row.providerId ?? null;
+  if (!subscriptionFamilyOf(agentKind, providerId)) return null;
   const fromError = readTurnUsageResetAt(signals);
   if (fromError !== null) return fromError;
-  const row = await getSessionRowSnapshot(sessionId);
   // SSH 远程会话用远端主机自己的登录,本机快照属于另一个账号,不能拿来推算。
-  if (!row || row.remoteHostId) return null;
-  const agentKind = row.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
-  if (!agentKind) return null;
-  const limit = await readAccountUsageLimit(
-    agentKind,
-    getSessionProvider(sessionId) ?? row.providerId ?? null,
-  );
+  if (row.remoteHostId) return null;
+  const limit = await readAccountUsageLimit(agentKind, providerId, row.model ?? null);
   return limit?.limited ? limit.resetAtMs : null;
 }
 
@@ -1354,10 +1357,13 @@ const usageLimitAutoResume = new UsageLimitAutoResume({
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   isEligible: isUsageLimitAutoResumeEligible,
   resolveResetAt: resolveSessionUsageResetAt,
-  arm: (sessionId, resumeAt) =>
-    agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, resumeAt) ?? null,
+  arm: (sessionId, token, resumeAt) =>
+    agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, token, resumeAt) ?? false,
   isCurrent: (sessionId, token) =>
     agentInputCoordinatorHolder?.isUsageLimitWaitCurrent(sessionId, token) ?? false,
+  cancel: (sessionId, token) => {
+    agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId, token);
+  },
   continueSession: async (sessionId, token, info) =>
     agentInputCoordinatorHolder
       ? agentInputCoordinatorHolder.continueAfterUsageLimitReset(sessionId, token, info)
@@ -4828,6 +4834,7 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
         // from being resurrected or attaching recovery to a replacement runtime.
         interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
         autoResumeBookkeeping.teardown(session.id);
+        usageLimitAutoResume.noteSessionClosed(session.id);
       },
       // Read at the coordinator boundary, as before: only a close/rebuild window
       // preserves the signal currently driving that rebuild, not the old queue.
@@ -15608,8 +15615,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 两处必须同判据 —— 否则会出现"按住了却永远不接管"或"没按住却接管"的错配。
     isResumableTurnErrorCandidate: canRecoverTurn,
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
-    onUsageLimitedTurnError: (sessionId, signals) => {
-      usageLimitAutoResume.onTurnError(sessionId, signals);
+    onUsageLimitedTurnError: (sessionId, signals, _item, candidateToken) => {
+      usageLimitAutoResume.onTurnError(sessionId, signals, candidateToken);
     },
     onResumableTurnErrorDiscarded: (
       sessionId: string,
@@ -17465,9 +17472,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(
     MAKER_INVOKE.INPUT_CANCEL_USAGE_LIMIT_WAIT,
-    async (_e, sessionId: unknown, opts?: unknown) => {
+    async (event, sessionId: unknown, opts?: unknown) => {
+      const remote = isDeviceLinkInvoke();
+      // 本机调用必须来自 Cindy 自己的 renderer;device-link 调用由隧道上下文与输入控制边界把关。
+      if (!remote) assertTrustedAppRendererEvent(event);
       const sid = requireSessionId(sessionId);
-      await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+      await assertRemoteInputControlBoundary(sid, remote, opts);
       usageLimitAutoResume.clear(sid);
       return inputCoordinator.cancelUsageLimitWait(sid);
     },

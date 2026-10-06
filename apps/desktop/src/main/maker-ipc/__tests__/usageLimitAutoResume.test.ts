@@ -17,6 +17,8 @@ function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
   const timers: Array<{ fn: () => void; delayMs: number; cleared: boolean }> = [];
   let tokenSeq = 0;
   const current = new Set<number>();
+  // coordinator 在终态错误时下发候选令牌;测试里每次 onTurnError 用新令牌。
+  const nextCandidate = () => ++tokenSeq;
   const deps: UsageLimitAutoResumeDeps = {
     now: () => NOW,
     random: () => 0,
@@ -30,17 +32,24 @@ function harness(overrides: Partial<UsageLimitAutoResumeDeps> = {}) {
     },
     isEligible: vi.fn(async () => true),
     resolveResetAt: vi.fn(async () => RESET_AT),
-    arm: vi.fn(() => {
-      const token = ++tokenSeq;
+    arm: vi.fn((_sessionId: string, token: number) => {
       current.add(token);
-      return token;
+      return true;
     }),
     isCurrent: (_sessionId, token) => current.has(token),
+    cancel: vi.fn((_sessionId: string, token: number) => {
+      current.delete(token);
+    }),
     continueSession: vi.fn(async () => 'resumed' as const),
     log: () => {},
     ...overrides,
   };
-  const guard = new UsageLimitAutoResume(deps);
+  const raw = new UsageLimitAutoResume(deps);
+  // 测试里省掉候选令牌参数:每次报错自动取一个新令牌。
+  const guard = Object.assign(raw, {
+    onTurnError: (sessionId: string, signals: Parameters<UsageLimitAutoResume['onTurnError']>[1]) =>
+      UsageLimitAutoResume.prototype.onTurnError.call(raw, sessionId, signals, nextCandidate()),
+  });
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
   const fireLast = async () => {
     const timer = timers.at(-1)!;
@@ -67,7 +76,7 @@ describe('UsageLimitAutoResume', () => {
     h.guard.onTurnError('s1', LIMIT);
     await h.flush();
 
-    expect(h.deps.arm).toHaveBeenCalledWith('s1', RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+    expect(h.deps.arm).toHaveBeenCalledWith('s1', 1, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
     expect(h.timers).toHaveLength(1);
     expect(h.timers[0].delayMs).toBe(RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS - NOW);
 
@@ -120,6 +129,8 @@ describe('UsageLimitAutoResume', () => {
     isEligible.mockResolvedValue(false);
     await h.fireLast();
     expect(h.deps.continueSession).not.toHaveBeenCalled();
+    // 放弃时撤掉横幅上的自动继续提示。
+    expect(h.deps.cancel).toHaveBeenCalledWith('s1', 1);
   });
 
   it('stops after the consecutive cap until progress or a human action resets it', async () => {
@@ -155,9 +166,23 @@ describe('UsageLimitAutoResume', () => {
     release(RESET_AT + 999);
     await h.flush();
     expect(h.deps.arm).toHaveBeenCalledTimes(1);
-    expect(h.deps.arm).toHaveBeenCalledWith('s1', RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
+    expect(h.deps.arm).toHaveBeenCalledWith('s1', 2, RESET_AT + USAGE_LIMIT_RESUME_BUFFER_MS);
 
     h.guard.noteUserAction('s1');
     expect(h.timers.at(-1)!.cleared).toBe(true);
+  });
+
+  it('drops an in-flight resolution once the user takes over or the task closes', async () => {
+    for (const interrupt of ['noteUserAction', 'noteSessionClosed'] as const) {
+      let release!: (value: number) => void;
+      const pending = new Promise<number>((resolve) => { release = resolve; });
+      const h = harness({ resolveResetAt: vi.fn(() => pending) });
+      h.guard.onTurnError('s1', LIMIT);
+      await h.flush();
+      h.guard[interrupt]('s1');
+      release(RESET_AT);
+      await h.flush();
+      expect(h.deps.arm).not.toHaveBeenCalled();
+    }
   });
 });
