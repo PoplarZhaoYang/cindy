@@ -593,6 +593,27 @@ it('splits display size into a ratio choice and recommended resolutions for this
   const resolution = await panel.findByRole('combobox', { name: '电脑分辨率' });
   expect(aspect.textContent).toBe('电脑原始 · 16:9');
   expect(resolution.textContent).toBe('2560 × 1440 · 原生');
+  // Each field's hint is announced with its control.
+  expect(document.getElementById(aspect.getAttribute('aria-describedby')!)?.textContent).toBe(
+    i18n.t('remoteDesktop.viewer.aspectHint'),
+  );
+  // Choices follow this screen: one already at the computer's ratio needs no other ratio.
+  Object.defineProperties(window.screen, {
+    width: { configurable: true, value: 1600 },
+    height: { configurable: true, value: 900 },
+  });
+  act(() => {
+    window.dispatchEvent(new Event('resize'));
+  });
+  expect(aspect.textContent).toBe('电脑原始 · 16:9（推荐）');
+  Object.defineProperties(window.screen, {
+    width: { configurable: true, value: 1512 },
+    height: { configurable: true, value: 982 },
+  });
+  act(() => {
+    window.dispatchEvent(new Event('resize'));
+  });
+  expect(aspect.textContent).toBe('电脑原始 · 16:9');
   fireEvent.keyDown(aspect, { key: 'ArrowDown' });
   const choice = await screen.findByRole('option', { name: '本机屏幕 · 1.54:1（推荐）' });
   expect(screen.queryByRole('option', { name: /当前窗口/ })).toBeNull();
@@ -610,7 +631,9 @@ it('splits display size into a ratio choice and recommended resolutions for this
   );
   await waitFor(() => expect(resolution.textContent).toBe('1512 × 982 · 与本机一致'));
   expect(aspect.textContent).toBe('本机屏幕 · 1.54:1（推荐）');
-  expect(panel.getByText(i18n.t('remoteDesktop.viewer.resolutionTierHint'))).toBeDefined();
+  expect(document.getElementById(resolution.getAttribute('aria-describedby')!)?.textContent).toBe(
+    i18n.t('remoteDesktop.viewer.resolutionTierHint'),
+  );
   fireEvent.keyDown(resolution, { key: 'ArrowDown' });
   fireEvent.keyDown(await screen.findByRole('option', { name: '1210 × 786 · 字更大' }), {
     key: 'Enter',

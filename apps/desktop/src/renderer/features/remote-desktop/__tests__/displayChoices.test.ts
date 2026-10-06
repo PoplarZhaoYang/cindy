@@ -64,6 +64,14 @@ describe('fitted sizes', () => {
     ]);
   });
 
+  it('calls a size the host limit shrank the largest, however slightly', () => {
+    const screen = { width: 2600, height: 1625 };
+    expect(listed(fittedChoices(screen, screen, { width: 2560, height: 1600 }, 1))).toEqual([
+      ['2080x1300', 'larger', false],
+      ['2560x1600', 'max', true],
+    ]);
+  });
+
   it('keeps a current size that is not recommended', () => {
     expect(listed(fittedChoices(macbook, macbook, { width: 1920, height: 1246 }, 1))).toEqual([
       ['1210x786', 'larger', false],

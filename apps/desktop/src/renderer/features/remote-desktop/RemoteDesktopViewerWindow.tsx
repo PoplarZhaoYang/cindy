@@ -199,6 +199,20 @@ export function RemoteDesktopViewerWindow() {
     setSelectOpen(open);
     if (open) controller.current?.releaseInput();
   };
+  // The choices below read this window and screen; refresh them while the
+  // panel is open and the window is resized or moved to a differently scaled screen.
+  const [viewport, setViewport] = useState(0);
+  useEffect(() => {
+    if (settings !== 'display') return;
+    const update = () => setViewport((value) => value + 1);
+    const scale = window.matchMedia?.(`(resolution: ${window.devicePixelRatio}dppx)`);
+    window.addEventListener('resize', update);
+    scale?.addEventListener('change', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      scale?.removeEventListener('change', update);
+    };
+  }, [settings, viewport]);
   // Sizes are in this screen's points: one remote pixel per local point looks the same size.
   const screenSize = { width: window.screen.width, height: window.screen.height };
   const windowSize =
@@ -532,9 +546,9 @@ export function RemoteDesktopViewerWindow() {
                 hint={t('remoteDesktop.viewer.aspectHint')}
                 className="remote-viewer-field remote-viewer-field-wide"
               >
-                {({ id }) => (
+                {(control) => (
                   <Select
-                    id={id}
+                    {...control}
                     className="w-full"
                     label={t('remoteDesktop.viewer.aspect')}
                     disabled={!state.controlling || state.controlPending}
@@ -580,9 +594,9 @@ export function RemoteDesktopViewerWindow() {
                 }
                 className="remote-viewer-field remote-viewer-field-wide"
               >
-                {({ id }) => (
+                {(control) => (
                   <Select
-                    id={id}
+                    {...control}
                     className="w-full"
                     label={t('remoteDesktop.viewer.resolution')}
                     disabled={!state?.controlling || state.controlPending}

@@ -86,9 +86,9 @@ export function fittedChoices(
       choices.push({ id: `fitted:${size.width}x${size.height}`, ...size, current: false, tier });
     };
     for (const { tier, scale } of tiersFor(pixelRatio)) {
-      const size = fittedSize(base, scale);
-      // The host's size limit shrank this one; it is simply the largest available.
-      add(size, size && !near(size.width, base.width * scale) ? 'max' : tier);
+      // A size the host's limit shrank is simply the largest available.
+      const capped = Math.max(base.width, base.height) * scale > FITTED_MAX;
+      add(fittedSize(base, scale), capped ? 'max' : tier);
     }
     // A screen past the host's limit collapses the sizes; keep a larger-text one.
     if (choices.length === 1) add(fittedSize(choices[0], 0.8), 'larger');
