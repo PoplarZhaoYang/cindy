@@ -79,6 +79,14 @@ function events() {
   );
 }
 
+it('leaves a frameless picture to the stylesheet so it never paints a broken image', () => {
+  const image = document.getElementById('image')!;
+  expect(image.hasAttribute('src')).toBe(false);
+  expect(image.style.visibility).toBe('');
+  viewer.receive({ type: 'stop' });
+  expect(image.style.visibility).toBe('');
+});
+
 it('zooms locally within bounds and fit restores scale and position', () => {
   const image = document.getElementById('image')!;
   viewer.receive({ type: 'zoom', factor: 1.25 });
