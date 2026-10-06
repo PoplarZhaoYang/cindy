@@ -1483,6 +1483,11 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       ? code.replace(/Right$/, "Left")
       : code;
   const hardwareKeys = new Set();
+  // macOS sends no keyup for keys pressed while Command is held (Cmd+C). Only
+  // those keys are released together with Command; keys already held before
+  // Command keep waiting for their own keyup.
+  const commandKeys = new Set();
+  const isModifier = (code) => /^(Shift|Control|Alt|Meta)Left$/.test(code);
   listen(document, "keydown", (e) => {
     if (config.desktop) {
       if (e.ctrlKey && e.altKey && e.code === "Escape") {
@@ -1516,29 +1521,32 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     if (control && validKeys.has(normalizedKey(e.code))) {
       e.preventDefault();
-      hardwareKeys.add(normalizedKey(e.code));
-      queue({ kind: "key", code: normalizedKey(e.code), down: true });
+      const code = normalizedKey(e.code);
+      if (macKeyboard && hardwareKeys.has("MetaLeft") && !isModifier(code))
+        commandKeys.add(code);
+      hardwareKeys.add(code);
+      queue({ kind: "key", code, down: true });
     }
   });
   listen(document, "keyup", (e) => {
     const code = normalizedKey(e.code);
+    commandKeys.delete(code);
     if (!hardwareKeys.delete(code)) return;
     if (control && validKeys.has(code)) {
       e.preventDefault();
-      // macOS sends no keyup for keys pressed while Command is held (Cmd+C):
-      // release them with Command so the remote key never stays down.
-      if (macKeyboard && code === "MetaLeft")
-        for (const held of [...hardwareKeys])
-          if (!/^(Shift|Control|Alt|Meta)Left$/.test(held)) {
-            hardwareKeys.delete(held);
+      if (code === "MetaLeft") {
+        for (const held of commandKeys)
+          if (hardwareKeys.delete(held))
             queue({ kind: "key", code: held, down: false });
-          }
+        commandKeys.clear();
+      }
       queue({ kind: "key", code, down: false });
     }
   });
   if (config.desktop)
     listen(keyboardInput, "blur", () => {
       hardwareKeys.clear();
+      commandKeys.clear();
       release();
     });
   listen(window, "blur", () => {

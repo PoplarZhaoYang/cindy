@@ -281,50 +281,92 @@ it.each(['control', 'meta'])(
     );
   },
 );
-it.each([true, false])(
-  'releases keys with Command only for macOS controllers (macKeyboard=%s)',
-  (macKeyboard) => {
-    viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard });
-    viewer.receive({ type: 'control', enabled: true });
-    pointer('pointerdown');
-    pointer('pointerup');
-    messages = [];
-    const input = document.getElementById('keyboard-input')!;
-    const key = (type: 'keydown' | 'keyup', code: string, init: KeyboardEventInit = {}) =>
-      input.dispatchEvent(
-        new KeyboardEvent(type, { code, bubbles: true, cancelable: true, ...init }),
-      );
-    key('keydown', 'ShiftLeft', { shiftKey: true });
-    key('keydown', 'MetaLeft', { metaKey: true });
-    key('keydown', 'KeyC', { metaKey: true });
-    // macOS: no KeyC keyup while Command is held. Windows: Win released first, C still held.
-    key('keyup', 'MetaLeft');
-    vi.advanceTimersByTime(34);
-    const released = events().some(
-      (event) => event.kind === 'key' && event.code === 'KeyC' && !event.down,
-    );
-    expect(released).toBe(macKeyboard);
-    key('keyup', 'KeyC');
-    key('keyup', 'ShiftLeft');
-    vi.advanceTimersByTime(34);
-    const keys = events().filter((event) => event.kind === 'key');
-    expect(keys).toEqual([
-      { kind: 'key', code: 'ShiftLeft', down: true },
-      { kind: 'key', code: 'MetaLeft', down: true },
-      { kind: 'key', code: 'KeyC', down: true },
-      ...(macKeyboard
-        ? [
-            { kind: 'key', code: 'KeyC', down: false },
-            { kind: 'key', code: 'MetaLeft', down: false },
-          ]
-        : [
-            { kind: 'key', code: 'MetaLeft', down: false },
-            { kind: 'key', code: 'KeyC', down: false },
-          ]),
-      { kind: 'key', code: 'ShiftLeft', down: false },
-    ]);
+// Invariant: a remote key is released only when its local keyup arrives, except
+// keys pressed while Command is held on a macOS controller (macOS swallows their
+// keyup); those alone are released together with Command.
+it.each([
+  {
+    name: 'macOS Cmd+C with swallowed C keyup releases C with Command',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
   },
-);
+  {
+    name: 'macOS key held before Command keeps waiting for its own keyup',
+    macKeyboard: true,
+    steps: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
+    remote: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
+  },
+  {
+    name: 'macOS delivered keyup is not released twice',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+    remote: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
+    name: 'macOS other modifiers are never released early',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+ShiftLeft', '+KeyC', '-MetaLeft', '-ShiftLeft'],
+    remote: ['+MetaLeft', '+ShiftLeft', '+KeyC', '-KeyC', '-MetaLeft', '-ShiftLeft'],
+  },
+  {
+    name: 'Windows Win released first keeps the ordinary key down',
+    macKeyboard: false,
+    steps: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '-MetaLeft', '-KeyC'],
+  },
+])('$name', ({ macKeyboard, steps, remote }) => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  const held = new Set<string>();
+  for (const step of steps) {
+    const code = step.slice(1);
+    if (step[0] === '+') held.add(code);
+    else held.delete(code);
+    input.dispatchEvent(
+      new KeyboardEvent(step[0] === '+' ? 'keydown' : 'keyup', {
+        code,
+        metaKey: held.has('MetaLeft'),
+        shiftKey: held.has('ShiftLeft'),
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }
+  vi.advanceTimersByTime(34);
+  expect(
+    events()
+      .filter((event) => event.kind === 'key')
+      .map((event) => (event.down ? '+' : '-') + event.code),
+  ).toEqual(remote);
+});
+it('forgets Command-held keys when the picture loses keyboard focus', () => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600, macKeyboard: true });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  const input = document.getElementById('keyboard-input')!;
+  const key = (type: 'keydown' | 'keyup', code: string, metaKey = false) =>
+    input.dispatchEvent(new KeyboardEvent(type, { code, metaKey, bubbles: true }));
+  key('keydown', 'MetaLeft', true);
+  key('keydown', 'KeyC', true);
+  input.blur();
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  key('keydown', 'MetaLeft', true);
+  key('keyup', 'MetaLeft');
+  vi.advanceTimersByTime(34);
+  expect(
+    events()
+      .filter((event) => event.kind === 'key')
+      .map((event) => (event.down ? '+' : '-') + event.code),
+  ).toEqual(['+MetaLeft', '-MetaLeft']);
+});
 it.each(['key', 'button', 'scroll'])('keeps a held modifier around ordinary %s input', (kind) => {
   viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
   viewer.receive({ type: 'control', enabled: true });
