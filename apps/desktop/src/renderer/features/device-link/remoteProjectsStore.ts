@@ -378,8 +378,8 @@ interface PendingStatusEntry {
    * 只有 epoch 大于栅栏的列表(写库确认之后才发出的 sessions:list)落地,才算权威确认。
    */
   fence: Record<RemoteSessionStatus, number> | null;
-  /** 写库返回行的 updatedAt;列表里同一行的 updatedAt 比它新才算「之后又被改过」。 */
-  confirmedUpdatedAt: string | null;
+  /** 已容忍过一份内容对不上的写库后列表(可能是被控端合并进写库前查询的旧结果)。 */
+  toleratedMismatch: boolean;
 }
 
 /**
@@ -393,14 +393,14 @@ interface PendingStatusEntry {
  *  - begin:登记叠加层(同一任务后来者覆盖先来者);
  *  - rollback:写库失败 / 用户取消 → 撤掉,行照权威数据回到原位;
  *  - complete:写库成功 → 用被控端返回的行就地 applyPatch(不等 push 回流),叠加层
- *    **继续保留**到一份写库确认后才发出的列表(epoch 栅栏)落地、且**内容**能确认为止:
- *    行在目标桶 / 不在另一桶,或该行 updatedAt 比写库返回的新(之后又被改过,权威值
- *    接管)。写库前已在途的列表(含 10s 周期对账)、以及被控端把新请求并进写库前查询
- *    的合并结果,都可能带着写库前的旧值 —— 内容对不上就不让位,叠加层顶着,等下一份。
+ *    **继续保留**到写库确认后才发出的列表(epoch 栅栏)落地为止。写库前已在途的列表
+ *    (含 10s 周期对账)被栅栏挡住;写库后的列表还可能被被控端并进写库前的查询、带着
+ *    旧值回来 —— 内容(行在目标桶 / 不在另一桶)对不上的**第一份**容忍一次,之后的
+ *    写库后列表无论内容一律让位:被控端状态写不推进 updatedAt,分不清「合并的旧结果」
+ *    和「另一控制端随后又改了」,只容忍一次才不会把后者永远顶住。
  *    不让在途列表 superseded,是为了不连带打断 bootstrap / 归档桶按需读取的收尾。
- *  - 状态 push 不带 updatedAt,分不清迟到的旧推送和之后的新改动,一律不撤叠加层,交给
- *    上面的列表判定(另一控制端随后又改了,最迟下一轮对账接管);只有
- *    status=deleted、设备移除、整体清空立即回收。
+ *  - 状态 push 同样分不清迟到的旧推送和之后的新改动,一律不撤叠加层,交给上面的列表
+ *    判定;只有 status=deleted、设备移除、整体清空立即回收。
  */
 const pendingStatuses = new Map<string, PendingStatusEntry>();
 
@@ -416,9 +416,7 @@ function withPendingStatus(session: Session, deviceId: string): Session {
 
 /**
  * 该设备该状态桶的列表落地时,撤掉被它确认过的叠加层:必须是写库后才发出的列表(epoch
- * 越过栅栏),且内容与写库结果一致或显示之后又被改过(见 {@link pendingStatuses})。
- * 行不在列表里且列表就是目标桶时无从判断(可能只是不在有界窗口里),叠加层继续保留 ——
- * 它与写库结果一致,留着不可见。
+ * 越过栅栏);内容与写库结果对不上的第一份容忍一次(见 {@link pendingStatuses})。
  */
 function settlePendingStatuses(
   deviceId: string,
@@ -430,22 +428,15 @@ function settlePendingStatuses(
   let settled = false;
   for (const [sessionId, entry] of pendingStatuses) {
     if (entry.token.deviceId !== deviceId || !entry.fence || epoch <= entry.fence[status]) continue;
-    const row = incoming.find((session) => session.id === sessionId);
-    const confirmed = row
-      ? status === entry.token.status || isUpdatedAfter(row.updatedAt, entry.confirmedUpdatedAt)
-      : status !== entry.token.status;
-    if (!confirmed) continue;
+    const listed = incoming.some((session) => session.id === sessionId);
+    if (listed !== (status === entry.token.status) && !entry.toleratedMismatch) {
+      entry.toleratedMismatch = true;
+      continue;
+    }
     pendingStatuses.delete(sessionId);
     settled = true;
   }
   return settled;
-}
-
-function isUpdatedAfter(updatedAt: unknown, baseline: string | null): boolean {
-  if (typeof updatedAt !== 'string' || baseline == null) return false;
-  const at = Date.parse(updatedAt);
-  const base = Date.parse(baseline);
-  return Number.isFinite(at) && Number.isFinite(base) && at > base;
 }
 
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
@@ -1074,7 +1065,7 @@ const actions = {
     status: RemoteSessionStatus,
   ): RemotePendingStatusToken {
     const token: RemotePendingStatusToken = { deviceId, sessionId, status };
-    pendingStatuses.set(sessionId, { token, fence: null, confirmedUpdatedAt: null });
+    pendingStatuses.set(sessionId, { token, fence: null, toleratedMismatch: false });
     recompute();
     return token;
   },
@@ -1094,7 +1085,6 @@ const actions = {
       active: snapshotEpoch.get(snapshotEpochKey(token.deviceId, 'active')) ?? 0,
       archived: snapshotEpoch.get(snapshotEpochKey(token.deviceId, 'archived')) ?? 0,
     };
-    entry.confirmedUpdatedAt = typeof persisted?.updatedAt === 'string' ? persisted.updatedAt : null;
     const patch: Record<string, unknown> = { status: token.status };
     if (persisted && Object.prototype.hasOwnProperty.call(persisted, 'pinnedAt')) {
       patch.pinnedAt = persisted.pinnedAt ?? null;

@@ -47,7 +47,7 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
     parentSessionId: partial.parentSessionId ?? null,
     extraDirs: [],
     createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: partial.updatedAt ?? '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
   };
 }
 
@@ -1095,7 +1095,7 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     remoteProjectsStore.applyPatch('dev-A', 'a', { status: 'active' });
     expect(projected('a')?.status).toBe('archived');
 
-    // 写库后才发出的列表被被控端并进写库前的查询,仍带旧 active 行(updatedAt 不比写库新)。
+    // 写库后才发出的列表被被控端并进写库前的查询,仍带旧 active 行 —— 第一份容忍一次。
     remoteProjectsStore.nextSnapshotEpoch('dev-A');
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
     expect(projected('a')?.status).toBe('archived');
@@ -1108,7 +1108,7 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     expect(projected('a')?.status).toBe('active');
   });
 
-  it('yields to a later change by another controller once a post-write list shows it', () => {
+  it('yields to a later change by another controller on the second post-write list', () => {
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', []);
     remoteProjectsStore.setDeviceSessions(
       'dev-A',
@@ -1117,23 +1117,19 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
       'archived',
     );
     const token = remoteProjectsStore.beginPendingStatus('dev-A', 'a', 'active');
-    remoteProjectsStore.completePendingStatus(token, {
-      id: 'a',
-      status: 'active',
-      updatedAt: '2026-02-01T00:00:00.000Z',
-    });
+    remoteProjectsStore.completePendingStatus(token, { id: 'a', status: 'active' });
 
-    // 另一控制端随后又把它归档了:推送本身不撤叠加层,写库后的归档桶列表带着更新的
-    // updatedAt 才接管。
+    // 另一控制端随后又把它归档了。状态写不推进 updatedAt,推送和第一份对不上的写库后列表
+    // 都分不清它与旧结果 —— 叠加层顶住;第二份写库后列表无论内容一律让位,不会永远顶住。
     remoteProjectsStore.applyPatch('dev-A', 'a', { status: 'archived' });
     expect(projected('a')?.status).toBe('active');
-    remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
-    remoteProjectsStore.setDeviceSessions(
-      'dev-A',
-      'A',
-      [mk('a', { status: 'archived', updatedAt: '2026-02-02T00:00:00.000Z' })],
-      'archived',
-    );
+    const archivedList = () => {
+      remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
+      remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a', { status: 'archived' })], 'archived');
+    };
+    archivedList();
+    expect(projected('a')?.status).toBe('active');
+    archivedList();
     expect(projected('a')?.status).toBe('archived');
   });
 
