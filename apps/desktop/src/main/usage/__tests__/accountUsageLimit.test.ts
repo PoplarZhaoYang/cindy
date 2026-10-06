@@ -57,7 +57,7 @@ describe('codexAccountUsageLimit', () => {
         { appServerBuckets: buckets },
         { agentKind: 'codex', modelId: 'gpt-5.5' },
       ),
-    ).toEqual({ limited: false, resetAtMs: RESET_5H * 1000 });
+    ).toEqual({ limited: false, resetAtMs: null });
     expect(
       codexAccountUsageLimit(
         { appServerBuckets: buckets },
@@ -77,6 +77,19 @@ describe('codexAccountUsageLimit', () => {
       ),
     ).toEqual({ limited: true, resetAtMs: RESET_WEEK * 1000 });
     expect(codexAccountUsageLimit({ appServerBuckets: buckets }, { agentKind: 'pi' })).toBeNull();
+  });
+
+  it('drops the snapshot-level reached flag once any window has rolled over', () => {
+    expect(
+      codexAccountUsageLimit(
+        {
+          rateLimitReachedType: 'primary',
+          primary: { usedPercent: 100, resetsAt: NOW_SEC - 60 },
+          secondary: { usedPercent: 40, resetsAt: RESET_WEEK },
+        },
+        { agentKind: 'codex' },
+      ),
+    ).toEqual({ limited: false, resetAtMs: null });
   });
 
   it('falls back to the top-level snapshot without a bucket table and honours the reached flag', () => {
@@ -128,7 +141,7 @@ describe('claudeAccountUsageLimit', () => {
         fiveHour: { utilization: 100, resetsAt: NOW_SEC - 60 },
         sevenDay: { utilization: 40, resetsAt: RESET_WEEK },
       }),
-    ).toEqual({ limited: false, resetAtMs: RESET_WEEK * 1000 });
+    ).toEqual({ limited: false, resetAtMs: null });
   });
 });
 

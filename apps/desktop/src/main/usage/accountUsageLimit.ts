@@ -33,9 +33,9 @@ export interface AccountUsageLimit {
   /** 快照明确显示某个窗口已用满（或上游标了已触顶）。 */
   limited: boolean;
   /**
-   * 重置时刻（unix ms）。有用满的窗口时取其中最晚的，任一用满窗口缺重置时刻则为 null
-   * （拿别的窗口顶替会提前醒来）；都没用满时取所有窗口里最晚的（宁晚勿早，早醒只会再撞
-   * 一次）。没有任何带重置时刻的窗口时为 null。
+   * 受限时的重置时刻（unix ms）：用满窗口里最晚的（宁晚勿早）；任一用满窗口缺重置时刻
+   * 则为 null（拿别的窗口顶替会提前醒来）。未受限时恒为 null——未用满窗口的重置与限流无关。
+   * 只有快照级标记、没有窗口显示用满时，取所有窗口里最晚的。
    */
   resetAtMs: number | null;
 }
@@ -54,11 +54,12 @@ function fromWindows(
   reachedFlag: boolean,
   nowMs: number,
 ): AccountUsageLimit {
-  // 已过重置点的窗口在快照之后已经翻篇，快照里的用量不再成立。
+  // 已过重置点的窗口在快照之后已经翻篇，快照里的用量不再成立；快照级「已触顶」标记
+  // 说不清是哪个窗口触发的，有窗口翻篇就一并作废。
   const live = windows.filter((w) => !hasReset(w) || w.resetsAtSec * 1000 > nowMs);
   const exhausted = live.filter((w) => w.usedPercent >= 100);
-  const limited = exhausted.length > 0 || (reachedFlag && live.length > 0);
-  if (exhausted.some((w) => !hasReset(w))) return { limited, resetAtMs: null };
+  const limited = exhausted.length > 0 || (reachedFlag && live.length === windows.length);
+  if (!limited || exhausted.some((w) => !hasReset(w))) return { limited, resetAtMs: null };
   const pool = (exhausted.length > 0 ? exhausted : live).filter(hasReset);
   const resetAtSec = pool.length > 0 ? Math.max(...pool.map((w) => w.resetsAtSec)) : null;
   return { limited, resetAtMs: resetAtSec !== null ? resetAtSec * 1000 : null };

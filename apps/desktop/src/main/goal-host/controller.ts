@@ -1995,7 +1995,9 @@ export class GoalController {
         : null;
       if (!isCurrentTurn()) return;
       if (status === 'usageLimited') {
-        usageResetAt = limit?.resetAtMs ?? null; // 被动:补 resetAt(可能拿不到→null,留待手动 resume)
+        // 被动:补 resetAt。只采纳确认已用满的时刻——未用满窗口的重置时刻与这次限流无关;
+        // 拿不到就 null,留待手动 resume。
+        usageResetAt = limit?.limited ? limit.resetAtMs : null;
         shouldFire = false;
       } else if (limit?.limited) {
         status = 'usageLimited';

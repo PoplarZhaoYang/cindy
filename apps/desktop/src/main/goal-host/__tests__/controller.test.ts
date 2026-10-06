@@ -4094,6 +4094,17 @@ describe('GoalController', () => {
     }
   });
 
+  it('reactive: ignores the snapshot reset time when the snapshot does not show the limit', async () => {
+    // 未用满窗口的重置时刻与这次限流无关:不排期,留待手动 resume。
+    h.setAccountLimit({ limited: false, resetAtMs: 3_601_000 });
+    await startGoal(h);
+    h.session.emitErrorTurn({ errorStatus: 429, message: 'Too many requests' });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBeNull();
+  });
+
   it('leaves the reset time written in the error text to the host (only trusted for subscriptions)', async () => {
     // 报错原文里的时刻要由注入端按会话订阅家族判定;非订阅来源的 Retry-After 不能直接排期。
     const getAccountLimit = vi.fn(async () => null);
