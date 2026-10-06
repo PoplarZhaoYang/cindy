@@ -977,6 +977,8 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
     const first = remoteProjectsStore.beginPendingStatus('dev-A', 'a', 'archived');
     const second = remoteProjectsStore.beginPendingStatus('dev-A', 'a', 'archived');
+    expect(remoteProjectsStore.isPendingStatusCurrent(first)).toBe(false);
+    expect(remoteProjectsStore.isPendingStatusCurrent(second)).toBe(true);
 
     expect(remoteProjectsStore.rollbackPendingStatus(first)).toBe(false);
     expect(remoteProjectsStore.completePendingStatus(first, { status: 'archived' })).toBe(false);

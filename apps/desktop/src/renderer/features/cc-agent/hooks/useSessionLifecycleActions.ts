@@ -144,6 +144,16 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       const targetStatus: SessionStatus = action === 'delete' ? 'deleted' : 'archived';
       const statusWriteTarget = await sessionService.resolveStatusWriteTarget(sessionId);
       const isDeviceLinkSession = statusWriteTarget.kind === 'device-link';
+      // 预先隐藏的远程归档在等预检 / 确认期间已被更新的操作取代(「全部」筛选里行仍可见,
+      // 用户可能已点了恢复):以最后一次操作为准,这次过时的归档不再写库。检查放在最后一个
+      // await 之后,从这里到 setStatusInOrder 入队全程同步,恢复插不进来。
+      if (
+        remoteArchiveToken &&
+        isDeviceLinkSession &&
+        !remoteProjectsStore.isPendingStatusCurrent(remoteArchiveToken)
+      ) {
+        return;
+      }
       let statusTransition: SessionStatusTransitionToken | null = null;
       // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta)。归档走
       // remoteProjectsStore 的状态迁移叠加层乐观换桶,写库成功即落被控端返回的行,不等

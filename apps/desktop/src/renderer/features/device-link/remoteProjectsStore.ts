@@ -1096,6 +1096,11 @@ const actions = {
     return true;
   },
 
+  /** 凭据仍是该任务最新的一次迁移(未被后来的 begin 取代、未被删除 / 设备移除回收)。 */
+  isPendingStatusCurrent(token: RemotePendingStatusToken): boolean {
+    return pendingStatuses.get(token.sessionId)?.token === token;
+  },
+
   /** 写库失败 / 用户取消:撤掉叠加层,行回到权威位置。凭据已被取代时 no-op。 */
   rollbackPendingStatus(token: RemotePendingStatusToken): boolean {
     if (pendingStatuses.get(token.sessionId)?.token !== token) return false;

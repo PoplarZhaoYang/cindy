@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   beginPendingStatus: vi.fn(),
   completePendingStatus: vi.fn(),
   rollbackPendingStatus: vi.fn(),
+  isPendingStatusCurrent: vi.fn(),
   clearComposerDraft: vi.fn(),
   cleanupSessionLayoutPrefs: vi.fn(),
   cleanupSessionImages: vi.fn(),
@@ -59,6 +60,7 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
     beginPendingStatus: mocks.beginPendingStatus,
     completePendingStatus: mocks.completePendingStatus,
     rollbackPendingStatus: mocks.rollbackPendingStatus,
+    isPendingStatusCurrent: mocks.isPendingStatusCurrent,
   },
 }));
 
@@ -125,6 +127,7 @@ beforeEach(() => {
   );
   mocks.completePendingStatus.mockReturnValue(true);
   mocks.rollbackPendingStatus.mockReturnValue(true);
+  mocks.isPendingStatusCurrent.mockReturnValue(true);
   mocks.rollbackStatusTransition.mockReturnValue(true);
   mocks.refreshSessions.mockResolvedValue([]);
   mocks.cleanupSessionImages.mockResolvedValue(undefined);
@@ -350,6 +353,27 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
       'archive timing',
       expect.objectContaining({ outcome: 'success', deviceLink: true }),
     );
+  });
+
+  it('drops a pre-begun remote archive that a later restore superseded during the preflight', async () => {
+    mocks.resolveStatusWriteTarget.mockResolvedValue({ kind: 'device-link', deviceId: 'device-1' });
+    // 「全部」筛选里预检期间用户已点了恢复:预先隐藏的归档凭据已被取代。
+    mocks.isPendingStatusCurrent.mockReturnValue(false);
+    const token = { deviceId: 'device-1', sessionId: 'remote-session', status: 'archived' as const };
+    const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
+
+    await act(async () => {
+      await result.current.runSessionAction('remote-session', 'archive', {
+        activeSessionId: null,
+        remoteArchiveToken: token,
+      });
+    });
+
+    expect(mocks.isPendingStatusCurrent).toHaveBeenCalledWith(token);
+    expect(mocks.setStatus).not.toHaveBeenCalled();
+    expect(mocks.completePendingStatus).not.toHaveBeenCalled();
+    expect(mocks.rollbackPendingStatus).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
   });
 
   it('sends an unarchive only after the in-flight remote archive of the same task settles', async () => {
