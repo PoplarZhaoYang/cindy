@@ -213,8 +213,13 @@ it('orders manual copy/paste transfers and reports failure without reconnecting'
   gate.resolve();
   await Promise.all([copy, paste]);
   expect(current.clipboard).toHaveBeenLastCalledWith(1, 'paste');
-  current.clipboard.mockRejectedValueOnce(new Error('CLIPBOARD_UNSUPPORTED'));
-  await expect(controller.clipboard('paste')).rejects.toThrow('CLIPBOARD_UNSUPPORTED');
+  // Electron rebuilds the IPC error; the controller decodes it to the stable code.
+  current.clipboard.mockRejectedValueOnce(
+    new Error(
+      "Error invoking remote method 'remote-viewer:clipboard': Error: [PRECONDITION_FAILED] CLIPBOARD_UNSUPPORTED",
+    ),
+  );
+  await expect(controller.clipboard('paste')).rejects.toThrow(/^CLIPBOARD_UNSUPPORTED$/);
   expect(snapshot).toMatchObject({ controlling: true, ready: true, error: null });
   await controller.clipboard('copy');
   expect(current.clipboard).toHaveBeenCalledTimes(4);
@@ -256,12 +261,7 @@ it.each([
   ['DESKTOP_CLIPBOARD_COPY_FAILED', 'copy', 'remoteDesktop.viewer.clipboardCopyFailed'],
   ['DESKTOP_CLIPBOARD_UNAVAILABLE', 'paste', 'remoteDesktop.viewer.clipboardPasteFailed'],
 ] as const)('explains %s on %s', (code, action, key) => {
-  expect(
-    clipboardFailureKey(
-      new Error(`Error invoking remote method: [PRECONDITION_FAILED] ${code}`),
-      action,
-    ),
-  ).toBe(key);
+  expect(clipboardFailureKey(new Error(code), action)).toBe(key);
 });
 
 it.each([true, false])(

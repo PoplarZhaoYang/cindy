@@ -77,16 +77,21 @@ function connectionBudget(caps: RemoteDesktopCapabilities | null): number {
   );
 }
 
-/** Explains a failed manual clipboard transfer; same wording as Mobile. */
+const CLIPBOARD_FAILURE_KEYS: Record<string, string> = {
+  DESKTOP_VIEW_ONLY: 'remoteDesktop.viewer.controlRequired',
+  CLIPBOARD_UNSUPPORTED: 'remoteDesktop.viewer.clipboardUnsupported',
+  CLIPBOARD_EMPTY: 'remoteDesktop.viewer.clipboardEmpty',
+  CLIPBOARD_TOO_LONG: 'remoteDesktop.viewer.clipboardTooLong',
+};
+
+/** Explains a failed manual clipboard transfer (decoded code); same wording as Mobile. */
 export function clipboardFailureKey(error: unknown, action: 'copy' | 'paste'): string {
-  const code = error instanceof Error ? error.message : '';
-  if (code.includes('DESKTOP_VIEW_ONLY')) return 'remoteDesktop.viewer.controlRequired';
-  if (code.includes('CLIPBOARD_UNSUPPORTED')) return 'remoteDesktop.viewer.clipboardUnsupported';
-  if (code.includes('CLIPBOARD_EMPTY')) return 'remoteDesktop.viewer.clipboardEmpty';
-  if (code.includes('CLIPBOARD_TOO_LONG')) return 'remoteDesktop.viewer.clipboardTooLong';
-  return action === 'copy'
-    ? 'remoteDesktop.viewer.clipboardCopyFailed'
-    : 'remoteDesktop.viewer.clipboardPasteFailed';
+  return (
+    CLIPBOARD_FAILURE_KEYS[error instanceof Error ? error.message : ''] ??
+    (action === 'copy'
+      ? 'remoteDesktop.viewer.clipboardCopyFailed'
+      : 'remoteDesktop.viewer.clipboardPasteFailed')
+  );
 }
 
 /** Desktop presentation adapter. Reuses the Mobile lease, browser media and
@@ -706,7 +711,11 @@ export class DesktopViewerController {
         !this.state.controlling
       )
         throw new Error('DESKTOP_STOPPED');
-      await this.api.clipboard(generation, action);
+      try {
+        await this.api.clipboard(generation, action);
+      } catch (error) {
+        throw new Error(extractIpcError(error)?.message ?? 'DESKTOP_UNAVAILABLE');
+      }
     });
     this.clipboardQueue = transfer;
     try {

@@ -281,6 +281,36 @@ it.each(['control', 'meta'])(
     );
   },
 );
+it('releases keys with Command when macOS omits their keyup (Cmd+C)', () => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
+  viewer.receive({ type: 'control', enabled: true });
+  pointer('pointerdown');
+  pointer('pointerup');
+  messages = [];
+  const input = document.getElementById('keyboard-input')!;
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'ShiftLeft', shiftKey: true, bubbles: true }),
+  );
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'MetaLeft', metaKey: true, bubbles: true }),
+  );
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'KeyC', metaKey: true, bubbles: true, cancelable: true }),
+  );
+  // No KeyC keyup: Chromium on macOS swallows it while Command is held.
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'MetaLeft', bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyC', bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'ShiftLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(events().filter((event) => event.kind === 'key')).toEqual([
+    { kind: 'key', code: 'ShiftLeft', down: true },
+    { kind: 'key', code: 'MetaLeft', down: true },
+    { kind: 'key', code: 'KeyC', down: true },
+    { kind: 'key', code: 'KeyC', down: false },
+    { kind: 'key', code: 'MetaLeft', down: false },
+    { kind: 'key', code: 'ShiftLeft', down: false },
+  ]);
+});
 it.each(['key', 'button', 'scroll'])('keeps a held modifier around ordinary %s input', (kind) => {
   viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
   viewer.receive({ type: 'control', enabled: true });

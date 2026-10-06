@@ -87,6 +87,8 @@ export function RemoteDesktopViewerWindow() {
   const generation = useRef(-1);
   const latestState = useRef<ViewerSnapshot | null>(null);
   const activePanel = useRef(settings);
+  // Only the latest clipboard click reports; queued earlier transfers stay silent.
+  const clipboardAttempt = useRef(0);
   activePanel.current = settings;
   const requestClose = useCallback(() => {
     controller.current?.releaseInput();
@@ -673,10 +675,16 @@ export function RemoteDesktopViewerWindow() {
                         variant="secondary"
                         disabled={!state.controlling || state.closing}
                         onClick={() => {
+                          const attempt = ++clipboardAttempt.current;
                           setNotice(null);
-                          void controller.current
-                            ?.clipboard(action)
-                            .catch((error) => setNotice(t(clipboardFailureKey(error, action))));
+                          void controller.current?.clipboard(action).catch((error) => {
+                            // A stopped connection already shows its own state.
+                            if (
+                              attempt === clipboardAttempt.current &&
+                              !(error instanceof Error && error.message === 'DESKTOP_STOPPED')
+                            )
+                              setNotice(t(clipboardFailureKey(error, action)));
+                          });
                         }}
                       >
                         {t(`remoteDesktop.${action}`)}

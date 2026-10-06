@@ -716,4 +716,20 @@ it('explains why a manual clipboard transfer failed and clears it on the next at
   await waitFor(() => expect(screen.getByText(unsupported)).toBeDefined());
   fireEvent.click(paste);
   await waitFor(() => expect(screen.queryByText(unsupported)).toBeNull());
+  // An earlier queued transfer failing late must not overwrite the latest result.
+  let failEarlier!: (error: Error) => void;
+  lifecycle.clipboard.mockImplementationOnce(
+    () =>
+      new Promise<void>((_resolve, reject) => {
+        failEarlier = reject;
+      }),
+  );
+  fireEvent.click(paste);
+  fireEvent.click(panel.getByRole('button', { name: i18n.t('remoteDesktop.copy') }));
+  await act(async () => failEarlier(new Error('CLIPBOARD_UNSUPPORTED')));
+  expect(screen.queryByText(unsupported)).toBeNull();
+  // A stopped connection reports itself; no clipboard notice.
+  lifecycle.clipboard.mockRejectedValueOnce(new Error('DESKTOP_STOPPED'));
+  await act(async () => fireEvent.click(paste));
+  expect(screen.queryByText(i18n.t('remoteDesktop.viewer.clipboardPasteFailed'))).toBeNull();
 });

@@ -1524,6 +1524,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     if (!hardwareKeys.delete(code)) return;
     if (control && validKeys.has(code)) {
       e.preventDefault();
+      // macOS sends no keyup for keys pressed while Command is held (Cmd+C):
+      // release them with Command so the remote key never stays down.
+      if (code === "MetaLeft")
+        for (const held of [...hardwareKeys])
+          if (!/^(Shift|Control|Alt|Meta)Left$/.test(held)) {
+            hardwareKeys.delete(held);
+            queue({ kind: "key", code: held, down: false });
+          }
       queue({ kind: "key", code, down: false });
     }
   });
