@@ -197,6 +197,7 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
   useRemoteScheduleIndex,
+  type RemotePendingStatusToken,
 } from '@/features/device-link/remoteProjectsStore';
 import {
   getRemoteSessionActivity,
@@ -1113,6 +1114,10 @@ function ExpandedView({
   );
 
   const [confirm, setConfirm] = useState<ConfirmState>(CONFIRM_INITIAL);
+  // 远程任务归档确认弹窗期间行已提前隐藏(见 handleActionClick);凭据放 ref 而非 confirm
+  // state:确认按钮的 onClick 要先同步认领它,Radix 随后触发的 onOpenChange(false) →
+  // handleCancelConfirm 才不会把正在写库的那次归档回滚掉。
+  const confirmRemoteArchiveRef = useRef<RemotePendingStatusToken | null>(null);
 
   // 系统级通知触发：sessions 数组每次渲染都新引用，但 callback 读 ref，
   // 不会因此重跑 transition effect。通道、失焦与灵动岛去重由共享入口收口。
@@ -2960,9 +2965,10 @@ function ExpandedView({
    */
   // includeArchived 跟随当前列表桶（filter.status）—— archived / all 桶里
   // 删除后要刷对应桶，否则已删行残留（见 hook 文件头注释）。
-  const { runSessionAction, unarchiveSession } = useSessionLifecycleActions({
-    includeArchived: filter.status,
-  });
+  const { runSessionAction, unarchiveSession, beginRemoteArchive, cancelRemoteArchive } =
+    useSessionLifecycleActions({
+      includeArchived: filter.status,
+    });
 
   const closeOwnedSharedTask = useCallback(async (sharedTaskId?: string): Promise<boolean> => {
     if (!sharedTaskId) return true;
@@ -3041,6 +3047,14 @@ function ExpandedView({
         // 之间还有写库和回收链;那一段由 main 在删除前重新检测 + auto-stash 兜住
         // (WorktreeManager.removeWorktreeForSession),renderer 这层负责的是「别拿
         // 明显过期的结论免掉确认」。
+        //
+        // 远程任务的预检是一次完整隧道往返(被控端跑 git status),不再让用户干等:
+        // 先乐观隐藏行并跳离,再等预检。干净 → 沿用同一叠加层直接写库;需要确认 →
+        // 行保持隐藏弹确认框,取消再让行回来(已跳离的视图不跳回)。本机任务预检
+        // 很快,维持原顺序。
+        const remoteArchiveToken = session?.deviceLinkDeviceId
+          ? beginRemoteArchive(sessionId, session.deviceLinkDeviceId, viewedSessionIdRef.current)
+          : null;
         const preflight = await resolveWorktreeRemovalPreflight(
           sessionId,
           session?.deviceLinkDeviceId,
@@ -3050,6 +3064,7 @@ function ExpandedView({
         // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
         // 走的是普通归档确认。
         if (preflight !== 'clean') {
+          confirmRemoteArchiveRef.current = remoteArchiveToken;
           setConfirm({
             open: true,
             sessionId,
@@ -3062,9 +3077,13 @@ function ExpandedView({
         // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
         // 跳离失效的文件视图(codex review;正常路由下两者恒等)。经 ref 读:它随
         // 路由切换而变,留在 deps 里会让本 handler 每次切换都重建、打穿整表 memo。
-        if (!(await closeOwnedSharedTask(sharedTaskId))) return;
+        if (!(await closeOwnedSharedTask(sharedTaskId))) {
+          if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
+          return;
+        }
         await runSessionAction(sessionId, 'archive', {
           activeSessionId: viewedSessionIdRef.current,
+          remoteArchiveToken,
         });
         return;
       }
@@ -3085,18 +3104,33 @@ function ExpandedView({
       }
       await unarchiveSession(sessionId);
     },
-    [closeOwnedSharedTask, runningSessionIds, runSessionAction, unarchiveSession, t],
+    [
+      beginRemoteArchive,
+      cancelRemoteArchive,
+      closeOwnedSharedTask,
+      runningSessionIds,
+      runSessionAction,
+      unarchiveSession,
+      t,
+    ],
   );
 
   const handleConfirm = useCallback(async () => {
     const { sessionId, action, sharedTaskId } = confirm;
+    // 同步认领提前隐藏的远程归档,见 confirmRemoteArchiveRef。
+    const remoteArchiveToken = confirmRemoteArchiveRef.current;
+    confirmRemoteArchiveRef.current = null;
     const session = sessionsById.get(sessionId);
     if (isRemoteSessionWriteBlocked(session)) {
+      if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       setConfirm(CONFIRM_INITIAL);
       return;
     }
-    if (!(await closeOwnedSharedTask(sharedTaskId))) return;
+    if (!(await closeOwnedSharedTask(sharedTaskId))) {
+      if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
+      return;
+    }
     // 重定向判定统一用 viewedSessionId(files 路由下 = 被浏览文件的会话,
     // 正常路由下与 activeSessionId 恒等):从面板删除/归档正在浏览的会话时
     // 也要跳离失效的 /cc-agent/files/:id(codex review)。
@@ -3107,13 +3141,18 @@ function ExpandedView({
     await runSessionAction(sessionId, action, {
       activeSessionId: viewedSessionId,
       deleteRedirectRoute,
+      remoteArchiveToken,
     });
     setConfirm(CONFIRM_INITIAL);
-  }, [closeOwnedSharedTask, viewedSessionId, confirm, resolveSessionRemovalRedirect, runSessionAction, sessionsById, t]);
+  }, [cancelRemoteArchive, closeOwnedSharedTask, viewedSessionId, confirm, resolveSessionRemovalRedirect, runSessionAction, sessionsById, t]);
 
   const handleCancelConfirm = useCallback(() => {
+    // 取消 / 点外部关闭:提前隐藏的远程任务回到列表。
+    const remoteArchiveToken = confirmRemoteArchiveRef.current;
+    confirmRemoteArchiveRef.current = null;
+    if (remoteArchiveToken) cancelRemoteArchive(remoteArchiveToken);
     setConfirm(CONFIRM_INITIAL);
-  }, []);
+  }, [cancelRemoteArchive]);
 
   const handleBulkDelete = useCallback(async () => {
     if (bulkActionPending !== null) return;
