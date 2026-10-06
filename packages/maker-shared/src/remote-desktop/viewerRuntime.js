@@ -125,9 +125,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     fy = 0.5,
     mode = "pointer",
     control = false,
-    clipboardShortcuts = false,
-    clipboardModifier = "control",
-    deferredClipboardModifier = null,
     pc = null,
     dc = null,
     seq = 0,
@@ -832,8 +829,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function queue(event) {
     if (!control) return;
     if (!pending.length) pendingSince = performance.now();
-    if (config.desktop && (event.kind === "button" || event.kind === "scroll"))
-      flushClipboardModifier();
     // Remote visibility can remain hidden after synthetic mouse movement. Wake
     // the local touchpad cursor until the host reports a visible cursor again.
     if (event.kind === "move" && mode === "pointer") localCursorAwake = true;
@@ -909,7 +904,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   function release() {
     stopEdgePan();
     desktopPan = null;
-    deferredClipboardModifier = null;
     clearTimeout(hold);
     if (gestureFrame !== null) cancelAnimationFrame(gestureFrame);
     gestureFrame = null;
@@ -1488,13 +1482,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       ? code.replace(/Right$/, "Left")
       : code;
   const hardwareKeys = new Set();
-  function flushClipboardModifier() {
-    if (!deferredClipboardModifier) return;
-    const code = deferredClipboardModifier;
-    deferredClipboardModifier = null;
-    hardwareKeys.add(code);
-    queue({ kind: "key", code, down: true });
-  }
   listen(document, "keydown", (e) => {
     if (config.desktop) {
       if (e.ctrlKey && e.altKey && e.code === "Escape") {
@@ -1510,38 +1497,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         composing
       )
         return;
-      if (
-        control &&
-        clipboardShortcuts &&
-        normalizedKey(e.code) ===
-          (clipboardModifier === "meta" ? "MetaLeft" : "ControlLeft")
-      ) {
-        e.preventDefault();
-        if (!hardwareKeys.has(normalizedKey(e.code)))
-          deferredClipboardModifier = normalizedKey(e.code);
-        return;
-      }
-      if (
-        control &&
-        clipboardShortcuts &&
-        (clipboardModifier === "meta"
-          ? e.metaKey && !e.ctrlKey
-          : e.ctrlKey && !e.metaKey) &&
-        !e.altKey &&
-        !e.shiftKey &&
-        (e.code === "KeyC" || e.code === "KeyV")
-      ) {
-        e.preventDefault();
-        if (!e.repeat) {
-          release();
-          hardwareKeys.clear();
-          post({
-            type: "clipboard",
-            action: e.code === "KeyC" ? "copy" : "paste",
-          });
-        }
-        return;
-      }
     }
     // The focused textarea delivers characters through input (and editing
     // keys through beforeinput). Forwarding their keydown too types twice on
@@ -1560,16 +1515,12 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     if (control && validKeys.has(normalizedKey(e.code))) {
       e.preventDefault();
-      flushClipboardModifier();
       hardwareKeys.add(normalizedKey(e.code));
       queue({ kind: "key", code: normalizedKey(e.code), down: true });
     }
   });
   listen(document, "keyup", (e) => {
     const code = normalizedKey(e.code);
-    if (config.desktop && control && deferredClipboardModifier === code) {
-      flushClipboardModifier();
-    }
     if (!hardwareKeys.delete(code)) return;
     if (control && validKeys.has(code)) {
       e.preventDefault();
@@ -2380,10 +2331,6 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         sending = false;
         seq = 0;
         epoch = message.epoch;
-        clipboardShortcuts =
-          config.desktop && message.clipboardShortcuts === true;
-        clipboardModifier =
-          message.clipboardModifier === "meta" ? "meta" : "control";
         dw = message.width;
         dh = message.height;
         fillHeight = message.fillHeight === true;

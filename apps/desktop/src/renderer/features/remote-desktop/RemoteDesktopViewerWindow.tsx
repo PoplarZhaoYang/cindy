@@ -18,7 +18,11 @@ import {
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import i18n from '@/i18n';
-import { DesktopViewerController, type ViewerSnapshot } from './viewerController';
+import {
+  clipboardFailureKey,
+  DesktopViewerController,
+  type ViewerSnapshot,
+} from './viewerController';
 import { Select } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
@@ -668,11 +672,12 @@ export function RemoteDesktopViewerWindow() {
                         key={action}
                         variant="secondary"
                         disabled={!state.controlling || state.closing}
-                        onClick={() =>
+                        onClick={() => {
+                          setNotice(null);
                           void controller.current
                             ?.clipboard(action)
-                            .catch(() => setNotice(t('remoteDesktop.viewer.clipboardFailed')))
-                        }
+                            .catch((error) => setNotice(t(clipboardFailureKey(error, action))));
+                        }}
                       >
                         {t(`remoteDesktop.${action}`)}
                       </Button>
@@ -688,9 +693,7 @@ export function RemoteDesktopViewerWindow() {
                 )}
               </>
             )}
-            <p>
-              {t('remoteDesktop.viewer.clipboardShortcutHint', { modifier: isMac ? '⌘' : 'Ctrl' })}
-            </p>
+            <p>{t('remoteDesktop.viewer.clipboardShortcutHint')}</p>
           </ViewerPanel>
           <ViewerPanel
             label={t('remoteDesktop.viewer.securityPanel')}
@@ -860,11 +863,6 @@ export function RemoteDesktopViewerWindow() {
                 <X size={14} />
               </ViewerTool>
             )}
-          </div>
-        )}
-        {state?.clipboardError && (
-          <div className="remote-viewer-notice" role="status">
-            {t('remoteDesktop.viewer.clipboardFailed')}
           </div>
         )}
       </div>

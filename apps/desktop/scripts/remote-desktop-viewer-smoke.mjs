@@ -353,8 +353,13 @@ try {
   const modifier = controllerPlatform === 'darwin' ? 'Meta' : 'Control';
   await viewer.keyboard.press(modifier + '+c');
   await viewer.keyboard.press(modifier + '+v');
-  await viewer.waitForFunction(() => window.clipboardActions.length === 2);
-  assert.deepEqual(await viewer.evaluate(() => window.clipboardActions), ['copy', 'paste']);
+  // Shortcuts act on the remote clipboard; only panel actions transfer content.
+  await host.waitForFunction(() =>
+    ['KeyC', 'KeyV'].every((code) =>
+      window.inputs.some((event) => event.kind === 'key' && event.code === code && !event.down),
+    ),
+  );
+  assert.deepEqual(await viewer.evaluate(() => window.clipboardActions), []);
   await viewer.evaluate(async () => {
     const { themeService } = await import('/themes/theme-service.ts');
     const { cindyDark } = await import('/themes/builtin/cindy-dark.ts');
@@ -508,7 +513,7 @@ try {
       mouse: true,
       dataChannelInput: true,
       bridgeInput: true,
-      clipboardShortcuts: true,
+      remoteClipboardShortcuts: true,
       exitConfirmation: true,
       controllerPlatform,
       mediaRecovery: true,

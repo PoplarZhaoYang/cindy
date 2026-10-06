@@ -241,16 +241,9 @@ it.each([
 });
 
 it.each(['control', 'meta'])(
-  'bridges %s clipboard shortcuts once without forwarding or inserting them',
+  'forwards %s clipboard shortcuts to the remote computer as ordinary keys',
   (modifier) => {
-    viewer.receive({
-      type: 'init',
-      epoch: 'lease',
-      width: 1000,
-      height: 600,
-      clipboardShortcuts: true,
-      clipboardModifier: modifier,
-    });
+    viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
     viewer.receive({ type: 'control', enabled: true });
     pointer('pointerdown');
     pointer('pointerup');
@@ -269,106 +262,55 @@ it.each(['control', 'meta'])(
         cancelable: true,
       });
       input.dispatchEvent(event);
+      // The local textarea must not copy or paste on its own.
       expect(event.defaultPrevented).toBe(true);
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', {
-          code,
-          ...modifiers,
-          repeat: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
       input.dispatchEvent(
         new KeyboardEvent('keyup', { code, ...modifiers, bubbles: true, cancelable: true }),
       );
       input.dispatchEvent(new KeyboardEvent('keyup', { code: modifierCode, bubbles: true }));
     }
     vi.advanceTimersByTime(34);
-    expect(messages.filter((message) => message.type === 'clipboard')).toEqual([
-      { type: 'clipboard', action: 'copy', epoch: 'lease' },
-      { type: 'clipboard', action: 'paste', epoch: 'lease' },
-    ]);
-    expect(events().filter((event) => event.kind === 'key' || event.kind === 'text')).toEqual([]);
+    expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
+    expect(events().filter((event) => event.kind === 'key' || event.kind === 'text')).toEqual(
+      ['KeyC', 'KeyV'].flatMap((code) => [
+        { kind: 'key', code: modifierCode, down: true },
+        { kind: 'key', code, down: true },
+        { kind: 'key', code, down: false },
+        { kind: 'key', code: modifierCode, down: false },
+      ]),
+    );
   },
 );
-it('does not bridge clipboard in local controls, composition, view-only mode or unsupported hosts', () => {
-  const shortcut = () =>
-    document.activeElement!.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        code: 'KeyV',
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  pointer('pointerdown');
-  pointer('pointerup');
-  shortcut();
-  expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
-  viewer.receive({
-    type: 'init',
-    epoch: 'lease',
-    width: 1000,
-    height: 600,
-    clipboardShortcuts: true,
-  });
+it.each(['key', 'button', 'scroll'])('keeps a held modifier around ordinary %s input', (kind) => {
+  viewer.receive({ type: 'init', epoch: 'lease', width: 1000, height: 600 });
   viewer.receive({ type: 'control', enabled: true });
-  const button = document.createElement('button');
-  document.body.append(button);
-  button.focus();
-  shortcut();
   pointer('pointerdown');
   pointer('pointerup');
+  messages = [];
   const input = document.getElementById('keyboard-input')!;
-  input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
-  shortcut();
-  input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
-  viewer.receive({ type: 'control', enabled: false });
-  shortcut();
-  expect(messages.some((message) => message.type === 'clipboard')).toBe(false);
-});
-it.each(['key', 'button', 'scroll'])(
-  'preserves the deferred modifier for ordinary %s input',
-  (kind) => {
-    viewer.receive({
-      type: 'init',
-      epoch: 'lease',
-      width: 1000,
-      height: 600,
-      clipboardShortcuts: true,
-    });
-    viewer.receive({ type: 'control', enabled: true });
+  input.dispatchEvent(
+    new KeyboardEvent('keydown', { code: 'ControlLeft', ctrlKey: true, bubbles: true }),
+  );
+  if (kind === 'key') {
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { code: 'KeyA', ctrlKey: true, bubbles: true }),
+    );
+    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyA', ctrlKey: true, bubbles: true }));
+  } else if (kind === 'button') {
     pointer('pointerdown');
     pointer('pointerup');
-    messages = [];
-    const input = document.getElementById('keyboard-input')!;
-    input.dispatchEvent(
-      new KeyboardEvent('keydown', { code: 'ControlLeft', ctrlKey: true, bubbles: true }),
+  } else {
+    stage.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: 32, ctrlKey: true, bubbles: true, cancelable: true }),
     );
-    if (kind === 'key') {
-      input.dispatchEvent(
-        new KeyboardEvent('keydown', { code: 'KeyA', ctrlKey: true, bubbles: true }),
-      );
-      input.dispatchEvent(
-        new KeyboardEvent('keyup', { code: 'KeyA', ctrlKey: true, bubbles: true }),
-      );
-    } else if (kind === 'button') {
-      pointer('pointerdown');
-      pointer('pointerup');
-    } else {
-      stage.dispatchEvent(
-        new WheelEvent('wheel', { deltaY: 32, ctrlKey: true, bubbles: true, cancelable: true }),
-      );
-    }
-    input.dispatchEvent(new KeyboardEvent('keyup', { code: 'ControlLeft', bubbles: true }));
-    vi.advanceTimersByTime(34);
-    expect(events()[0]).toEqual({ kind: 'key', code: 'ControlLeft', down: true });
-    expect(events().at(-1)).toEqual({ kind: 'key', code: 'ControlLeft', down: false });
-    expect(events().some((event) => event.kind === kind)).toBe(true);
-    expect(events().some((event) => event.kind === 'release')).toBe(false);
-  },
-);
+  }
+  input.dispatchEvent(new KeyboardEvent('keyup', { code: 'ControlLeft', bubbles: true }));
+  vi.advanceTimersByTime(34);
+  expect(events()[0]).toEqual({ kind: 'key', code: 'ControlLeft', down: true });
+  expect(events().at(-1)).toEqual({ kind: 'key', code: 'ControlLeft', down: false });
+  expect(events().some((event) => event.kind === kind)).toBe(true);
+  expect(events().some((event) => event.kind === 'release')).toBe(false);
+});
 it('forwards Cmd+W to the remote computer while the picture owns the keyboard', () => {
   pointer('pointerdown');
   pointer('pointerup');
