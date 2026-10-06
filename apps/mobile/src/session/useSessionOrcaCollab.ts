@@ -101,9 +101,9 @@ function isWorkerArchivePending(worker: OrcaTeamWorker): boolean {
  * 归档那一套 app 级单例(sessionMetaWriteGuard / sessionPendingWrites):
  *  - 先登记 status 在途写,再按物理 shard 把 Worker 任务移出 store——在途期间 sessions 推送、
  *    全量对账与单条 upsert 都不会把它复活,useOrcaTeam 也据此把它从团队视图藏起;
- *  - 返回 settle(ok):成功只释放登记(权威值随推送回流);失败先释放登记(否则回滚的 upsert
- *    会被在途保护挡掉),仍是最新写才把原会话整行插回同一 shard,并一律 reseed——被同会话
- *    后续写取代时终态由新写负责。
+ *  - 返回 settle(ok):成功释放登记并主动对账该 shard(防归档前发出的读取迟到复活);
+ *    失败先释放登记(否则回滚的 upsert 会被在途保护挡掉),仍是最新写才把原会话整行插回
+ *    同一 shard,并一律 reseed——被同会话后续写取代时终态由新写负责。
  */
 export function beginOptimisticWorkerArchive(
   workerSessionId: string,
@@ -117,8 +117,14 @@ export function beginOptimisticWorkerArchive(
   if (devices) remoteSessionStore.applySessionPatch(devices.shardId, workerSessionId, patch);
   return (ok) => {
     releasePending();
-    if (ok || !devices) return;
+    if (!devices) return;
     const { shardId } = devices;
+    if (ok) {
+      // 归档 RPC 不回行:释放在途登记后,归档前已发出、成功后才落地的列表 / 单条读取
+      // 可能把旧 active 行插回。主动对账一次该 shard,以写库后的权威列表收敛。
+      remoteSessionStore.requestReseed(shardId);
+      return;
+    }
     if (write.isLatest() && session) {
       const shardName = remoteSessionStore.getSessions()
         .find((item) => item.deviceLinkDeviceId === shardId)?.deviceLinkDeviceName

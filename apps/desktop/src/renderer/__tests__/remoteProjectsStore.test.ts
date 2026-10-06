@@ -47,7 +47,7 @@ function mk(id: string, partial: Partial<Session> = {}): Session {
     parentSessionId: partial.parentSessionId ?? null,
     extraDirs: [],
     createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: partial.updatedAt ?? '2026-01-01T00:00:00.000Z',
   };
 }
 
@@ -1082,7 +1082,33 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
     expect(projected('a')?.status).toBe('active');
   });
 
-  it('yields to a different status pushed after the write settled', () => {
+  it('ignores late status pushes after the write and a post-write list that still carries old data', () => {
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    const token = remoteProjectsStore.beginPendingStatus('dev-A', 'a', 'archived');
+    remoteProjectsStore.completePendingStatus(token, {
+      id: 'a',
+      status: 'archived',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    });
+
+    // 写库前产生的 active 推送晚于回包到达:不带 updatedAt,分不清新旧 —— 不撤叠加层。
+    remoteProjectsStore.applyPatch('dev-A', 'a', { status: 'active' });
+    expect(projected('a')?.status).toBe('archived');
+
+    // 写库后才发出的列表被被控端并进写库前的查询,仍带旧 active 行(updatedAt 不比写库新)。
+    remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    expect(projected('a')?.status).toBe('archived');
+
+    // 真正写库后的列表不含它 → 确认让位。
+    remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', []);
+    remoteProjectsStore.nextSnapshotEpoch('dev-A');
+    remoteProjectsStore.setDeviceSessions('dev-A', 'A', [mk('a')]);
+    expect(projected('a')?.status).toBe('active');
+  });
+
+  it('yields to a later change by another controller once a post-write list shows it', () => {
     remoteProjectsStore.setDeviceSessions('dev-A', 'A', []);
     remoteProjectsStore.setDeviceSessions(
       'dev-A',
@@ -1091,10 +1117,23 @@ describe('remoteProjectsStore pending status (remote archive / unarchive)', () =
       'archived',
     );
     const token = remoteProjectsStore.beginPendingStatus('dev-A', 'a', 'active');
-    remoteProjectsStore.completePendingStatus(token, { id: 'a', status: 'active' });
+    remoteProjectsStore.completePendingStatus(token, {
+      id: 'a',
+      status: 'active',
+      updatedAt: '2026-02-01T00:00:00.000Z',
+    });
 
-    // 另一控制端随后又把它归档了 —— 权威 push 立即接管。
+    // 另一控制端随后又把它归档了:推送本身不撤叠加层,写库后的归档桶列表带着更新的
+    // updatedAt 才接管。
     remoteProjectsStore.applyPatch('dev-A', 'a', { status: 'archived' });
+    expect(projected('a')?.status).toBe('active');
+    remoteProjectsStore.nextSnapshotEpoch('dev-A', 'archived');
+    remoteProjectsStore.setDeviceSessions(
+      'dev-A',
+      'A',
+      [mk('a', { status: 'archived', updatedAt: '2026-02-02T00:00:00.000Z' })],
+      'archived',
+    );
     expect(projected('a')?.status).toBe('archived');
   });
 

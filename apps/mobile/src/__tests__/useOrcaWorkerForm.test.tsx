@@ -516,6 +516,8 @@ describe('optimistic Worker archive', () => {
     const rpc = deferred();
     const archiveWorker = vi.fn(() => rpc.promise);
     const collab = await mountCollab({ sessionId: 'lead-1', role: 'lead', listWorkers, archiveWorker });
+    const reseeds = vi.fn();
+    const unregister = remoteSessionStore.registerReseedHandler('dev-old', reseeds);
     try {
       act(() => collab.current!.showWorkerActions(collab.current!.team.workers[0]!));
       act(() => vi.mocked(Alert.alert).mock.calls.at(-1)![2]!.find((button) => button.style === 'destructive')!.onPress?.());
@@ -539,7 +541,10 @@ describe('optimistic Worker archive', () => {
       expect(sessionPendingWrites.pendingFields('s-1')).toEqual([]);
       expect(collab.current!.team.workers.map((worker) => worker.workerId)).toEqual(['w-2']);
       expect(remoteSessionStore.getSessions().map((item) => item.id)).toEqual(['s-2']);
+      // 成功后主动对账该 shard:归档前发出、成功后才落地的旧读取由写库后的权威列表收敛。
+      expect(reseeds).toHaveBeenCalled();
     } finally {
+      unregister();
       remoteSessionStore.clear();
     }
   });

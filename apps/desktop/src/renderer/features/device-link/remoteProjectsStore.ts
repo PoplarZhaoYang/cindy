@@ -378,6 +378,8 @@ interface PendingStatusEntry {
    * 只有 epoch 大于栅栏的列表(写库确认之后才发出的 sessions:list)落地,才算权威确认。
    */
   fence: Record<RemoteSessionStatus, number> | null;
+  /** 写库返回行的 updatedAt;列表里同一行的 updatedAt 比它新才算「之后又被改过」。 */
+  confirmedUpdatedAt: string | null;
 }
 
 /**
@@ -391,12 +393,14 @@ interface PendingStatusEntry {
  *  - begin:登记叠加层(同一任务后来者覆盖先来者);
  *  - rollback:写库失败 / 用户取消 → 撤掉,行照权威数据回到原位;
  *  - complete:写库成功 → 用被控端返回的行就地 applyPatch(不等 push 回流),叠加层
- *    **继续保留**到一份写库确认后才发出的列表落地为止(epoch 栅栏)。写库前已在途的
- *    列表(含 10s 周期对账)可能读到写库前的旧值,落地时会把权威行改回去 —— 叠加层
- *    顶着,下一份新列表再把权威行校正回来,叠加层随之让位。不让在途列表 superseded,
- *    是为了不连带打断 bootstrap / 归档桶按需读取的收尾。
- *  - 写库确认后若被控端推来**不同**的状态(另一控制端又改了),权威值立即接管;
- *    status=deleted、设备移除、整体清空同样回收。
+ *    **继续保留**到一份写库确认后才发出的列表(epoch 栅栏)落地、且**内容**能确认为止:
+ *    行在目标桶 / 不在另一桶,或该行 updatedAt 比写库返回的新(之后又被改过,权威值
+ *    接管)。写库前已在途的列表(含 10s 周期对账)、以及被控端把新请求并进写库前查询
+ *    的合并结果,都可能带着写库前的旧值 —— 内容对不上就不让位,叠加层顶着,等下一份。
+ *    不让在途列表 superseded,是为了不连带打断 bootstrap / 归档桶按需读取的收尾。
+ *  - 状态 push 不带 updatedAt,分不清迟到的旧推送和之后的新改动,一律不撤叠加层,交给
+ *    上面的列表判定(另一控制端随后又改了,最迟下一轮对账接管);只有
+ *    status=deleted、设备移除、整体清空立即回收。
  */
 const pendingStatuses = new Map<string, PendingStatusEntry>();
 
@@ -410,17 +414,38 @@ function withPendingStatus(session: Session, deviceId: string): Session {
   return { ...session, status, ...(unpin ? { pinnedAt: null } : {}) };
 }
 
-/** 该设备该状态桶的列表落地时,撤掉已被写库后新列表确认过的叠加层。 */
-function settlePendingStatuses(deviceId: string, status: RemoteSessionStatus): boolean {
+/**
+ * 该设备该状态桶的列表落地时,撤掉被它确认过的叠加层:必须是写库后才发出的列表(epoch
+ * 越过栅栏),且内容与写库结果一致或显示之后又被改过(见 {@link pendingStatuses})。
+ * 行不在列表里且列表就是目标桶时无从判断(可能只是不在有界窗口里),叠加层继续保留 ——
+ * 它与写库结果一致,留着不可见。
+ */
+function settlePendingStatuses(
+  deviceId: string,
+  status: RemoteSessionStatus,
+  incoming: readonly Session[],
+): boolean {
   if (pendingStatuses.size === 0) return false;
   const epoch = snapshotEpoch.get(snapshotEpochKey(deviceId, status)) ?? 0;
   let settled = false;
   for (const [sessionId, entry] of pendingStatuses) {
     if (entry.token.deviceId !== deviceId || !entry.fence || epoch <= entry.fence[status]) continue;
+    const row = incoming.find((session) => session.id === sessionId);
+    const confirmed = row
+      ? status === entry.token.status || isUpdatedAfter(row.updatedAt, entry.confirmedUpdatedAt)
+      : status !== entry.token.status;
+    if (!confirmed) continue;
     pendingStatuses.delete(sessionId);
     settled = true;
   }
   return settled;
+}
+
+function isUpdatedAfter(updatedAt: unknown, baseline: string | null): boolean {
+  if (typeof updatedAt !== 'string' || baseline == null) return false;
+  const at = Date.parse(updatedAt);
+  const base = Date.parse(baseline);
+  return Number.isFinite(at) && Number.isFinite(base) && at > base;
 }
 
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
@@ -575,7 +600,7 @@ const actions = {
       status === 'active' ? false : setSessionStatusFailed(deviceId, 'archived', false);
     const statusWasLoaded = existing?.loadedStatuses.has(status) ?? false;
     // 写库确认之后才发出的列表(epoch 越过栅栏)落地 = 状态迁移叠加层的权威确认。
-    const pendingStatusSettled = settlePendingStatuses(deviceId, status);
+    const pendingStatusSettled = settlePendingStatuses(deviceId, status, stamped);
     const incomingIds = new Set(stamped.map((session) => session.id));
     const preserved =
       existing?.sessions
@@ -777,16 +802,9 @@ const actions = {
     // 「别的控制端刚删掉的会话」的正文一直留在盘上,直到 LRU 逐出 / 设备移除 / 登出
     // (review: codex P1)。归档仍可从 Archived / All 打开，必须保留缓存供离线查看。
     if (deleted) clearCachedMessages(deviceId, sessionId);
-    // 状态迁移叠加层:删除一律让位;写库确认后被控端推来不同状态(另一控制端又改了)
-    // 也让位。写库仍在途时的状态 push 不动叠加层 —— 结果以本次写库返回的行为准。
-    const pendingStatus = pendingStatuses.get(sessionId);
-    if (
-      pendingStatus?.token.deviceId === deviceId &&
-      (deleted ||
-        (pendingStatus.fence &&
-          (patch.status === 'active' || patch.status === 'archived') &&
-          patch.status !== pendingStatus.token.status))
-    ) {
+    // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
+    // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
+    if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
       pendingStatuses.delete(sessionId);
     }
     const shard = shards.get(deviceId);
@@ -1056,7 +1074,7 @@ const actions = {
     status: RemoteSessionStatus,
   ): RemotePendingStatusToken {
     const token: RemotePendingStatusToken = { deviceId, sessionId, status };
-    pendingStatuses.set(sessionId, { token, fence: null });
+    pendingStatuses.set(sessionId, { token, fence: null, confirmedUpdatedAt: null });
     recompute();
     return token;
   },
@@ -1076,6 +1094,7 @@ const actions = {
       active: snapshotEpoch.get(snapshotEpochKey(token.deviceId, 'active')) ?? 0,
       archived: snapshotEpoch.get(snapshotEpochKey(token.deviceId, 'archived')) ?? 0,
     };
+    entry.confirmedUpdatedAt = typeof persisted?.updatedAt === 'string' ? persisted.updatedAt : null;
     const patch: Record<string, unknown> = { status: token.status };
     if (persisted && Object.prototype.hasOwnProperty.call(persisted, 'pinnedAt')) {
       patch.pinnedAt = persisted.pinnedAt ?? null;

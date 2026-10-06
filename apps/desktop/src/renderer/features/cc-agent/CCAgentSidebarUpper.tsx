@@ -2970,6 +2970,17 @@ function ExpandedView({
       includeArchived: filter.status,
     });
 
+  // 新确认框顶替旧确认框时(两次预检交错返回),旧框提前隐藏的远程任务已无处取消,
+  // 先让它回到列表,再登记新框的凭据。
+  const replaceConfirmRemoteArchive = useCallback(
+    (token: RemotePendingStatusToken | null) => {
+      const previous = confirmRemoteArchiveRef.current;
+      confirmRemoteArchiveRef.current = token;
+      if (previous && previous !== token) cancelRemoteArchive(previous);
+    },
+    [cancelRemoteArchive],
+  );
+
   const closeOwnedSharedTask = useCallback(async (sharedTaskId?: string): Promise<boolean> => {
     if (!sharedTaskId) return true;
     try {
@@ -3064,7 +3075,7 @@ function ExpandedView({
         // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
         // 走的是普通归档确认。
         if (preflight !== 'clean') {
-          confirmRemoteArchiveRef.current = remoteArchiveToken;
+          replaceConfirmRemoteArchive(remoteArchiveToken);
           setConfirm({
             open: true,
             sessionId,
@@ -3096,6 +3107,7 @@ function ExpandedView({
           'dirty';
         // Keep the existing confirm-state shape for the normal delete flow, then attach
         // the shared-task scope in a functional update so cancellation still leaves it open.
+        replaceConfirmRemoteArchive(null);
         setConfirm({ open: true, sessionId, action, dirtyWorktree });
         if (sharedTaskId) {
           setConfirm((previous) => ({ ...previous, sharedTaskId }));
@@ -3108,6 +3120,7 @@ function ExpandedView({
       beginRemoteArchive,
       cancelRemoteArchive,
       closeOwnedSharedTask,
+      replaceConfirmRemoteArchive,
       runningSessionIds,
       runSessionAction,
       unarchiveSession,

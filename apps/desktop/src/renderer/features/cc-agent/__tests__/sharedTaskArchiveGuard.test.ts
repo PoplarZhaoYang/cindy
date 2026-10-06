@@ -38,6 +38,7 @@ function harness(result: unknown, reject = false, sharedTaskId: string | undefin
     resolveSessionRemovalRedirect: vi.fn(), unarchiveSession: vi.fn(),
     runSessionAction, setConfirm, CONFIRM_INITIAL: { open: false },
     confirmRemoteArchiveRef: { current: null }, beginRemoteArchive: vi.fn(), cancelRemoteArchive: vi.fn(),
+    replaceConfirmRemoteArchive: vi.fn(),
   };
   const closeOwnedSharedTask = callback('closeOwnedSharedTask', bindings);
   return {
@@ -93,6 +94,9 @@ describe('sidebar remote archive hides the row before the worktree preflight', (
     const beginRemoteArchive = vi.fn(() => { order.push('begin'); return token; });
     const cancelRemoteArchive = vi.fn();
     const confirmRemoteArchiveRef = { current: null as unknown };
+    const replaceConfirmRemoteArchive = callback('replaceConfirmRemoteArchive', {
+      confirmRemoteArchiveRef, cancelRemoteArchive,
+    });
     const session = { id: 'task', deviceLinkDeviceId: 'device-1' };
     const bindings = {
       window: { electronAPI: { sharedTask: { account: vi.fn() }, binding: { resolveSession: async () => ({ attached: false }) } } },
@@ -104,7 +108,7 @@ describe('sidebar remote archive hides the row before the worktree preflight', (
       viewedSessionIdRef: { current: 'task' }, viewedSessionId: 'task',
       resolveSessionRemovalRedirect: vi.fn(), unarchiveSession: vi.fn(),
       runSessionAction, setConfirm, CONFIRM_INITIAL: { open: false },
-      confirmRemoteArchiveRef, beginRemoteArchive, cancelRemoteArchive,
+      confirmRemoteArchiveRef, beginRemoteArchive, cancelRemoteArchive, replaceConfirmRemoteArchive,
       closeOwnedSharedTask: async () => true,
       confirm: { sessionId: 'task', action: 'archive' },
     };
@@ -153,5 +157,20 @@ describe('sidebar remote archive hides the row before the worktree preflight', (
     expect(h.runSessionAction).toHaveBeenCalledWith('task', 'archive', expect.objectContaining({
       remoteArchiveToken: h.token,
     }));
+  });
+
+  it('restores an earlier hidden row when a later confirm dialog replaces it', async () => {
+    const h = remoteHarness('dirty');
+    await h.archive();
+    const later = { ...h.token, sessionId: 'later' };
+    h.beginRemoteArchive.mockImplementationOnce(() => later);
+    await h.archive();
+    // 第一次的确认框已被顶替,它隐藏的行没有入口可取消 —— 先回到列表。
+    expect(h.cancelRemoteArchive).toHaveBeenCalledTimes(1);
+    expect(h.cancelRemoteArchive).toHaveBeenCalledWith(h.token);
+    expect(h.confirmRemoteArchiveRef.current).toBe(later);
+
+    h.cancel();
+    expect(h.cancelRemoteArchive).toHaveBeenLastCalledWith(later);
   });
 });
