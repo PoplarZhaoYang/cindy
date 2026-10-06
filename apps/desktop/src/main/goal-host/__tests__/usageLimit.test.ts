@@ -5,6 +5,7 @@ import {
   OVERLOAD_RESUME_DELAY_MS,
   classifyTurnOverload,
   classifyTurnUsageLimit,
+  readStructuredUsageResetAt,
   readTurnUsageResetAt,
 } from '../usageLimit';
 
@@ -151,5 +152,12 @@ describe('readTurnUsageResetAt', () => {
     expect(readTurnUsageResetAt({ usageResetAt: '1791202800000' })).toBeNull();
     expect(readTurnUsageResetAt({ usageResetAt: 0 })).toBeNull();
     expect(readTurnUsageResetAt(null)).toBeNull();
+  });
+});
+
+describe('readStructuredUsageResetAt', () => {
+  it('only reads the structured field, never the error text', () => {
+    expect(readStructuredUsageResetAt({ usageResetAt: 1_791_202_800_000 })).toBe(1_791_202_800_000);
+    expect(readStructuredUsageResetAt({ errorStatus: 429, message: 'Try again in ~2 min.' })).toBeNull();
   });
 });

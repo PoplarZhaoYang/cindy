@@ -34,16 +34,29 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
 }
 
 /**
- * turn error 给出的限额重置时刻(unix ms):先取结构化 `usageResetAt`(Claude 订阅由
- * translator 从 SDK `rate_limit_event` 带上),再从报错原文解析(ChatGPT 订阅的
- * `resets_at` / `try again at 3:05 PM` / Pi 的 `Try again in ~N min` 等)。都没有时
- * 返回 null,调用方再退回账号快照。
+ * turn error 自带的结构化重置时刻(unix ms)。只有 Claude 订阅会话由 translator 从 SDK
+ * `rate_limit_event` 带上,天然属于订阅账号,可直接使用。
  */
-export function readTurnUsageResetAt(data: unknown, nowMs = Date.now()): number | null {
+export function readStructuredUsageResetAt(data: unknown): number | null {
   if (!data || typeof data !== 'object') return null;
   const v = (data as { usageResetAt?: unknown }).usageResetAt;
-  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
-  return extractUsageLimitRecoveryHint(data, nowMs)?.resetAtMs ?? null;
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/**
+ * turn error 给出的限额重置时刻(unix ms):先取结构化 `usageResetAt`,再从报错原文解析
+ * (ChatGPT 订阅的 `resets_at` / `try again at 3:05 PM` / Pi 的 `Try again in ~N min` 等)。
+ * 都没有时返回 null,调用方再退回账号快照。
+ *
+ * 只对订阅账号的会话调用:API key / Coding Plan / 网关等来源报错里的重试时刻是分钟级请求
+ * 限流,不是周期额度重置。
+ */
+export function readTurnUsageResetAt(data: unknown, nowMs = Date.now()): number | null {
+  return (
+    readStructuredUsageResetAt(data) ??
+    extractUsageLimitRecoveryHint(data, nowMs)?.resetAtMs ??
+    null
+  );
 }
 
 /**

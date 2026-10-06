@@ -53,7 +53,10 @@ describe('codexAccountUsageLimit', () => {
 
   it('only looks at the bucket matching the Codex session model', () => {
     expect(
-      codexAccountUsageLimit({ appServerBuckets: buckets }, { agentKind: 'codex', modelId: 'gpt-5.5' }),
+      codexAccountUsageLimit(
+        { appServerBuckets: buckets },
+        { agentKind: 'codex', modelId: 'gpt-5.5' },
+      ),
     ).toEqual({ limited: false, resetAtMs: RESET_5H * 1000 });
     expect(
       codexAccountUsageLimit(
@@ -109,15 +112,46 @@ describe('claudeAccountUsageLimit', () => {
     });
     expect(claudeAccountUsageLimit(snapshot, 'claude-sonnet-5')?.limited).toBe(false);
   });
+
+  it('gives no reset time when an exhausted window lacks one instead of borrowing another window', () => {
+    expect(
+      claudeAccountUsageLimit({
+        fiveHour: { utilization: 20, resetsAt: RESET_5H },
+        sevenDay: { utilization: 100, resetsAt: null },
+      }),
+    ).toEqual({ limited: true, resetAtMs: null });
+  });
+
+  it('ignores windows whose reset already passed (the snapshot predates the rollover)', () => {
+    expect(
+      claudeAccountUsageLimit({
+        fiveHour: { utilization: 100, resetsAt: NOW_SEC - 60 },
+        sevenDay: { utilization: 40, resetsAt: RESET_WEEK },
+      }),
+    ).toEqual({ limited: false, resetAtMs: RESET_WEEK * 1000 });
+  });
 });
 
 describe('xaiAccountUsageLimit', () => {
   it('reads the weekly window', () => {
-    expect(xaiAccountUsageLimit({ creditUsagePercent: 100, resetsAt: RESET_WEEK })).toEqual({
-      limited: true,
-      resetAtMs: RESET_WEEK * 1000,
-    });
+    expect(
+      xaiAccountUsageLimit({
+        creditUsagePercent: 100,
+        resetsAt: RESET_WEEK,
+        updatedAt: Date.now(),
+      }),
+    ).toEqual({ limited: true, resetAtMs: RESET_WEEK * 1000 });
     expect(xaiAccountUsageLimit({ planLabel: 'SuperGrok' })).toBeNull();
+  });
+
+  it('ignores a cached snapshot past its freshness window', () => {
+    expect(
+      xaiAccountUsageLimit({
+        creditUsagePercent: 100,
+        resetsAt: RESET_WEEK,
+        updatedAt: Date.now() - 2 * 60 * 60 * 1000,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -153,7 +187,11 @@ describe('subscriptionFamilyOf / readAccountUsageLimit', () => {
 
   it('reads independent SuperGrok accounts through the account reader', async () => {
     mocks.providers = [{ id: 'xai-2', auth: { native: 'xai' } }];
-    mocks.accountUsage.mockResolvedValue({ creditUsagePercent: 100, resetsAt: RESET_WEEK });
+    mocks.accountUsage.mockResolvedValue({
+      creditUsagePercent: 100,
+      resetsAt: RESET_WEEK,
+      updatedAt: Date.now(),
+    });
     await expect(readAccountUsageLimit('pi', 'xai-2')).resolves.toEqual({
       limited: true,
       resetAtMs: RESET_WEEK * 1000,
