@@ -30,12 +30,11 @@ import {
 import { readSubscriptionAccountUsage } from './subscriptionAccountUsage.js';
 
 export interface AccountUsageLimit {
-  /** 快照明确显示某个窗口已用满（或上游标了已触顶）。 */
+  /** 快照里有仍在有效期内的窗口显示已用满。 */
   limited: boolean;
   /**
    * 受限时的重置时刻（unix ms）：用满窗口里最晚的（宁晚勿早）；任一用满窗口缺重置时刻
    * 则为 null（拿别的窗口顶替会提前醒来）。未受限时恒为 null——未用满窗口的重置与限流无关。
-   * 只有快照级标记、没有窗口显示用满时，取所有窗口里最晚的。
    */
   resetAtMs: number | null;
 }
@@ -49,20 +48,17 @@ function hasReset(w: UsageWindow): w is UsageWindow & { resetsAtSec: number } {
   return typeof w.resetsAtSec === 'number' && Number.isFinite(w.resetsAtSec) && w.resetsAtSec > 0;
 }
 
-function fromWindows(
-  windows: readonly UsageWindow[],
-  reachedFlag: boolean,
-  nowMs: number,
-): AccountUsageLimit {
-  // 已过重置点的窗口在快照之后已经翻篇，快照里的用量不再成立；快照级「已触顶」标记
-  // 说不清是哪个窗口触发的，有窗口翻篇就一并作废。
+/**
+ * 只认具体窗口显示用满，不认快照级「已触顶」标记（Codex `rateLimitReachedType` 等）：
+ * 标记说不清由哪个窗口触发，还混有余额耗尽（`credits_depleted`，要充值、不会重置）。
+ */
+function fromWindows(windows: readonly UsageWindow[], nowMs: number): AccountUsageLimit {
+  // 已过重置点的窗口在快照之后已经翻篇，快照里的用量不再成立。
   const live = windows.filter((w) => !hasReset(w) || w.resetsAtSec * 1000 > nowMs);
   const exhausted = live.filter((w) => w.usedPercent >= 100);
-  const limited = exhausted.length > 0 || (reachedFlag && live.length === windows.length);
-  if (!limited || exhausted.some((w) => !hasReset(w))) return { limited, resetAtMs: null };
-  const pool = (exhausted.length > 0 ? exhausted : live).filter(hasReset);
-  const resetAtSec = pool.length > 0 ? Math.max(...pool.map((w) => w.resetsAtSec)) : null;
-  return { limited, resetAtMs: resetAtSec !== null ? resetAtSec * 1000 : null };
+  if (exhausted.length === 0) return { limited: false, resetAtMs: null };
+  if (exhausted.some((w) => !hasReset(w))) return { limited: true, resetAtMs: null };
+  return { limited: true, resetAtMs: Math.max(...exhausted.map((w) => w.resetsAtSec as number)) * 1000 };
 }
 
 function codexWindows(snapshot: RateLimitSnapshot | null | undefined): UsageWindow[] {
@@ -95,7 +91,7 @@ export function codexAccountUsageLimit(
   }
   const windows = codexWindows(snapshot);
   if (!snapshot || windows.length === 0) return null;
-  return fromWindows(windows, snapshot.rateLimitReachedType != null, nowMs);
+  return fromWindows(windows, nowMs);
 }
 
 const CLAUDE_REJECTED_CLAIM_TO_WINDOW = {
@@ -124,7 +120,7 @@ export function claudeAccountUsageLimit(
   const rejectedWindow = rejectedKey ? snapshot[rejectedKey] : null;
   if (rejectedWindow) windows.push({ usedPercent: 100, resetsAtSec: rejectedWindow.resetsAt });
   if (windows.length === 0) return null;
-  return fromWindows(windows, snapshot.rateLimitStatus === 'rejected', nowMs);
+  return fromWindows(windows, nowMs);
 }
 
 /**
@@ -138,7 +134,6 @@ export function xaiAccountUsageLimit(
   if (!snapshot || !isXaiWeeklyUsageCurrent(snapshot, nowMs)) return null;
   return fromWindows(
     [{ usedPercent: snapshot.creditUsagePercent as number, resetsAtSec: snapshot.resetsAt }],
-    false,
     nowMs,
   );
 }

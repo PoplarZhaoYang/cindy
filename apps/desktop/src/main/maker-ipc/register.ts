@@ -19493,8 +19493,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedSender: (event) => assertTrustedAppRendererEvent(
       event as Parameters<typeof assertTrustedAppRendererEvent>[0],
     ),
-    apply: (sessionId, model, providerId, revision, selection) =>
-      handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' }),
+    apply: async (sessionId, model, providerId, revision, selection) => {
+      const result = await handleSetModel(sessionId, model, providerId, revision, selection, {
+        source: 'user',
+      });
+      // 用户亲自换了模型或来源:旧额度的等待不再适用(新选择可能有额度),交还手动处理。
+      if (!result.superseded && !result.contextWindowConfirmationRequired) {
+        usageLimitAutoResume.noteUserAction(sessionId as string);
+        agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId as string);
+      }
+      return result;
+    },
   });
 
   const recoverRemoteRuntimeAxisPersistence = async (
