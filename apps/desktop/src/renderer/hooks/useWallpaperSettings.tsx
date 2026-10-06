@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_APPEARANCE_SETTINGS,
   clampAppearanceWallpaperVisibility,
+  clampAppearanceWallpaperBlur,
   normalizeAppearanceSettings,
   type AppearanceSettings,
   type WallpaperId,
@@ -30,6 +31,7 @@ export interface WallpaperSettings {
   wallpaperId: WallpaperId;
   wallpaperOverlay: number;
   wallpaperVisibility?: number | null;
+  wallpaperBlur?: number | null;
   wallpaperMotion: WallpaperMotion;
   customWallpaperUrl?: string;
 }
@@ -39,6 +41,7 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   visibility: number;
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
+  setBlur: (value: number) => void;
   setMotion: (value: WallpaperMotion) => void;
   resetWallpaper: () => void;
 }
@@ -63,6 +66,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
     wallpaperId: settings.wallpaperId,
     wallpaperOverlay: settings.wallpaperOverlay,
     wallpaperVisibility: settings.wallpaperVisibility,
+    wallpaperBlur: settings.wallpaperBlur,
     wallpaperMotion: settings.wallpaperMotion,
     customWallpaperUrl: settings.customWallpaperUrl,
   };
@@ -98,10 +102,16 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       // One cover-fitted canvas; theme-derived veil keeps messages readable.
       const veil = 100 - visibility * 100;
       root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
+      const blur = settings.wallpaperBlur ?? 0;
+      if (blur > 0 && visibility > 0) {
+        root.dataset.wallpaperBlur = 'true';
+        root.style.setProperty('--app-wallpaper-blur', `${blur}px`);
+      }
     }
     return () => {
       delete root.dataset.wallpaperActive;
-      for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil'])
+      delete root.dataset.wallpaperBlur;
+      for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil', '--app-wallpaper-blur'])
         root.style.removeProperty(name);
     };
   }, [settings, visibility]);
@@ -190,12 +200,17 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     (value: WallpaperMotion) => patch({ wallpaperMotion: value }),
     [patch],
   );
+  const setBlur = useCallback(
+    (value: number) => patch({ wallpaperBlur: clampAppearanceWallpaperBlur(value) }),
+    [patch],
+  );
   const resetWallpaper = useCallback(
     () =>
       patch({
         wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
         wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
         wallpaperVisibility: null,
+        wallpaperBlur: null,
         wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
       }),
     [patch],
@@ -208,10 +223,20 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       setWallpaper,
       setVisibility,
+      setBlur,
       setMotion,
       resetWallpaper,
     }),
-    [resetWallpaper, setMotion, setVisibility, setWallpaper, settings, failedUrl, visibility],
+    [
+      resetWallpaper,
+      setMotion,
+      setVisibility,
+      setBlur,
+      setWallpaper,
+      settings,
+      failedUrl,
+      visibility,
+    ],
   );
 
   return (

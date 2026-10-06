@@ -31,12 +31,14 @@ export function WallpaperSection() {
     wallpaperId,
     wallpaperOverlay,
     wallpaperVisibility,
+    wallpaperBlur,
     visibility,
     wallpaperMotion,
     customWallpaperUrl,
     playbackFailed,
     setWallpaper,
     setVisibility,
+    setBlur,
     setMotion,
     resetWallpaper,
   } = useWallpaperSettings();
@@ -100,6 +102,7 @@ export function WallpaperSection() {
             (wallpaperId === DEFAULT_APPEARANCE_SETTINGS.wallpaperId &&
               wallpaperOverlay === DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay &&
               wallpaperVisibility == null &&
+              wallpaperBlur == null &&
               wallpaperMotion === DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion)
           }
         >
@@ -262,6 +265,29 @@ export function WallpaperSection() {
           className="text-12 text-[var(--settings-section-sublabel)]"
         >
           {t('settings.appearance.wallpaper.visibilityHint')}
+        </p>
+        <div className="flex items-center gap-3">
+          <span className="shrink-0 text-12 text-[var(--settings-section-sublabel)]">
+            {t('settings.appearance.wallpaper.blurLabel')}
+          </span>
+          <Slider
+            min={APPEARANCE_LIMITS.wallpaperBlur.min}
+            max={APPEARANCE_LIMITS.wallpaperBlur.max}
+            step={APPEARANCE_LIMITS.wallpaperBlur.step}
+            value={[wallpaperBlur ?? 0]}
+            disabled={wallpaperId === 'none'}
+            onValueChange={([value]) => {
+              if (typeof value === 'number') setBlur(value);
+            }}
+            aria-label={t('settings.appearance.wallpaper.blurLabel')}
+            aria-describedby="wallpaper-blur-hint"
+          />
+          <span className="w-10 shrink-0 text-right font-mono text-12 text-[var(--settings-section-sublabel)]">
+            {wallpaperBlur ?? 0}
+          </span>
+        </div>
+        <p id="wallpaper-blur-hint" className="text-12 text-[var(--settings-section-sublabel)]">
+          {t('settings.appearance.wallpaper.blurHint')}
         </p>
       </div>
     </div>

@@ -82,7 +82,10 @@ vi.mock('@/components/ui/slider', () => ({
   }: React.InputHTMLAttributes<HTMLInputElement> & {
     value?: number[];
     onValueChange?: (value: number[]) => void;
-  }) => <input type="range" value={value?.[0]} readOnly {...props} />,
+  }) => {
+    void _onValueChange;
+    return <input type="range" value={value?.[0]} readOnly {...props} />;
+  },
 }));
 
 vi.mock('../FontFamilyPicker', () => ({ FontFamilyPicker: () => null }));
@@ -99,6 +102,12 @@ describe('AppearanceSection accessibility', () => {
     expect(visibility.getAttribute('step')).toBe('0.01');
     expect(visibility.getAttribute('aria-describedby')).toBe('wallpaper-visibility-hint');
     expect(screen.getByText('37%')).toBeTruthy();
+    const blur = screen.getByRole('slider', { name: 'settings.appearance.wallpaper.blurLabel' });
+    expect(blur.getAttribute('min')).toBe('0');
+    expect(blur.getAttribute('max')).toBe('20');
+    expect(blur.getAttribute('step')).toBe('1');
+    expect(blur.getAttribute('aria-describedby')).toBe('wallpaper-blur-hint');
+    expect(blur.hasAttribute('disabled')).toBe(true);
 
     const wallpapers = within(
       screen.getByRole('radiogroup', { name: 'settings.appearance.wallpaper.aria' }),
