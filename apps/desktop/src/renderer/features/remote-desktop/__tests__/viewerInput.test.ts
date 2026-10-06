@@ -310,6 +310,15 @@ it.each([
     remote: ['+MetaLeft', '+KeyC', '+KeyC', '-KeyC', '-MetaLeft'],
   },
   {
+    // Known boundary: at Command keyup a key pressed during Command may be released
+    // (keyup swallowed) or still held; it is released to avoid a stuck key, and the
+    // next auto-repeat presses it again so its real keyup still releases it.
+    name: 'macOS key still held after Command is re-pressed by its next auto-repeat',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+ArrowUp', '-MetaLeft', '+ArrowUp', '-ArrowUp'],
+    remote: ['+MetaLeft', '+ArrowUp', '-ArrowUp', '-MetaLeft', '+ArrowUp', '-ArrowUp'],
+  },
+  {
     name: 'macOS delivered keyup is not released twice',
     macKeyboard: true,
     steps: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
