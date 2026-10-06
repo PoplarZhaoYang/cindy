@@ -188,11 +188,12 @@ describe('queue reorder adapter', () => {
     let queue = ['a', 'b', 'c', 'd'].map((id) => queued(id));
     let paused = false;
     const editLocks: string[] = [];
+    const steering: string[] = [];
     const coordinator: QueueReorderCoordinator = {
       steerControlInput: vi.fn(async () => 'steered' as const),
       isQueuePaused: () => paused,
       getQueueControlSnapshot: () => ({ pendingQueue: queue }),
-      getProjection: () => ({ queueEditLocks: editLocks }),
+      getProjection: () => ({ queueEditLocks: editLocks, steeringQueueClientIds: steering }),
       move: vi.fn((_sessionId: string, clientId: string, targetIndex: number) => {
         // Mirrors AgentInputCoordinator.move: insert before original index targetIndex.
         const from = queue.findIndex((entry) => entry.clientId === clientId);
@@ -221,6 +222,7 @@ describe('queue reorder adapter', () => {
       order: () => queue.map((entry) => entry.clientId),
       pause: () => { paused = true; },
       lockEdit: (clientId: string) => { editLocks.push(clientId); },
+      startSteering: (clientId: string) => { steering.push(clientId); },
       drop: (clientId: string) => { queue = queue.filter((entry) => entry.clientId !== clientId); },
     };
   }
@@ -243,6 +245,13 @@ describe('queue reorder adapter', () => {
     h.lockEdit('c');
     expect(h.adapter.moveStoredControlMessage('s', 'c', 0)).toBe('locked');
     expect(h.order()).toEqual(['a', 'b', 'c', 'd']);
+    expect(h.coordinator.move).not.toHaveBeenCalled();
+  });
+
+  it('reports a row that started steering as gone instead of claiming the move', () => {
+    const h = setup({});
+    h.startSteering('c');
+    expect(h.adapter.moveStoredControlMessage('s', 'c', 0)).toBeNull();
     expect(h.coordinator.move).not.toHaveBeenCalled();
   });
 

@@ -207,7 +207,10 @@ export interface QueueReorderCoordinator {
   ): Promise<ControlSteerOutcome>;
   isQueuePaused(sessionId: string): boolean;
   getQueueControlSnapshot(sessionId: string): { pendingQueue: readonly AgentInputQueuedMessage[] };
-  getProjection(sessionId: string): { queueEditLocks: readonly string[] };
+  getProjection(sessionId: string): {
+    queueEditLocks: readonly string[];
+    steeringQueueClientIds: readonly string[];
+  };
   move(sessionId: string, clientId: string, targetIndex: number): unknown;
 }
 
@@ -266,8 +269,11 @@ export function createQueueReorderAdapter(deps: {
       const from = waitingIndex(sessionId, clientId);
       if (from < 0) return null;
       const coordinator = deps.getCoordinator();
+      const projection = coordinator.getProjection(sessionId);
+      // A row that started steering is being consumed; move() would silently refuse it.
+      if (projection.steeringQueueClientIds.includes(clientId)) return null;
       // Same rule as the queue UI: a row the user is editing keeps its place.
-      if (coordinator.getProjection(sessionId).queueEditLocks.includes(clientId)) return 'locked';
+      if (projection.queueEditLocks.includes(clientId)) return 'locked';
       const waitingCount = coordinator.getQueueControlSnapshot(sessionId).pendingQueue.length;
       const to = Math.min(position, waitingCount - 1);
       // coordinator.move 的 targetIndex 是「插到原队列第 n 条之前」。
