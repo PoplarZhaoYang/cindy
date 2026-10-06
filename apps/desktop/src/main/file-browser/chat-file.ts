@@ -40,6 +40,8 @@ export interface ChatFileFetchArgs {
   workdir: string;
   /** 目标文件在远端机器上的绝对路径。 */
   absPath: string;
+  /** Local IPC correlation for transfer progress; never forwarded to the remote device. */
+  requestId?: string;
   /** Optional generated-command evidence window, using timestamps from the owning device. */
   modifiedWindow?: { startMs: number; endMs: number | null };
 }

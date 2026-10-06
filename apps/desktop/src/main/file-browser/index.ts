@@ -497,6 +497,7 @@ export function registerFileBrowserIpc(): void {
         wc.send(FILE_BROWSER_PUSH.TRANSFER, {
           workdir: args?.workdir ?? '',
           relPath: args?.absPath ?? '',
+          requestId: typeof args?.requestId === 'string' ? args.requestId : undefined,
           received,
           total,
           phase: phase ?? 'download',

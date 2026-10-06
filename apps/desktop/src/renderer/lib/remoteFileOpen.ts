@@ -27,10 +27,16 @@ export type RemoteFileOrigin = Exclude<SessionFileOrigin, { kind: 'local' }>;
 
 export type ChatFileFetchOutcome =
   | { ok: true; cachePath: string; stale: boolean; size: number }
-  | { ok: false; code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED'; message?: string };
+  | {
+      ok: false;
+      code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED';
+      message?: string;
+    };
 
 /** 失败 code → i18n 文案。 */
-export function chatFileErrorText(code: Exclude<ChatFileFetchOutcome, { ok: true }>['code']): string {
+export function chatFileErrorText(
+  code: Exclude<ChatFileFetchOutcome, { ok: true }>['code'],
+): string {
   if (code === 'OUTSIDE_WORKDIR') return i18n.t('chat.remoteFile.outsideWorkdir');
   if (code === 'NOT_FOUND') return i18n.t('chat.remoteFile.notFound');
   return i18n.t('chat.remoteFile.fetchFailed');
@@ -41,13 +47,19 @@ export async function fetchChatFileToCache(
   origin: RemoteFileOrigin,
   workdir: string,
   absPath: string,
+  requestId?: string,
 ): Promise<ChatFileFetchOutcome> {
   const wireOrigin =
     origin.kind === 'device'
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
       : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
   try {
-    return await window.electronAPI.fileBrowser.chatFetch({ origin: wireOrigin, workdir, absPath });
+    return await window.electronAPI.fileBrowser.chatFetch({
+      origin: wireOrigin,
+      workdir,
+      absPath,
+      ...(requestId ? { requestId } : {}),
+    });
   } catch (err) {
     return { ok: false, code: 'FETCH_FAILED', message: String(err) };
   }
@@ -64,11 +76,19 @@ export async function fetchChatFileWithToasts(
   absPath: string,
 ): Promise<string | null> {
   let fetchingToastId: string | null = null;
+  let progressText = i18n.t('chat.remoteFile.fetching');
+  const requestId = crypto.randomUUID();
+  const formatProgress = createChatTransferProgressText();
+  const offProgress = window.electronAPI.fileBrowser.onTransferProgress((e) => {
+    if (e.requestId !== requestId) return;
+    progressText = formatProgress(e);
+    if (fetchingToastId) toast.update(fetchingToastId, progressText);
+  });
   const delayed = setTimeout(() => {
-    fetchingToastId = toast.warning(i18n.t('chat.remoteFile.fetching'), { duration: 120_000 });
+    fetchingToastId = toast.loading(progressText);
   }, 600);
   try {
-    const res = await fetchChatFileToCache(origin, workdir, absPath);
+    const res = await fetchChatFileToCache(origin, workdir, absPath, requestId);
     if (!res.ok) {
       toast.error(chatFileErrorText(res.code));
       return null;
@@ -77,6 +97,7 @@ export async function fetchChatFileWithToasts(
     return res.cachePath;
   } finally {
     clearTimeout(delayed);
+    offProgress();
     if (fetchingToastId) toast.dismiss(fetchingToastId);
   }
 }
@@ -104,21 +125,45 @@ function chatDownloadErrorText(code: ChatDownloadFailureCode): string {
   return chatFileErrorText(code);
 }
 
-function chatDownloadProgressText(e: {
+type ChatTransferProgress = {
   received: number;
   total: number;
   phase?: 'pack' | 'upload' | 'download' | 'extract';
-}): string {
-  if (e.phase === 'pack') {
-    return i18n.t('chat.remoteFile.downloadPacking', { size: formatBytes(e.received) });
-  }
-  if (e.phase === 'extract') return i18n.t('chat.remoteFile.downloadExtracting');
-  return e.total > 0
-    ? i18n.t('chat.remoteFile.downloadProgress', {
-        received: formatBytes(Math.min(e.received, e.total)),
-        total: formatBytes(e.total),
-      })
-    : i18n.t('chat.remoteFile.downloadProgressUnknown', { received: formatBytes(e.received) });
+};
+
+/** Each transfer samples its own byte deltas; phase changes/fallback reset the speed. */
+function createChatTransferProgressText(): (e: ChatTransferProgress) => string {
+  let sample: { time: number; bytes: number; phase: string; speed: number | null } | undefined;
+  return (e) => {
+    const phase = e.phase ?? 'download';
+    const now = performance.now();
+    const received = Math.max(0, e.received);
+    if (!sample || sample.phase !== phase || received < sample.bytes) {
+      sample = { time: now, bytes: received, phase, speed: null };
+    } else if (now - sample.time >= 800) {
+      const speed = ((received - sample.bytes) * 1000) / (now - sample.time);
+      sample = { time: now, bytes: received, phase, speed };
+    }
+    if (phase === 'pack') {
+      return i18n.t('chat.remoteFile.downloadPacking', { size: formatBytes(received) });
+    }
+    if (phase === 'extract') return i18n.t('chat.remoteFile.downloadExtracting');
+    const values = {
+      percent: e.total > 0 ? Math.min(100, Math.floor((received / e.total) * 100)) : undefined,
+      received: formatBytes(received),
+      speed: sample.speed === null ? '—' : `${formatBytes(Math.round(sample.speed))}/s`,
+    };
+    if (phase === 'upload') {
+      return i18n.t(
+        e.total > 0 ? 'chat.remoteFile.uploadProgress' : 'chat.remoteFile.uploadProgressUnknown',
+        values,
+      );
+    }
+    return i18n.t(
+      e.total > 0 ? 'chat.remoteFile.downloadProgress' : 'chat.remoteFile.downloadProgressUnknown',
+      values,
+    );
+  };
 }
 
 /**
@@ -136,9 +181,10 @@ export async function downloadRemoteChatEntry(
     progressToastId = toast.loading(progressText);
   }, 600);
   const requestId = crypto.randomUUID();
+  const formatProgress = createChatTransferProgressText();
   const offProgress = window.electronAPI.fileBrowser.onTransferProgress((e) => {
     if (e.requestId !== requestId) return;
-    progressText = chatDownloadProgressText(e);
+    progressText = formatProgress(e);
     if (progressToastId) toast.update(progressToastId, progressText);
   });
   const wireOrigin =
@@ -148,7 +194,11 @@ export async function downloadRemoteChatEntry(
   try {
     const res = await window.electronAPI.fileBrowser
       .chatDownload({ origin: wireOrigin, workdir, absPath, requestId })
-      .catch((err: unknown) => ({ ok: false as const, code: 'FETCH_FAILED' as const, message: String(err) }));
+      .catch((err: unknown) => ({
+        ok: false as const,
+        code: 'FETCH_FAILED' as const,
+        message: String(err),
+      }));
     if (!res.ok) {
       toast.error(chatDownloadErrorText(res.code));
       return;
@@ -241,19 +291,22 @@ function notifyVerdictChange(key: string): void {
 function scheduleStaleSweep(delayMs: number): void {
   // 已有定时器就复用:它一定排在同一或更早的时刻,醒来后会把剩下的重新排期。
   if (staleTimer !== null) return;
-  staleTimer = setTimeout(() => {
-    staleTimer = null;
-    const now = Date.now();
-    let earliest = Number.POSITIVE_INFINITY;
-    const expired: string[] = [];
-    for (const [key, until] of unknownUntil) {
-      if (until <= now) expired.push(key);
-      else if (until < earliest) earliest = until;
-    }
-    for (const key of expired) unknownUntil.delete(key);
-    if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
-    for (const key of expired) notifyVerdictChange(key);
-  }, Math.max(1, delayMs));
+  staleTimer = setTimeout(
+    () => {
+      staleTimer = null;
+      const now = Date.now();
+      let earliest = Number.POSITIVE_INFINITY;
+      const expired: string[] = [];
+      for (const [key, until] of unknownUntil) {
+        if (until <= now) expired.push(key);
+        else if (until < earliest) earliest = until;
+      }
+      for (const key of expired) unknownUntil.delete(key);
+      if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
+      for (const key of expired) notifyVerdictChange(key);
+    },
+    Math.max(1, delayMs),
+  );
 }
 
 function verdictKey(
