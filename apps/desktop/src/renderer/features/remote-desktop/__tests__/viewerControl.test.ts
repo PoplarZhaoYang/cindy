@@ -501,6 +501,9 @@ it('passes actual logical geometry to rendering and reacquires control after fit
   });
   expect(snapshot.controlling).toBe(true);
   expect(f.control).toHaveBeenLastCalledWith(true);
+  // The list keeps the size the user asked for as current, not the host's logical size.
+  const current = (await controller.resolutionModes()).filter((mode) => mode.current);
+  expect(current).toMatchObject([{ width: 1920, height: 1420 }]);
 });
 
 const sent = (type: string) =>

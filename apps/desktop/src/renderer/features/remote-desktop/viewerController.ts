@@ -137,6 +137,9 @@ export class DesktopViewerController {
   >();
   /** The computer's own mode at the start of a lease; choosing it again forgets the memory. */
   private hostMode: { lease: string; modeId?: string } | null = null;
+  /** The size last asked of a fitted display. A HiDPI host may report a smaller
+   * logical size; the list still shows the entry the user chose as current. */
+  private fittedRequest: { lease: string; size: Size } | null = null;
   /** The remembered display choice is reapplied once per lease. */
   private rememberedLease: string | null = null;
   /** A remembered choice that failed is not retried in this window, so it cannot loop reconnects. */
@@ -730,7 +733,10 @@ export class DesktopViewerController {
     const lease = this.session.lease;
     if (!lease) return [];
     if (this.state.fittedDisplay)
-      return fittedDisplayModes(this.state.fittedDisplay, lease.display);
+      return fittedDisplayModes(
+        this.state.fittedDisplay,
+        this.fittedRequest?.lease === lease.lease ? this.fittedRequest.size : lease.display,
+      );
     const modes = await this.displayModes();
     // CoreGraphics modes keep their own orientation when Electron's display
     // geometry is rotated. Compare modes in the enumeration's coordinate space.
@@ -817,6 +823,7 @@ export class DesktopViewerController {
             ? { kind: 'mode', modeId, width, height }
             : { kind: 'fit', width: size.width, height: size.height },
       );
+      this.fittedRequest = modeId || restore ? null : { lease: lease.lease, size: { ...size } };
       this.publish({
         // Keep the physical source as the reconnect target; the temporary
         // display is only the current capture/input surface.
