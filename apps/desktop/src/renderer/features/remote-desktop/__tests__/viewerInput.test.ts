@@ -298,6 +298,18 @@ it.each([
     remote: ['+ArrowUp', '+MetaLeft', '-MetaLeft', '-ArrowUp'],
   },
   {
+    name: 'macOS auto-repeat of a key held before Command keeps it held',
+    macKeyboard: true,
+    steps: ['+ArrowUp', '+MetaLeft', '+ArrowUp', '-MetaLeft', '-ArrowUp'],
+    remote: ['+ArrowUp', '+MetaLeft', '+ArrowUp', '-MetaLeft', '-ArrowUp'],
+  },
+  {
+    name: 'macOS auto-repeat under Command still releases the key once',
+    macKeyboard: true,
+    steps: ['+MetaLeft', '+KeyC', '+KeyC', '-MetaLeft', '-KeyC'],
+    remote: ['+MetaLeft', '+KeyC', '+KeyC', '-KeyC', '-MetaLeft'],
+  },
+  {
     name: 'macOS delivered keyup is not released twice',
     macKeyboard: true,
     steps: ['+MetaLeft', '+KeyC', '-KeyC', '-MetaLeft'],
@@ -325,6 +337,7 @@ it.each([
   const held = new Set<string>();
   for (const step of steps) {
     const code = step.slice(1);
+    const repeat = step[0] === '+' && held.has(code);
     if (step[0] === '+') held.add(code);
     else held.delete(code);
     input.dispatchEvent(
@@ -332,6 +345,7 @@ it.each([
         code,
         metaKey: held.has('MetaLeft'),
         shiftKey: held.has('ShiftLeft'),
+        repeat,
         bubbles: true,
         cancelable: true,
       }),
