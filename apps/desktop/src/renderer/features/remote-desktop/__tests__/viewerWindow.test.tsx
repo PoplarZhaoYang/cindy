@@ -385,9 +385,7 @@ it('marks an active privacy screen in the toolbar and for screen readers without
   const announcement = screen.getByText(i18n.t('remoteDesktop.privacyActive'));
   expect(announcement.getAttribute('role')).toBe('status');
   expect(announcement.classList.contains('sr-only')).toBe(true);
-  expect(
-    screen.getByRole('button', { name: '安全' }).querySelector('.remote-viewer-active-dot'),
-  ).not.toBeNull();
+  expect(document.querySelector('.remote-viewer-panel-trigger span')).toBeNull();
 });
 
 it('updates translated controls without ending or recreating the viewer connection', async () => {
