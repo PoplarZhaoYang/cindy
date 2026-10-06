@@ -114,6 +114,8 @@ must match. For blurred static scenes, reuse the moving-scene message fade inste
 of repainting a sharp wallpaper behind the composer. Persist only explicit overrides;
 Reset removes the blur override. Reuse the settings Slider with a localized accessible
 label and hint, disable it for None, and explain the additional GPU cost for video.
+Dragging previews blur locally; only a committed pointer/keyboard value is saved and
+broadcast. Cancelled gestures or leaving settings discard the preview.
 Existing preferences without an explicit visibility override keep the previous Light/Dark veil
 mapping and display its equivalent visibility. The unchanged soft default is 37% visible in
 Light and 27% in Dark. Adjusting the slider saves literal visibility, shared across themes;

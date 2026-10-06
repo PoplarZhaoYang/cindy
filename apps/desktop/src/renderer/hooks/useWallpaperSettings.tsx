@@ -42,6 +42,7 @@ interface WallpaperSettingsContextValue extends WallpaperSettings {
   setWallpaper: (id: WallpaperId) => void;
   setVisibility: (value: number) => void;
   setBlur: (value: number) => void;
+  previewBlur: (value: number | null) => void;
   setMotion: (value: WallpaperMotion) => void;
   resetWallpaper: () => void;
 }
@@ -74,6 +75,7 @@ function pickWallpaperSettings(settings: AppearanceSettings): WallpaperSettings 
 
 export function WallpaperSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<WallpaperSettings>(getInitialWallpaperSettings);
+  const [blurPreview, setBlurPreview] = useState<number | null>(null);
   const [failedUrl, setFailedUrl] = useState('');
   const onPlaybackFailure = useCallback(
     () => setFailedUrl(settings.customWallpaperUrl ?? ''),
@@ -102,7 +104,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       // One cover-fitted canvas; theme-derived veil keeps messages readable.
       const veil = 100 - visibility * 100;
       root.style.setProperty('--app-wallpaper-veil', `${veil}%`);
-      const blur = settings.wallpaperBlur ?? 0;
+      const blur = blurPreview ?? settings.wallpaperBlur ?? 0;
       if (blur > 0 && visibility > 0) {
         root.dataset.wallpaperBlur = 'true';
         root.style.setProperty('--app-wallpaper-blur', `${blur}px`);
@@ -114,7 +116,7 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       for (const name of ['--app-wallpaper-image', '--app-wallpaper-veil', '--app-wallpaper-blur'])
         root.style.removeProperty(name);
     };
-  }, [settings, visibility]);
+  }, [settings, visibility, blurPreview]);
   const settingsRef = useRef(settings);
   const confirmedRef = useRef(settings);
   const pendingRef = useRef<Array<{ id: number; patch: Partial<WallpaperSettings> }>>([]);
@@ -201,29 +203,44 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
     [patch],
   );
   const setBlur = useCallback(
-    (value: number) => patch({ wallpaperBlur: clampAppearanceWallpaperBlur(value) }),
+    (value: number) => {
+      setBlurPreview(null);
+      patch({ wallpaperBlur: clampAppearanceWallpaperBlur(value) });
+    },
     [patch],
   );
-  const resetWallpaper = useCallback(
-    () =>
-      patch({
-        wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
-        wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
-        wallpaperVisibility: null,
-        wallpaperBlur: null,
-        wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
-      }),
-    [patch],
-  );
+  const previewBlur = useCallback((value: number | null) => {
+    const blur = value === null ? null : clampAppearanceWallpaperBlur(value);
+    // Radix keyboard input commits before its change callback. Do not recreate
+    // a preview for the value already queued for saving (or the unchanged value).
+    setBlurPreview(
+      settingsRef.current.wallpaperId === 'none' ||
+        blur === (settingsRef.current.wallpaperBlur ?? 0)
+        ? null
+        : blur,
+    );
+  }, []);
+  const resetWallpaper = useCallback(() => {
+    setBlurPreview(null);
+    patch({
+      wallpaperId: DEFAULT_APPEARANCE_SETTINGS.wallpaperId,
+      wallpaperOverlay: DEFAULT_APPEARANCE_SETTINGS.wallpaperOverlay,
+      wallpaperVisibility: null,
+      wallpaperBlur: null,
+      wallpaperMotion: DEFAULT_APPEARANCE_SETTINGS.wallpaperMotion,
+    });
+  }, [patch]);
 
   const value = useMemo<WallpaperSettingsContextValue>(
     () => ({
       ...settings,
+      wallpaperBlur: blurPreview ?? settings.wallpaperBlur,
       visibility,
       playbackFailed: !!failedUrl && failedUrl === settings.customWallpaperUrl,
       setWallpaper,
       setVisibility,
       setBlur,
+      previewBlur,
       setMotion,
       resetWallpaper,
     }),
@@ -232,6 +249,8 @@ export function WallpaperSettingsProvider({ children }: { children: ReactNode })
       setMotion,
       setVisibility,
       setBlur,
+      previewBlur,
+      blurPreview,
       setWallpaper,
       settings,
       failedUrl,

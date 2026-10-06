@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { RotateCcw, ImagePlus, Film } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { extractIpcError } from '@/utils/ipcError';
 
 import { Button } from '@/components/ui/button';
@@ -39,9 +39,22 @@ export function WallpaperSection() {
     setWallpaper,
     setVisibility,
     setBlur,
+    previewBlur,
     setMotion,
     resetWallpaper,
   } = useWallpaperSettings();
+  // The shared slider restores its starting value during cancellation. Clear
+  // that temporary preview after its handler, returning to the latest saved value.
+  const cancelBlurPreview = useCallback(() => {
+    queueMicrotask(() => previewBlur(null));
+  }, [previewBlur]);
+  useEffect(() => {
+    window.addEventListener('blur', cancelBlurPreview);
+    return () => {
+      window.removeEventListener('blur', cancelBlurPreview);
+      previewBlur(null);
+    };
+  }, [cancelBlurPreview, previewBlur]);
   const customVideo = isCustomWallpaperVideo(customWallpaperUrl);
   const chooseWallpaper = async () => {
     setBusy(true);
@@ -277,8 +290,13 @@ export function WallpaperSection() {
             value={[wallpaperBlur ?? 0]}
             disabled={wallpaperId === 'none'}
             onValueChange={([value]) => {
+              if (typeof value === 'number') previewBlur(value);
+            }}
+            onValueCommit={([value]) => {
               if (typeof value === 'number') setBlur(value);
             }}
+            onPointerCancel={cancelBlurPreview}
+            onLostPointerCapture={cancelBlurPreview}
             aria-label={t('settings.appearance.wallpaper.blurLabel')}
             aria-describedby="wallpaper-blur-hint"
           />

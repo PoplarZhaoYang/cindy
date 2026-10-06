@@ -47,6 +47,7 @@ vi.mock('@/hooks/useWallpaperSettings', () => ({
     setWallpaper: vi.fn(),
     visibility: 0.37,
     setVisibility: vi.fn(),
+    previewBlur: vi.fn(),
     setMotion: vi.fn(),
     resetWallpaper: vi.fn(),
   }),
@@ -78,12 +79,15 @@ vi.mock('@/components/ui/slider', () => ({
   Slider: ({
     value,
     onValueChange: _onValueChange,
+    onValueCommit: _onValueCommit,
     ...props
   }: React.InputHTMLAttributes<HTMLInputElement> & {
     value?: number[];
     onValueChange?: (value: number[]) => void;
+    onValueCommit?: (value: number[]) => void;
   }) => {
     void _onValueChange;
+    void _onValueCommit;
     return <input type="range" value={value?.[0]} readOnly {...props} />;
   },
 }));
