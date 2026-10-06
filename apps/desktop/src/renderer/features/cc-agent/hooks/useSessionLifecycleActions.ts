@@ -48,6 +48,31 @@ import type { Session, SessionStatus } from '@/lib/ccAgent.types';
 
 const log = createLogger('useSessionLifecycleActions');
 
+/**
+ * 远程任务的状态写按会话串行发出(对齐本机 beginStatusTransitionWhenReady、手机
+ * sessionMetaWriteQueue):叠加层当帧切换,用户可在「全部」筛选里归档后立刻恢复;两次
+ * patch-meta 可能走不同链路(直连 / 中继)逆序到达被控端,较早的意图会最后落库。
+ * 前一笔结算(成功或失败)后才发下一笔,被控端按用户操作顺序落库。
+ */
+const remoteStatusWrites = new Map<string, Promise<Session>>();
+
+function setStatusInOrder(
+  sessionId: string,
+  status: SessionStatus,
+  target: Awaited<ReturnType<typeof sessionService.resolveStatusWriteTarget>>,
+): Promise<Session> {
+  const write = () => sessionService.setStatus(sessionId, status, target);
+  if (target.kind !== 'device-link') return write();
+  const previous = remoteStatusWrites.get(sessionId);
+  const next = previous ? previous.then(write, write) : write();
+  remoteStatusWrites.set(sessionId, next);
+  const release = () => {
+    if (remoteStatusWrites.get(sessionId) === next) remoteStatusWrites.delete(sessionId);
+  };
+  next.then(release, release);
+  return next;
+}
+
 export interface RunSessionActionOptions {
   /** 当前活跃会话 id —— 决定 archive / delete 后是否需要跳走。 */
   activeSessionId: string | null | undefined;
@@ -194,7 +219,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
         // handler 内部一并 unpin —— 归档列表里不该再保留 pin 标记。
-        persisted = await sessionService.setStatus(sessionId, targetStatus, statusWriteTarget);
+        persisted = await setStatusInOrder(sessionId, targetStatus, statusWriteTarget);
         statusWriteFinishedAt = performance.now();
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
@@ -296,7 +321,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         ? remoteProjectsStore.beginPendingStatus(statusWriteTarget.deviceId, sessionId, 'active')
         : null;
       try {
-        const persisted = await sessionService.setStatus(sessionId, 'active', statusWriteTarget);
+        const persisted = await setStatusInOrder(sessionId, 'active', statusWriteTarget);
         if (statusTransition) {
           sessionsStore.completeStatusTransition(statusTransition, persisted);
         }

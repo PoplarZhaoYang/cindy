@@ -352,6 +352,44 @@ describe('useSessionLifecycleActions archive optimistic ordering', () => {
     );
   });
 
+  it('sends an unarchive only after the in-flight remote archive of the same task settles', async () => {
+    const target = { kind: 'device-link', deviceId: 'device-1' };
+    mocks.resolveStatusWriteTarget.mockResolvedValue(target);
+    let releaseArchive!: () => void;
+    mocks.setStatus.mockImplementationOnce(
+      (id: string, status: string) =>
+        new Promise((resolve) => {
+          releaseArchive = () => resolve({ id, status, title: id });
+        }),
+    );
+    const { result } = renderHook(() => useSessionLifecycleActions({ includeArchived: 'all' }));
+
+    let archiving!: Promise<void>;
+    let unarchiving!: Promise<void>;
+    await act(async () => {
+      archiving = result.current.runSessionAction('remote-session', 'archive', {
+        activeSessionId: null,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      unarchiving = result.current.unarchiveSession('remote-session');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // 两次叠加层都已当帧切换,但恢复的写库要等归档那笔结算,被控端按操作顺序落库。
+    expect(mocks.beginPendingStatus).toHaveBeenCalledWith('device-1', 'remote-session', 'active');
+    expect(mocks.setStatus.mock.calls.map((call) => call[1])).toEqual(['archived']);
+
+    await act(async () => {
+      releaseArchive();
+      await archiving;
+      await unarchiving;
+    });
+    expect(mocks.setStatus.mock.calls.map((call) => call[1])).toEqual(['archived', 'active']);
+  });
+
   it('rolls the device-link overlay back and reports when the remote write fails', async () => {
     mocks.resolveStatusWriteTarget.mockResolvedValueOnce({
       kind: 'device-link',
