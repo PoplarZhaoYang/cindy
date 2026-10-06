@@ -834,6 +834,8 @@ export interface MobileMakerTransport {
     resume(sessionId: string): Promise<InputProjection>;
     retryLastError(sessionId: string): Promise<InputProjection>;
     clearError(sessionId: string): Promise<InputProjection>;
+    /** 取消账号限额重置后的自动继续;老被控端没有该通道时会被拒(调用方只在投影带等待时显示入口)。 */
+    cancelUsageLimitWait(sessionId: string): Promise<InputProjection>;
     remove(sessionId: string, clientId: string): Promise<InputProjection>;
     updateText(
       sessionId: string,
@@ -1376,6 +1378,8 @@ export function createMobileMakerTransport({
       retryLastError: (sessionId) =>
         call("maker:input:retry-last-error", [sessionId]),
       clearError: (sessionId) => call("maker:input:clear-error", [sessionId]),
+      cancelUsageLimitWait: (sessionId) =>
+        call("maker:input:cancel-usage-limit-wait", [sessionId]),
       remove: (sessionId, clientId) =>
         call("maker:input:remove", [sessionId, clientId]),
       updateText: (

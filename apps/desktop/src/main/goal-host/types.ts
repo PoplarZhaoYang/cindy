@@ -227,12 +227,12 @@ export interface GoalControllerDeps {
    */
   persistGoalCompletion?: (sessionId: string, summary: GoalCompletionSummary) => Promise<void>;
   /**
-   * 读某 agent 当前账号用量是否受限 + 何时重置(主动检测)。注入端读对应配额快照:
-   * codex → readCodexAccountUsageSnapshot(rateLimitReachedType / resetsAt);
-   * claude → readClaudeAccountUsageSnapshot(spend>=maxBudget / budgetResetAt)。
+   * 读该会话所用账号当前是否受限 + 何时重置(主动检测)。注入端按会话 provider 所属的订阅
+   * 家族读对应快照(ChatGPT / Claude / SuperGrok,见 usage/accountUsageLimit.ts);非订阅的
+   * Claude Code 会话退回 Cindy 网关预算快照。
    * 返回 null = 拿不到快照(按"未受限"处理)。
    */
-  getAccountLimit?: (agentKind: AgentKind) => Promise<AccountLimitInfo | null>;
+  getAccountLimit?: (agentKind: AgentKind, sessionId: string) => Promise<AccountLimitInfo | null>;
   /**
    * 持久化一条 goal 提示记录(注入 createMessage,role:'assistant' + agentMeta.goalNotice)。
    * 目前用于 usageLimited 到点自动续跑时落一条"用量已恢复,继续目标"。

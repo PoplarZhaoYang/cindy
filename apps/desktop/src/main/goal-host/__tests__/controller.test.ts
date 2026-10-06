@@ -4076,6 +4076,37 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1);
   });
 
+  it('reads the account limit of the goal session so the subscription provider is respected', async () => {
+    const getAccountLimit = vi.fn(async () => ({ limited: true, resetAtMs: 3_601_000 }));
+    const local = makeController({ getAccountLimit });
+    try {
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', message: 'rate limit reached' });
+      await tick();
+      expect(getAccountLimit).toHaveBeenCalledWith(expect.any(String), 's1');
+      expect((await local.storage.get('s1'))?.usageResetAt).toBe(3_601_000);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('uses the reset time written in a Codex error before the account snapshot', async () => {
+    h.setAccountLimit(null);
+    await startGoal(h);
+    const resumeAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    resumeAt.setSeconds(0, 0);
+    const clock = resumeAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const date = resumeAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    h.session.emitErrorTurn({
+      codexErrorInfo: 'usageLimitExceeded',
+      message: `You've hit your usage limit. Try again at ${date} ${clock}.`,
+    });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('usageLimited');
+    expect(st?.usageResetAt).toBe(resumeAt.getTime());
+  });
+
   it('proactive: a would-be-continue turn flips to usageLimited when the account is limited', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
     await startGoal(h);

@@ -1984,7 +1984,7 @@ export class GoalController {
       shouldFire = false;
     } else if (status === 'usageLimited' || shouldFire) {
       const limit = this.deps.getAccountLimit
-        ? await this.deps.getAccountLimit(state.agentKind).catch(() => null)
+        ? await this.deps.getAccountLimit(state.agentKind, sessionId).catch(() => null)
         : null;
       if (!isCurrentTurn()) return;
       if (status === 'usageLimited') {

@@ -904,6 +904,9 @@ import {
 import { clearSealedCodexPlanState, readCodexPlanState } from '../localDb/codexPlanState.js';
 import { buildCompletedPlanGuardNote, buildPlanReconcileNote } from './planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
+import { readTurnUsageResetAt } from '../goal-host/usageLimit.js';
+import { readAccountUsageLimit } from '../usage/accountUsageLimit.js';
+import { UsageLimitAutoResume } from './usageLimitAutoResume.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
 import { persistAndHydrateSessionProvider } from './sessionProviderBootstrap.js';
 import { registerMakerSessionSendHandler } from './sessionSendHandler.js';
@@ -1299,6 +1302,68 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 let settlePendingSessionRuntimeControlHolder: ((sessionId: string, reason: string) => void) | null =
   null;
+
+/**
+ * 目标模式是否在管这个会话(active / usageLimited 时由 goal-host 自己等额度重置)。
+ * setter 注入避免 register↔goal-host 环;bootstrap 接上 GoalController。
+ */
+let goalOwnsUsageLimitProbe: ((sessionId: string) => Promise<boolean>) | null = null;
+export function setGoalOwnsUsageLimitProbe(
+  probe: ((sessionId: string) => Promise<boolean>) | null,
+): void {
+  goalOwnsUsageLimitProbe = probe;
+}
+
+async function isUsageLimitAutoResumeEligible(sessionId: string): Promise<boolean> {
+  if (agentInputCoordinatorHolder?.isExecutionPaused(sessionId)) return false;
+  const row = await getSessionRowSnapshot(sessionId);
+  // Orca worker 的失败已桥给 Lead 重新安排;伙伴有自己的候选链与群聊编排,都不在这里续跑。
+  if (!row || row.orcaRole === 'worker' || row.source === 'bot') return false;
+  return !(await goalOwnsUsageLimitProbe?.(sessionId).catch(() => false));
+}
+
+/** 会话所用账号的重置时刻:错误自带 → 报错原文 → 订阅用量快照(须显示已用满)。 */
+async function resolveSessionUsageResetAt(
+  sessionId: string,
+  signals: InterruptedTurnErrorSignals,
+): Promise<number | null> {
+  const fromError = readTurnUsageResetAt(signals);
+  if (fromError !== null) return fromError;
+  const row = await getSessionRowSnapshot(sessionId);
+  // SSH 远程会话用远端主机自己的登录,本机快照属于另一个账号,不能拿来推算。
+  if (!row || row.remoteHostId) return null;
+  const agentKind = row.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
+  if (!agentKind) return null;
+  const limit = await readAccountUsageLimit(
+    agentKind,
+    getSessionProvider(sessionId) ?? row.providerId ?? null,
+  );
+  return limit?.limited ? limit.resetAtMs : null;
+}
+
+// 普通任务撞上账号限额:照常报错,同时等额度重置后自动继续(仅本次运行内有效)。
+// coordinator 是可变绑定,必须懒读。
+const usageLimitAutoResume = new UsageLimitAutoResume({
+  now: () => Date.now(),
+  random: () => Math.random(),
+  setTimer: (fn, delayMs) => {
+    const timer = setTimeout(fn, delayMs);
+    timer.unref?.();
+    return timer;
+  },
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  isEligible: isUsageLimitAutoResumeEligible,
+  resolveResetAt: resolveSessionUsageResetAt,
+  arm: (sessionId, resumeAt) =>
+    agentInputCoordinatorHolder?.armUsageLimitWait(sessionId, resumeAt) ?? null,
+  isCurrent: (sessionId, token) =>
+    agentInputCoordinatorHolder?.isUsageLimitWaitCurrent(sessionId, token) ?? false,
+  continueSession: async (sessionId, token, info) =>
+    agentInputCoordinatorHolder
+      ? agentInputCoordinatorHolder.continueAfterUsageLimitReset(sessionId, token, info)
+      : 'superseded',
+  log: (message, fields) => log.info(message, fields),
+});
 
 // Schedule 不另建重试状态机：真正的恢复仍由 AgentInputCoordinator +
 // AutoResumeBookkeeping 独占。这里仅把「这一轮 scheduler run 已被普通自动续跑接管」
@@ -4903,6 +4968,9 @@ const sessionEventDependencies: SessionEventDependencies = {
   },
   get log() {
     return log;
+  },
+  get usageLimitAutoResume() {
+    return usageLimitAutoResume;
   },
   get interruptedTurnAutoResumeGuard() {
     return interruptedTurnAutoResumeGuard;
@@ -14013,7 +14081,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // hard upper bound.
       const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
       silentStopAutoResumeGuard.noteUserSend(sessionId);
-      if (!isAutomaticPrompt) interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+      if (!isAutomaticPrompt) {
+        interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+        usageLimitAutoResume.noteUserAction(sessionId);
+      }
     }
     // 落库失败 → 撤掉刚才那条待确认登记:那条消息压根不存在,留着会让后续事件去 patch
     // 一个不存在的 clientId,map 也一直脏着(copilot review)。登记刻意放在写之前(不能
@@ -15537,6 +15608,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 两处必须同判据 —— 否则会出现"按住了却永远不接管"或"没按住却接管"的错配。
     isResumableTurnErrorCandidate: canRecoverTurn,
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
+    onUsageLimitedTurnError: (sessionId, signals) => {
+      usageLimitAutoResume.onTurnError(sessionId, signals);
+    },
     onResumableTurnErrorDiscarded: (
       sessionId: string,
       options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
@@ -15889,6 +15963,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // persistence/vendor await, so a failed manual retry still starts a fresh episode.
         silentStopAutoResumeGuard.noteUserSend(sessionId);
         interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+        usageLimitAutoResume.noteUserAction(sessionId);
       }
       publishUiContinuation(sessionId, clientId);
     },
@@ -17387,6 +17462,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
     return inputCoordinator.clearError(sid);
   });
+
+  ipcMain.handle(
+    MAKER_INVOKE.INPUT_CANCEL_USAGE_LIMIT_WAIT,
+    async (_e, sessionId: unknown, opts?: unknown) => {
+      const sid = requireSessionId(sessionId);
+      await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
+      usageLimitAutoResume.clear(sid);
+      return inputCoordinator.cancelUsageLimitWait(sid);
+    },
+  );
 
   // renderer auth-retry 放弃时（catch / guard fall-through）调回 main 补落持久化。
   // main 侧在 isRemoteAuthRetry 条件下跳过了 onTurnErrorEvent；此处覆盖"重试失败/不能重试"两路。

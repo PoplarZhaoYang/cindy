@@ -18,8 +18,9 @@ import {
 } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
+import { getSessionProvider } from '../maker-host/session-provider-store.js';
+import { readAccountUsageLimit } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
-import { readCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { GoalController } from './controller';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
@@ -89,26 +90,13 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         agentMeta: { goalCompletion: summary },
       });
     },
-    // 主动配额检测:读对应 agent 的账号用量快照(codex 走 account_usage 事件落库的
-    // snapshot、claude 走 LiteLLM 轮询),判 limited + 取 resetAt(unix ms)。
-    getAccountLimit: async (agentKind) => {
-      if (agentKind === 'codex') {
-        const snap = await readCodexAccountUsageSnapshot().catch(() => null);
-        if (!snap) return null;
-        // 取"已用满(>=100%)窗口里最晚的"重置;都没满则取两窗口里最晚的(宁晚勿早)。
-        // 不能一律取 primary —— 当限流来自周 / 次要窗口时 primary 重置更早,会让目标早醒、
-        // 反复撞同一限额,直到次要窗口真正恢复(reviewer #354)。
-        const windows = [snap.primary, snap.secondary].filter(
-          (w): w is NonNullable<typeof w> => !!w && typeof w.resetsAt === 'number',
-        );
-        const exhausted = windows.filter((w) => w.usedPercent >= 100);
-        const pool = exhausted.length > 0 ? exhausted : windows;
-        const resetsAtSec = pool.length > 0 ? Math.max(...pool.map((w) => w.resetsAt as number)) : null;
-        return {
-          limited: snap.rateLimitReachedType != null,
-          resetAtMs: resetsAtSec != null ? resetsAtSec * 1000 : null,
-        };
-      }
+    // 主动配额检测:按会话所用订阅账号读用量快照(ChatGPT 订阅无论跑在 Codex、Claude Code
+    // bridge 还是 Pi 上都读同一份额度),判 limited + 取 resetAt(unix ms)。
+    getAccountLimit: async (agentKind, sessionId) => {
+      const subscription = await readAccountUsageLimit(agentKind, getSessionProvider(sessionId))
+        .catch(() => null);
+      if (subscription !== undefined) return subscription;
+      // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {
         const snap = readClaudeAccountUsageSnapshot();
         if (!snap) return null;

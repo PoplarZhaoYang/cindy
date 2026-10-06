@@ -34,6 +34,40 @@ describe('usage limit recovery detection', () => {
     ).toEqual({ resetAtMs: NOW + 75 * 60_000, isAccountUsageLimit: true });
   });
 
+  it('parses the Codex app-server "try again at" wording in local time', () => {
+    const sameDay = new Date(NOW);
+    sameDay.setHours(23, 30, 0, 0);
+    if (sameDay.getTime() <= NOW) sameDay.setDate(sameDay.getDate() + 1);
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: "You've hit your usage limit. Upgrade to Pro, or try again at 11:30 PM.",
+        },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(sameDay.getTime());
+
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          codexErrorInfo: 'usageLimitExceeded',
+          message: "You've hit your usage limit. Try again at Jan 27, 2026 3:05 PM.",
+        },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(new Date(2026, 0, 27, 15, 5).getTime());
+  });
+
+  it("parses Pi's approximate ChatGPT relative reset", () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        { message: 'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.' },
+        NOW,
+      )?.resetAtMs,
+    ).toBe(NOW + 12 * 60_000);
+  });
+
   it('extracts the organization plan and reset time from the Codex 429 payload', () => {
     expect(
       extractUsageLimitRecoveryHint(

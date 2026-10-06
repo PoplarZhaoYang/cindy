@@ -125,7 +125,23 @@ describe('classifyTurnOverload', () => {
   });
 });
 
+describe('classifyTurnUsageLimit (Codex structured tag)', () => {
+  it('matches codexErrorInfo usageLimitExceeded even without limit wording', () => {
+    expect(classifyTurnUsageLimit({ codexErrorInfo: 'usageLimitExceeded', message: 'Upgrade to Pro' })).toBe(true);
+  });
+});
+
 describe('readTurnUsageResetAt', () => {
+  it('falls back to the reset time written in the error text', () => {
+    const now = Date.parse('2026-01-24T10:00:00.000Z');
+    expect(
+      readTurnUsageResetAt(
+        { message: 'You have hit your ChatGPT usage limit (plus plan). Try again in ~12 min.' },
+        now,
+      ),
+    ).toBe(now + 12 * 60_000);
+  });
+
   it('reads the reset time carried by the error', () => {
     expect(readTurnUsageResetAt({ sdkError: 'rate_limit', usageResetAt: 1_791_202_800_000 })).toBe(1_791_202_800_000);
   });

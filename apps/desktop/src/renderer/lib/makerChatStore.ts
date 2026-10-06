@@ -2573,6 +2573,11 @@ export interface SessionChatState {
    */
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /**
+   * 账号限额等待(main projection 透传):错误照常显示,横幅附「将于 X 自动继续 · 取消」。
+   * 只在 error 仍在时有值;老被控端缺省 = null。
+   */
+  usageLimitWait: { resumeAt: number } | null;
+  /**
    * Main coordinator 中已经离开 pendingQueue、但仍占有 dispatch/turn 边界的
    * Continue clientId。用于让中断横幅在「离队 → running/session patch」窗口
    * 保持熄灭，同时不影响用户取消仍在队列中的 Continue 后恢复横幅。
@@ -2861,6 +2866,7 @@ export type SessionChatLightState = Pick<
   | 'errorPersistId'
   | 'disposedErrorPersistId'
   | 'credentialSwitchWait'
+  | 'usageLimitWait'
   | 'continuationInFlightClientId'
   | 'continuationTurnClientId'
   | 'continuationInFlightProjectionCapability'
@@ -2930,6 +2936,7 @@ function createInitialState(): SessionChatState {
     errorPersistId: null,
     disposedErrorPersistId: null,
     credentialSwitchWait: null,
+    usageLimitWait: null,
     continuationInFlightClientId: null,
     continuationTurnClientId: null,
     continuationInFlightProjectionCapability: 'unknown',
@@ -3011,6 +3018,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorPersistId: null,
   disposedErrorPersistId: null,
   credentialSwitchWait: null,
+  usageLimitWait: null,
   continuationInFlightClientId: null,
   continuationTurnClientId: null,
   continuationInFlightProjectionCapability: 'unknown',
@@ -4825,6 +4833,12 @@ function applyInputProjection(
       errorRetryText: projection.errorRetryText,
       errorPersistId: projection.error ? s.errorPersistId : null,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
+      usageLimitWait:
+        projection.error && projection.usageLimitWait
+          ? s.usageLimitWait?.resumeAt === projection.usageLimitWait.resumeAt
+            ? s.usageLimitWait
+            : { resumeAt: projection.usageLimitWait.resumeAt }
+          : null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
       continuationTurnClientId: projectedContinuationTurnClientId,
       continuationInFlightProjectionCapability,
@@ -9608,6 +9622,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorPersistId: state.errorPersistId,
     disposedErrorPersistId: state.disposedErrorPersistId,
     credentialSwitchWait: state.credentialSwitchWait,
+    usageLimitWait: state.usageLimitWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
     continuationTurnClientId: state.continuationTurnClientId,
     continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
@@ -9658,6 +9673,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorPersistId === b.errorPersistId &&
     a.disposedErrorPersistId === b.disposedErrorPersistId &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
+    a.usageLimitWait === b.usageLimitWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
     a.continuationTurnClientId === b.continuationTurnClientId &&
     a.continuationInFlightProjectionCapability === b.continuationInFlightProjectionCapability &&
@@ -15575,6 +15591,18 @@ function disposeLiveErrorPersist(sessionId: string): void {
   });
 }
 
+/** 取消账号限额重置后的自动继续:错误与手动重试保留,只撤等待。 */
+function cancelUsageLimitWait(sessionId: string): void {
+  if (!sessionId) return;
+  const boundaryOpts = getRemoteInputClearBoundaryOpts(sessionId);
+  runInputProjectionOperation(sessionId, (input) =>
+    boundaryOpts
+      ? input.cancelUsageLimitWait(sessionId, boundaryOpts)
+      : input.cancelUsageLimitWait(sessionId),
+  ).catch((err) => log.warn('cancelUsageLimitWait failed:', err));
+  setState(sessionId, (s) => (s.usageLimitWait ? { ...s, usageLimitWait: null } : s));
+}
+
 /**
  * Dismiss the error banner without retrying. Also disposes the bound persist row
  * so the same error does not reappear as a tail banner in this view.
@@ -17480,6 +17508,7 @@ export const makerChatStore = {
   clearSession,
   /** Dismiss the error banner without retrying. */
   clearError,
+  cancelUsageLimitWait,
   /** Bind live error to persist row as already handled (retry/close). */
   disposeLiveErrorPersist,
   /** Retry the typed recovery target owned by main coordinator. */

@@ -829,6 +829,8 @@ export interface SessionRowSnapshot {
   orcaRole?: 'lead' | 'worker' | null;
   /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
   agentKind?: string | null;
+  /** 会话来源(`bot` = 伙伴会话);限额自动继续据此排除伙伴。 */
+  source?: string | null;
   /** Authoritative `/clear` visibility boundary (unix ms). */
   clearedAt?: number | null;
 }
@@ -851,6 +853,7 @@ async function selectSessionRowSnapshot(id: string): Promise<SessionRowSnapshot 
       remoteHostId: sessions.remoteHostId,
       orcaRole: sessions.orcaRole,
       agentKind: sessions.agentKind,
+      source: sessions.source,
     })
     .from(sessions)
     .where(eq(sessions.id, id))
