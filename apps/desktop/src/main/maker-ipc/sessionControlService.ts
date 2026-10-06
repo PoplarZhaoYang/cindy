@@ -118,7 +118,7 @@ export interface SessionControlServiceDeps {
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
   removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
-  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null;
+  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
   createId(): string;
 }
 

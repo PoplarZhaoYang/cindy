@@ -214,7 +214,7 @@ describe('dynamic lizi MCP session context', () => {
       message: 'fix: use the v2 endpoint',
       delivery: 'steer',
     }) as never);
-    expect(steered).toMatchObject({ ok: true, wake_kind: 'steered' });
+    expect(steered).toMatchObject({ ok: true, wake_kind: 'already-active', steered: true });
     expect(steered).not.toHaveProperty('steer_fallback_reason');
     expect(steered).not.toHaveProperty('queued_message_id');
 

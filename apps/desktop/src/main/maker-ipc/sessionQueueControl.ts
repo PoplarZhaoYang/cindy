@@ -41,8 +41,11 @@ export interface SessionQueueControlDeps {
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
   removeQueuedMessage(sessionId: string, clientId: string, expected?: AgentInputQueuedMessage): boolean;
   steerQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
-  /** Moves among waiting rows; returns the final waiting-row index, or null when it is gone. */
-  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null;
+  /**
+   * Moves among waiting rows; returns the final waiting-row index, null when it is gone,
+   * or 'locked' while the user is editing it.
+   */
+  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
 }
 
 export type SessionQueueAuthorization = (
@@ -165,6 +168,13 @@ export function createSessionQueueControlService(deps: SessionQueueControlDeps) 
         params.position,
       );
       if (position === null) return classifyLostRace(params.sessionId, params.queuedMessageId);
+      if (position === 'locked') {
+        return {
+          ok: false,
+          errorCode: 'MESSAGE_CONSUMING',
+          message: `queued message ${params.queuedMessageId} is being edited and cannot be moved now`,
+        };
+      }
       return { ok: true, queuedMessageId: params.queuedMessageId, position };
     },
   };
@@ -197,6 +207,7 @@ export interface QueueReorderCoordinator {
   ): Promise<ControlSteerOutcome>;
   isQueuePaused(sessionId: string): boolean;
   getQueueControlSnapshot(sessionId: string): { pendingQueue: readonly AgentInputQueuedMessage[] };
+  getProjection(sessionId: string): { queueEditLocks: readonly string[] };
   move(sessionId: string, clientId: string, targetIndex: number): unknown;
 }
 
@@ -219,7 +230,7 @@ export function createQueueReorderAdapter(deps: {
   getCoordinator(): QueueReorderCoordinator;
 }): {
   steerStoredControlMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
-  moveStoredControlMessage(sessionId: string, clientId: string, position: number): number | null;
+  moveStoredControlMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
 } {
   const waitingIndex = (sessionId: string, clientId: string): number =>
     deps
@@ -241,7 +252,8 @@ export function createQueueReorderAdapter(deps: {
         { session: live, turnGeneration: live.getTurnGeneration() },
       );
       if (outcome === 'steered') return { kind: 'steered' };
-      if (outcome === 'rejected') return { kind: 'gone' };
+      // rejected = screening discarded the row; any other outcome without the row is a lost race.
+      if (outcome === 'rejected' || waitingIndex(sessionId, clientId) < 0) return { kind: 'gone' };
       if (outcome === 'queued' && coordinator.isQueuePaused(sessionId)) {
         return { kind: 'queued', reason: 'STEER_UNCERTAIN' };
       }
@@ -254,6 +266,8 @@ export function createQueueReorderAdapter(deps: {
       const from = waitingIndex(sessionId, clientId);
       if (from < 0) return null;
       const coordinator = deps.getCoordinator();
+      // Same rule as the queue UI: a row the user is editing keeps its place.
+      if (coordinator.getProjection(sessionId).queueEditLocks.includes(clientId)) return 'locked';
       const waitingCount = coordinator.getQueueControlSnapshot(sessionId).pendingQueue.length;
       const to = Math.min(position, waitingCount - 1);
       // coordinator.move 的 targetIndex 是「插到原队列第 n 条之前」。

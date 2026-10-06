@@ -67,7 +67,7 @@ const DESCRIPTION =
   '向指定 worker 投递消息(派活/追问)。' +
   'worker 正忙时消息自动排队(wake_kind=queued)并回传 queued_message_id;' +
   '在它被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message 查看、修改或撤回。' +
-  '纠错或 worker 正在等的信息可用 delivery=steer 插进其当前 turn(wake_kind=steered);新任务保持默认。' +
+  '纠错或 worker 正在等的信息可用 delivery=steer 插进其当前 turn(返回 steered=true);新任务保持默认。' +
   '没插成时照常直发或排队,排队时附 steer_fallback_reason。' +
   '需要替换 worker 当前任务时改用 interrupt_worker。' +
   '失败码: LEAD_NOT_SUPPORTED / NOT_FOUND / ARCHIVED / DELETED / BUSY / AGENT_NOT_READY。';
@@ -116,7 +116,10 @@ export function registerSendToWorkerTool(
       return okPayload({
         target_session_id,
         agent_kind: result.agentKind,
-        wake_kind: result.wakeKind,
+        // 插话是投递给已在线的 session:wake_kind 沿用 already-active(Lead 提示词据此判定已派发),
+        // 另用 steered 标记它进了当前 turn。
+        wake_kind: result.wakeKind === 'steered' ? 'already-active' : result.wakeKind,
+        ...(result.wakeKind === 'steered' ? { steered: true } : {}),
         target_title: result.targetTitle,
         target_last_user_send_at: result.targetLastUserSendAt,
         ...(result.queuedMessageId ? { queued_message_id: result.queuedMessageId } : {}),

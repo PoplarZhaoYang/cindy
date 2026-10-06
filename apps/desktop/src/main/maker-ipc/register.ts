@@ -15797,9 +15797,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 可见行),理由与踩过的坑记在 helper 的注释里。
     supersedeRetriedUserTurn,
     getLastAssistantTranscriptUuid,
-    // 插话绕过 drain:Orca 排队/直发插话的 accepted 簿记在 provider 接受后结清。
-    onSteerAccepted: (sessionId, item) =>
-      orcaInterAgentDispatcher.settleSteeredOrcaInterAgentAcceptedCallback(sessionId, item.clientId),
+    // 插话并入正在运行的 turn,不开启新 turn:排队时登记的「新 turn 接管」回调不再适用,
+    // 只释放登记(不运行),否则会给已在跑的 worker 另建一份 running/auto-bridge 身份。
+    onSteerAccepted: (_sessionId, item) => {
+      orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
+    },
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);

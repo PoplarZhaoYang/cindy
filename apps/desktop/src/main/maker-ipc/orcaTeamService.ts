@@ -340,7 +340,7 @@ export interface OrcaTeamServiceDeps {
   /** 整条替换一条排队消息(同 clientId 原位替换);steering / 已派发返回 false。 */
   replaceQueuedMessage(sessionId: string, clientId: string, next: AgentInputQueuedMessage, expected?: AgentInputQueuedMessage): boolean;
   steerStoredQueuedMessage(sessionId: string, clientId: string): Promise<QueuedSteerOutcome>;
-  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null;
+  moveQueuedMessage(sessionId: string, clientId: string, position: number): number | null | 'locked';
   mergeQueuedMessages(
     sessionId: string,
     clientIds: readonly string[],

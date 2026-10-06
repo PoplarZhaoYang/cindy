@@ -288,18 +288,23 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    `delivery: 'queue' | 'steer'`，缺省 `queue`，旧调用行为不变。`steer` 只对正在运行的本机
    目标尝试：目标空闲时照常直发（不带原因）；运行时不支持 `sameTurnSteer` 或为 SSH 任务时
    照常排队并回 `STEER_UNSUPPORTED`；输入边界被占用时排队并回 `INPUT_BOUNDARY_BUSY`。
-   插话成功回 `wake_kind='steered'`（`send_to_lead` 为 `steered: true`）。来源、原始正文和
+   插话成功回 `steered: true`；`send_to_worker` 的 `wake_kind` 仍为 Lead 提示词认可的
+   `already-active`（插话是投递给已在线的 session），不必改动 Lead system 段。来源、原始正文和
    `delegated-continuation` 人类授权语义沿用原 Orca 消息格式，不经通用 `steer_session`。
    coordinator（`steerControlInput`）先恢复队列，禁止越过暂停、Stop、交互锁、待确认交互、
    恢复、凭证切换、其它插话和未完成的派发边界；发送方既然选择插话，允许越过更早的排队行。
    同一组守卫在异步筛查之后、provider 投递之前复核一次；插话绝不解除用户的队列暂停。
    session 对象与 turn generation 必须在准备后及 provider 投递前复核。
-   dispatcher 在插话前登记 accepted 回调；provider 接受后由 `onSteerAccepted` 运行原
-   accepted/commit 生命周期（`settleSteeredOrcaInterAgentAcceptedCallback`，幂等），后续
-   副作用失败不能将已投递消息改为可重试失败。回执不确定而 coordinator 已将同一
-   `clientId` 保留在暂停队列时，dispatcher 返回 queued（`STEER_UNCERTAIN`）接管结果，不再
-   enqueue、不解除暂停，回调随该行走普通 drain/discard 结算；bridge 立即结清回报，避免
-   terminal 再补一份。没插成且没有保留行时丢弃本次登记，回到普通直发/排队路径。
+   插话并入对方正在运行的 turn，不开启新 turn：accepted/commit 回调接管的是「新 turn」的
+   running／auto-bridge 身份，插话成功时一律不运行（否则会给已在跑的 Worker 另建一份
+   pending，旧 terminal 收口后它再无 terminal 可结清）。Lead→Worker 插话由该 turn 原有的
+   auto-bridge 回报；Worker→Lead 的回报结清由 `send_to_lead` 自身完成。插话进一个不是
+   Lead 派发的 Worker turn 时不会自动回报，这是有意保持简单的已知边界。
+   回执不确定而 coordinator 已将同一 `clientId` 保留在暂停队列时，dispatcher 返回 queued
+   （`STEER_UNCERTAIN`）接管结果，不再 enqueue、不解除暂停，并按普通排队登记回调（之后若
+   被 drain 就是新 turn）；bridge 立即结清回报，避免 terminal 再补一份。输入筛查拦截
+   （`rejected`）是确定拒绝，直接返回失败，不得改走排队重试；其余未投递且无保留行
+   （`not-attempted`）才回到普通直发/排队路径。
    device-link / 手机控制场景由被控 Desktop 执行同一判断，不在控制端另外发送。
    实现指针：`AgentInputCoordinator.steerControlInput` 与
    `OrcaInterAgentDispatcher.dispatchOrEnqueueOrcaInterAgentMessage`。
@@ -346,7 +351,8 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
    消息，或自己队列里来自其它任务 / 协同成员的机器消息；用户手打、伙伴委派、插件与定时任务
    条目有各自的接受簿记，一律不开放。用户界面同样允许把协同排队行转为插话（编辑仍禁止），
    插话绕过 drain，因此 coordinator 在每次 provider 接受插话后调用 `onSteerAccepted`，由宿主
-   结清该 clientId 的 Orca accepted 回调，防止重复补报。
+   释放该 clientId 排队时登记的 Orca 回调（不运行，理由见 1b）。排序同样遵守编辑锁：
+   用户正在编辑的行不可移动（`MESSAGE_CONSUMING`）。
 
 #### Worker 运行态
 

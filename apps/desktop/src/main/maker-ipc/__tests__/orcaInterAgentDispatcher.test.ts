@@ -138,14 +138,9 @@ describe('sender-chosen steering into an active turn', () => {
     });
     return { ...h, live, steer, lock };
   }
-  it('uses same-turn delivery with Orca identity and settles accepted callbacks once', async () => {
+  it('uses same-turn delivery with Orca identity and never runs turn-start callbacks', async () => {
     const h = setup();
     const order: string[] = [];
-    h.steer.mockImplementation(async (sessionId, item) => {
-      // The coordinator hook settles on provider acceptance; the dispatcher's own settle is idempotent.
-      await h.dispatcher.settleSteeredOrcaInterAgentAcceptedCallback(sessionId, item.clientId);
-      return 'steered';
-    });
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...steerReport,
       onAccepted: () => { order.push('accepted'); }, onAcceptedCommit: () => { order.push('commit'); },
     });
@@ -157,7 +152,11 @@ describe('sender-chosen steering into an active turn', () => {
       autoReviewUserText: { kind: 'delegated-continuation' },
       origin: { kind: 'orca', senderLabel: 'reviewer', senderSessionId: 'worker-session', displayText: 'Completed work' },
     }), { session: h.live, turnGeneration: 7 });
-    expect(order).toEqual(['accepted', 'commit']);
+    // The message joined the running turn; accepted/commit would claim a new turn's identity.
+    expect(order).toEqual([]);
+    const item = h.steer.mock.calls[0]?.[1];
+    if (!item) throw new Error('expected steered item');
+    expect(h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', item)).toBeUndefined();
     expect(h.lock).toHaveBeenCalledOnce();
     expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
     expect(h.live.send).not.toHaveBeenCalled();
@@ -207,8 +206,17 @@ describe('sender-chosen steering into an active turn', () => {
     expect(accepted).toHaveBeenCalledOnce();
     expect(commit).toHaveBeenCalledOnce();
   });
-  it('falls back to the ordinary path after a rejected attempt without a stale callback', async () => {
+  it('fails a screening rejection instead of retrying it through the queue', async () => {
     const h = setup('rejected');
+    const accepted = vi.fn();
+    expect(await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...steerReport, onAccepted: accepted }))
+      .toMatchObject({ ok: false, dispatchOutcome: { code: 'SEND_FAILED' } });
+    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
+    expect(h.live.send).not.toHaveBeenCalled();
+    expect(accepted).not.toHaveBeenCalled();
+  });
+  it('falls back to the ordinary path after an undelivered attempt without a stale callback', async () => {
+    const h = setup('not-attempted');
     const accepted = vi.fn();
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...steerReport, onAccepted: accepted });
     expect(result).toMatchObject({ ok: true, mode: 'queued', steerFallbackReason: 'INPUT_BOUNDARY_BUSY' });
@@ -218,13 +226,6 @@ describe('sender-chosen steering into an active turn', () => {
     if (!queued) throw new Error('expected queued report');
     await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
     expect(accepted).toHaveBeenCalledOnce();
-  });
-  it('preserves accepted delivery when an accepted side effect throws', async () => {
-    const h = setup();
-    expect(await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({ ...steerReport,
-      onAccepted: () => { throw new Error('status persistence failed'); },
-    })).toMatchObject({ ok: true, mode: 'steered' });
-    expect(h.deps.enqueueQueuedMessage).not.toHaveBeenCalled();
   });
   it.each([
     ['unsupported', 'STEER_UNSUPPORTED', 0],

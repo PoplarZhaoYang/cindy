@@ -1242,8 +1242,9 @@ describe('agent-chosen control steering', () => {
       h.setPendingInteraction(true);
       return { action: 'allow' };
     });
+    // Not delivered and nothing retained: safe for ordinary delivery, unlike a screening block.
     expect(await h.coordinator.steerControlInput(sid, { item: makeItem('report', 'r') }, expected(h)))
-      .toBe('rejected');
+      .toBe('not-attempted');
     expect(h.steerToAgent).not.toHaveBeenCalled();
     expect(h.onSteerAccepted).not.toHaveBeenCalled();
   });

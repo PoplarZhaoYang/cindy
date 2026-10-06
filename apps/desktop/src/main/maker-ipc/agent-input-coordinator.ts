@@ -531,7 +531,8 @@ export interface AgentInputCoordinatorDeps {
   ) => void | Promise<void>;
   /**
    * A steer crossed the irreversible provider boundary (direct or promoted queue row).
-   * Steering bypasses drain, so hosts settle per-clientId acceptance bookkeeping here.
+   * The item joined the running turn instead of starting one, so hosts release any
+   * per-clientId turn-start bookkeeping here rather than running it.
    */
   onSteerAccepted?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
@@ -902,10 +903,16 @@ type PersistAcceptedUserMessageResult = 'persisted' | 'stale' | 'failed';
 
 /**
  * steered = provider accepted; queued = the coordinator still owns the row (ACK-uncertain
- * pause, or the queued row stayed in place); not-attempted = the boundary was not open;
- * rejected = not delivered and no row is retained.
+ * pause, or the queued row stayed in place); not-attempted = not delivered and nothing is
+ * retained, so ordinary delivery is still safe; rejected = input screening discarded it.
  */
 export type ControlSteerOutcome = 'steered' | 'queued' | 'not-attempted' | 'rejected';
+
+/** What a steer attempt actually did, beyond the boolean UI contract. */
+interface SteerObservation {
+  providerAccepted: AgentInputQueuedMessage | null;
+  policyBlocked: boolean;
+}
 
 interface SteerOptions {
   removeFromQueue?: boolean;
@@ -2055,17 +2062,19 @@ export class AgentInputCoordinator {
       this.isControlSteerBlocked(sessionId, state, item.clientId, { fromQueue, ownSteer: false })
     ) return 'not-attempted';
 
-    const accepted = await this.steer(sessionId, item, {
+    const observed = await this.steerObserved(sessionId, item, {
       fallbackToTurn: false,
       removeFromQueue: fromQueue,
       controlInput: { fromQueue },
       expectedTurnSession: expectedTurn.session,
       expectedTurnGeneration: expectedTurn.turnGeneration,
     });
-    if (accepted) return 'steered';
+    if (observed.providerAccepted) return 'steered';
+    // Input screening discarded the content: a definitive refusal, never a retry candidate.
+    if (observed.policyBlocked) return 'rejected';
     // In particular, preserve ACK-uncertain items and their protective pause.
     // Do not infer non-delivery from the live turn ending during the request.
-    return this.hasPendingQueueItem(sessionId, item.clientId) ? 'queued' : 'rejected';
+    return this.hasPendingQueueItem(sessionId, item.clientId) ? 'queued' : 'not-attempted';
   }
 
   /** Shared by the pre-check and the pre-provider re-check of agent-chosen steering. */
@@ -2096,12 +2105,20 @@ export class AgentInputCoordinator {
     item: AgentInputQueuedMessage,
     opts?: SteerOptions,
   ): Promise<boolean> {
-    let providerAccepted: AgentInputQueuedMessage | null = null;
-    const result = await this.steerWithinBoundary(sessionId, item, opts, (accepted) => {
-      providerAccepted = accepted;
-    });
-    if (providerAccepted) await this.notifySteerAccepted(sessionId, providerAccepted);
-    return result;
+    return (await this.steerObserved(sessionId, item, opts)).accepted;
+  }
+
+  private async steerObserved(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    opts: SteerOptions | undefined,
+  ): Promise<SteerObservation & { accepted: boolean }> {
+    const observation: SteerObservation = { providerAccepted: null, policyBlocked: false };
+    const accepted = await this.steerWithinBoundary(sessionId, item, opts, observation);
+    if (observation.providerAccepted) {
+      await this.notifySteerAccepted(sessionId, observation.providerAccepted);
+    }
+    return { ...observation, accepted };
   }
 
   private async notifySteerAccepted(
@@ -2124,7 +2141,7 @@ export class AgentInputCoordinator {
     sessionId: string,
     item: AgentInputQueuedMessage,
     opts: SteerOptions | undefined,
-    markProviderAccepted: (item: AgentInputQueuedMessage) => void,
+    observation: SteerObservation,
   ): Promise<boolean> {
     const matchesExpectedTurn = () =>
       (opts?.expectedTurnSession === undefined ||
@@ -2302,6 +2319,7 @@ export class AgentInputCoordinator {
           cur.queueEditLocks = cur.queueEditLocks.filter((id) => id !== item.clientId);
           if (cur.pendingQueue.length === 0) cur.queuePaused = false;
         }
+        observation.policyBlocked = true;
         this.deps.onUserMessageBlocked?.(sessionId, item, verdict);
         this.notifyRejectedUserTurn(sessionId, item);
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
@@ -2514,7 +2532,7 @@ export class AgentInputCoordinator {
       return finishSteerRequest(false);
     }
     // Every path below follows a resolved provider steer, including clear/Stop races.
-    markProviderAccepted(item);
+    observation.providerAccepted = item;
     const accepted = this.getState(sessionId);
     const ownsCurrentSteerMarker = this.isCurrentSteerRequest(
       accepted,

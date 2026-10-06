@@ -246,7 +246,6 @@ export interface OrcaInterAgentDispatcher {
     result: AgentInputSendResult,
   ) => Promise<void>;
   discardQueuedOrcaInterAgentAcceptedCallback: (clientId: string) => void;
-  settleSteeredOrcaInterAgentAcceptedCallback: (sessionId: string, clientId: string) => Promise<void>;
 }
 
 export function createOrcaInterAgentDispatcher<TSessionMeta>(
@@ -323,30 +322,6 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
 
   const discardQueuedOrcaInterAgentAcceptedCallback = (clientId: string): void => {
     queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-  };
-
-  /** 插话绕过 drain：provider 接受后在这里一次结清 accepted + commit。 */
-  const settleSteeredOrcaInterAgentAcceptedCallback = async (
-    sessionId: string,
-    clientId: string,
-  ): Promise<void> => {
-    const callback = queuedOrcaInterAgentAcceptedCallbacks.get(clientId);
-    if (!callback) return;
-    queuedOrcaInterAgentAcceptedCallbacks.delete(clientId);
-    try {
-      if (!callback.didRun) {
-        callback.didRun = true;
-        await runAcceptedCallback(callback.accepted, sessionId, clientId, log);
-      }
-      await runAcceptedCallback(callback.commit, sessionId, clientId, log);
-    } catch (err) {
-      // Steering is irreversible once accepted; a cancel request can no longer apply.
-      log.warn('accepted callback failed after steering', {
-        sessionId,
-        clientId,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
   };
 
   const dispatchOrEnqueueOrcaInterAgentMessage = async (
@@ -493,28 +468,32 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             !liveTurn.isTurnRunning?.() ||
             liveTurn.getTurnGeneration?.() !== expectedTurn.turnGeneration
           ) return null;
-          // Register before steering: the coordinator settles it on provider acceptance,
-          // and an ACK-uncertain row it keeps must settle through the normal queue path.
-          if (params.onAccepted) registerQueuedOrcaInterAgentAcceptedCallback(
-            clientId, params.onAccepted, params.onAcceptedRollback, params.onAcceptedCommit,
-          );
           const outcome = await deps.steerControlInput!(params.targetSessionId, item, expectedTurn);
           if (outcome === 'steered') {
-            // Idempotent with the coordinator hook; never turns the receipt into a failure.
-            await settleSteeredOrcaInterAgentAcceptedCallback(params.targetSessionId, clientId);
+            // The message joined the running turn. Accepted/commit callbacks claim a new
+            // turn's running/auto-bridge identity, so they deliberately never run here.
             return { ok: true, mode: 'steered', clientId,
               dispatchOutcome: { kind: 'session-dispatch', source: params.meta.source, dispatched: true },
               ...dispatchReceipt };
           }
+          if (outcome === 'rejected') {
+            // Input screening discarded it. Re-queueing would retry refused content.
+            return failureResult({
+              ...createHostSendFailure('SEND_FAILED', 'Orca message was blocked by input screening'),
+              source: params.meta.source, context: params.meta.context,
+            });
+          }
           if (outcome === 'queued') {
-            // The coordinator already owns this exact clientId. Enqueuing again, or
-            // returning failure and inviting auto-bridge, would duplicate the message.
+            // The coordinator already owns this exact clientId in a paused queue. Enqueuing
+            // again would duplicate it; its later drain starts a turn, so register there.
+            if (params.onAccepted) registerQueuedOrcaInterAgentAcceptedCallback(
+              clientId, params.onAccepted, params.onAcceptedRollback, params.onAcceptedCommit,
+            );
             return { ok: true, mode: 'queued', clientId,
               dispatchOutcome: makeQueuedDispatchOutcome(params.meta.source),
               steerFallbackReason: 'STEER_UNCERTAIN', ...dispatchReceipt };
           }
-          // Not delivered and not retained: fall back to the ordinary send/queue path.
-          discardQueuedOrcaInterAgentAcceptedCallback(clientId);
+          // Not delivered and nothing retained: the ordinary send/queue path is still safe.
           return null;
         };
         try {
@@ -523,7 +502,6 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
             : await trySteer();
           if (steered) return steered;
         } catch (err) {
-          discardQueuedOrcaInterAgentAcceptedCallback(clientId);
           return failureResult({
             ...createHostSendFailure('SEND_FAILED', err instanceof Error ? err.message : String(err)),
             source: params.meta.source, context: params.meta.context,
@@ -754,7 +732,6 @@ export function createOrcaInterAgentDispatcher<TSessionMeta>(
     rollbackQueuedOrcaInterAgentAcceptedCallback,
     settleQueuedOrcaInterAgentAcceptedCallback,
     discardQueuedOrcaInterAgentAcceptedCallback,
-    settleSteeredOrcaInterAgentAcceptedCallback,
   };
 }
 

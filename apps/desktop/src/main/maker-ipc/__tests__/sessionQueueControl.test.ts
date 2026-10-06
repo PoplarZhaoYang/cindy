@@ -152,7 +152,7 @@ describe('session queue control service', () => {
   it('steers and moves through the same locate/authorize/race boundary', async () => {
     const item = queued();
     const steerQueuedMessage = vi.fn(async () => ({ kind: 'queued' as const, reason: 'NO_ACTIVE_TURN' as const }));
-    const moveQueuedMessage = vi.fn((): number | null => 2);
+    const moveQueuedMessage = vi.fn((): number | null | 'locked' => 2);
     const getSnapshot = vi.fn(async () => ({ pendingQueue: [item], consumingClientIds: [] as string[] }));
     const service = createSessionQueueControlService({
       getSnapshot,
@@ -173,6 +173,9 @@ describe('session queue control service', () => {
       .mockResolvedValueOnce({ pendingQueue: [], consumingClientIds: [item.clientId] });
     await expect(service.move({ ...params, position: 0 }))
       .resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+    moveQueuedMessage.mockReturnValueOnce('locked');
+    await expect(service.move({ ...params, position: 0 }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING', message: expect.stringContaining('being edited') });
 
     await expect(service.steer({ ...params, authorize: () => ({ ok: false, message: 'no' }) }))
       .resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
@@ -184,10 +187,12 @@ describe('queue reorder adapter', () => {
   function setup(live: { running?: boolean; supported?: boolean; remote?: string | null } | null) {
     let queue = ['a', 'b', 'c', 'd'].map((id) => queued(id));
     let paused = false;
+    const editLocks: string[] = [];
     const coordinator: QueueReorderCoordinator = {
       steerControlInput: vi.fn(async () => 'steered' as const),
       isQueuePaused: () => paused,
       getQueueControlSnapshot: () => ({ pendingQueue: queue }),
+      getProjection: () => ({ queueEditLocks: editLocks }),
       move: vi.fn((_sessionId: string, clientId: string, targetIndex: number) => {
         // Mirrors AgentInputCoordinator.move: insert before original index targetIndex.
         const from = queue.findIndex((entry) => entry.clientId === clientId);
@@ -210,7 +215,14 @@ describe('queue reorder adapter', () => {
       hasSendToSessionLock: () => false,
       getCoordinator: () => coordinator,
     });
-    return { adapter, coordinator, order: () => queue.map((entry) => entry.clientId), pause: () => { paused = true; } };
+    return {
+      adapter,
+      coordinator,
+      order: () => queue.map((entry) => entry.clientId),
+      pause: () => { paused = true; },
+      lockEdit: (clientId: string) => { editLocks.push(clientId); },
+      drop: (clientId: string) => { queue = queue.filter((entry) => entry.clientId !== clientId); },
+    };
   }
 
   it.each([
@@ -224,6 +236,14 @@ describe('queue reorder adapter', () => {
     expect(h.adapter.moveStoredControlMessage('s', 'c', position)).toBe(finalIndex);
     expect(h.order()).toEqual(expected);
     expect(h.adapter.moveStoredControlMessage('s', 'missing', 0)).toBeNull();
+  });
+
+  it('keeps a row the user is editing in place', () => {
+    const h = setup({});
+    h.lockEdit('c');
+    expect(h.adapter.moveStoredControlMessage('s', 'c', 0)).toBe('locked');
+    expect(h.order()).toEqual(['a', 'b', 'c', 'd']);
+    expect(h.coordinator.move).not.toHaveBeenCalled();
   });
 
   it('maps live capability and coordinator outcomes to steer receipts', async () => {
@@ -256,5 +276,12 @@ describe('queue reorder adapter', () => {
     const gone = setup({});
     vi.mocked(gone.coordinator.steerControlInput).mockResolvedValueOnce('rejected');
     expect(await gone.adapter.steerStoredControlMessage('s', 'b')).toEqual({ kind: 'gone' });
+
+    const raced = setup({});
+    vi.mocked(raced.coordinator.steerControlInput).mockImplementationOnce(async () => {
+      raced.drop('b');
+      return 'not-attempted';
+    });
+    expect(await raced.adapter.steerStoredControlMessage('s', 'b')).toEqual({ kind: 'gone' });
   });
 });
