@@ -139,6 +139,7 @@ import {
   isAutomaticInputOriginKind,
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
+  USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
   type AgentInputClearBoundaryOpts,
   type AgentInputCreateOpts,
   type AgentInputQueuedMessage,
@@ -1588,6 +1589,11 @@ function settleUndispatchedInterruptedAutoResume(
   sessionId: string,
   item: AgentInputQueuedMessage,
 ): boolean {
+  // 额度重置后的自动继续不走中断自愈记账(sessionTotal 刻意为 0),只需恢复原错误与手动重试入口。
+  if (item.autoResume === true && item.autoResumeInfo?.reason === USAGE_LIMIT_RESET_AUTO_RESUME_REASON) {
+    agentInputCoordinatorHolder?.restoreAutoResumeRecovery(sessionId, item.clientId, null);
+    return false;
+  }
   const attemptToken = autoResumeAttemptToken(item);
   if (attemptToken === null) return false;
   const ownsAttempt = autoResumeBookkeeping.hasPendingLifecycleForClient(

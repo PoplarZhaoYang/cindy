@@ -814,7 +814,8 @@ interface PendingAutoResumeRecovery {
   toolLoop: AgentInputToolLoopDetails | null;
   stickyError: string | null;
   autoResumeInfo: AutoResumeInfo | null;
-  attemptToken: number;
+  /** 中断自愈的 attempt 令牌；额度重置后的自动继续不走那套记账，为 null。 */
+  attemptToken: number | null;
 }
 
 function createInitialInputState(
@@ -3193,7 +3194,7 @@ export class AgentInputCoordinator {
           },
         };
       }
-      if (opts?.auto && attemptToken !== null) {
+      if ((opts?.auto && attemptToken !== null) || usageWait) {
         this.pendingAutoResumeRecoveries.set(item.clientId, {
           sessionId,
           stateRef: state,
@@ -5742,7 +5743,11 @@ export class AgentInputCoordinator {
    * 自动续跑项在 pre-vendor 边界被丢弃时恢复原错误入口。
    * 返回 false 表示它已经被用户动作取代、会话已清空，或已跨过 dispatch 边界。
    */
-  restoreAutoResumeRecovery(sessionId: string, clientId: string, attemptToken: number): boolean {
+  restoreAutoResumeRecovery(
+    sessionId: string,
+    clientId: string,
+    attemptToken: number | null,
+  ): boolean {
     const pending = this.pendingAutoResumeRecoveries.get(clientId);
     if (!pending) return false;
     const state = this.states.get(sessionId);
@@ -5750,7 +5755,7 @@ export class AgentInputCoordinator {
       pending.sessionId !== sessionId ||
       pending.attemptToken !== attemptToken ||
       state !== pending.stateRef ||
-      state.autoResumeAttemptToken !== attemptToken
+      (attemptToken !== null && state.autoResumeAttemptToken !== attemptToken)
     ) {
       return false;
     }
@@ -6418,6 +6423,8 @@ export class AgentInputCoordinator {
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
+    // scheduler origin(含复用它的 Slack / X / Telegram Hook 消息)终态失败时本就不留
+    // recovery、由各自 runner 收尾,没有可续的入口。
     if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item)) return;
     const state = this.states.get(sessionId);
     if (!state || state.recovery?.kind !== 'active-turn' || state.error === null) return;

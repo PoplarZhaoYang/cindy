@@ -13358,6 +13358,28 @@ describe('usage-limit wait (ordinary tasks)', () => {
     expect(latestProjection(h.projections).usageLimitWait).toBeNull();
   });
 
+  it('restores the error and manual retry if the continuation is dropped before dispatch', async () => {
+    const sid = 'usage-wait-dropped';
+    const { h, candidate } = await failWithLimit(sid, true);
+    expect(h.coordinator.armUsageLimitWait(sid, candidate, 9_000_000)).toBe(true);
+    expect(await h.coordinator.continueAfterUsageLimitReset(sid, candidate, INFO)).toBe('resumed');
+    const clientId = h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    // 中断自愈的令牌对不上额度续跑项。
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, 7)).toBe(false);
+    expect(h.coordinator.restoreAutoResumeRecovery(sid, clientId, null)).toBe(true);
+    const projection = h.coordinator.getProjection(sid);
+    expect(projection.error).toBe("You've hit your session limit");
+    expect(projection.recovery?.kind).toBe('active-turn');
+
+    // 已交给 vendor 的续跑不再回滚。
+    const sent = await failWithLimit('usage-wait-dispatched', true);
+    expect(sent.h.coordinator.armUsageLimitWait('usage-wait-dispatched', sent.candidate, 9_000_000)).toBe(true);
+    await sent.h.coordinator.continueAfterUsageLimitReset('usage-wait-dispatched', sent.candidate, INFO);
+    await flush();
+    const sentClientId = sent.h.onUiRetry.mock.calls.at(-1)?.[1] as string;
+    expect(sent.h.coordinator.restoreAutoResumeRecovery('usage-wait-dispatched', sentClientId, null)).toBe(false);
+  });
+
   it('re-sends the original input when the failed turn made no progress', async () => {
     const sid = 'usage-wait-clone';
     const { h, candidate } = await failWithLimit(sid, false);
