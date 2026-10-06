@@ -61,6 +61,7 @@ import {
   type ChatFileDeps,
   type ChatFileFetchArgs,
   buildDevicePathUrl,
+  chatFileProgressRequestId,
 } from './chat-file.js';
 import { downloadChatEntry, type ChatDownloadDeps } from './chat-download.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
@@ -488,6 +489,7 @@ export function registerFileBrowserIpc(): void {
   };
   ipcMain.handle(FILE_BROWSER_INVOKE.CHAT_FILE_FETCH, async (event, args: ChatFileFetchArgs) => {
     const wc = event.sender;
+    const requestId = chatFileProgressRequestId(args?.requestId);
     let lastPush = 0;
     const onProgress = (received: number, total: number, phase?: 'upload' | 'download') => {
       const now = Date.now();
@@ -497,7 +499,7 @@ export function registerFileBrowserIpc(): void {
         wc.send(FILE_BROWSER_PUSH.TRANSFER, {
           workdir: args?.workdir ?? '',
           relPath: args?.absPath ?? '',
-          requestId: typeof args?.requestId === 'string' ? args.requestId : undefined,
+          requestId,
           received,
           total,
           phase: phase ?? 'download',
@@ -594,10 +596,7 @@ export function registerFileBrowserIpc(): void {
       wc.once('render-process-gone', onGone);
       let lastPush = 0;
       // 进度带上发起方的请求 id:同一路径同时有取回 / 下载时 renderer 不串线。
-      const requestId =
-        typeof args?.requestId === 'string' && args.requestId.length <= 64
-          ? args.requestId
-          : undefined;
+      const requestId = chatFileProgressRequestId(args?.requestId);
       const result = await downloadChatEntry(
         args,
         (received, total, phase) => {

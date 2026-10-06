@@ -27,6 +27,7 @@ vi.mock('../../logger', () => ({
 import { isWorkdirRoot } from '../../../shared/workdirPath';
 import {
   buildDevicePathUrl,
+  chatFileProgressRequestId,
   fetchChatFile,
   statChatFile,
   toWorkdirRel,
@@ -51,6 +52,17 @@ function makeDeps(overrides: Partial<ChatFileDeps> = {}): ChatFileDeps {
 }
 
 const noop = () => undefined;
+
+describe('chatFileProgressRequestId', () => {
+  it('accepts bounded IDs for fetch and download progress', () => {
+    expect(chatFileProgressRequestId('request-1')).toBe('request-1');
+    expect(chatFileProgressRequestId('a'.repeat(64))).toBe('a'.repeat(64));
+  });
+
+  it.each([undefined, null, 42, {}, '', 'a'.repeat(65)])('ignores invalid ID %j', (value) => {
+    expect(chatFileProgressRequestId(value)).toBeUndefined();
+  });
+});
 
 describe('toWorkdirRel', () => {
   it('POSIX:workdir 内出相对路径,外/逃逸/自身 → null', () => {

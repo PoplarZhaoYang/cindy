@@ -46,6 +46,11 @@ export interface ChatFileFetchArgs {
   modifiedWindow?: { startMs: number; endMs: number | null };
 }
 
+/** Bound renderer-provided correlation IDs before repeating them in progress events. */
+export function chatFileProgressRequestId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= 64 ? value : undefined;
+}
+
 /**
  * 返回形态走规则 13 的 `{success}` 例外:失败时 renderer 需要按 code 分流降级
  * UX(workdir 外占位 / 不存在 / 可重试失败),throw 编码反而丢结构。
