@@ -125,6 +125,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     fy = 0.5,
     mode = "pointer",
     control = false,
+    macKeyboard = false,
     pc = null,
     dc = null,
     seq = 0,
@@ -1526,7 +1527,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       e.preventDefault();
       // macOS sends no keyup for keys pressed while Command is held (Cmd+C):
       // release them with Command so the remote key never stays down.
-      if (code === "MetaLeft")
+      if (macKeyboard && code === "MetaLeft")
         for (const held of [...hardwareKeys])
           if (!/^(Shift|Control|Alt|Meta)Left$/.test(held)) {
             hardwareKeys.delete(held);
@@ -2339,6 +2340,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         sending = false;
         seq = 0;
         epoch = message.epoch;
+        macKeyboard = config.desktop && message.macKeyboard === true;
         dw = message.width;
         dh = message.height;
         fillHeight = message.fillHeight === true;

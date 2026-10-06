@@ -420,6 +420,7 @@ export class DesktopViewerController {
         fillHeight: false,
         trickleIce: caps.trickleIce === true,
         audio: caps.systemAudio && this.state.settings.audio,
+        macKeyboard: typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin',
       });
       this.runtime.receive({ type: 'mode', mode: 'pointer' });
       if (!caps.canControl) throw new Error('DESKTOP_INPUT_UNSUPPORTED');

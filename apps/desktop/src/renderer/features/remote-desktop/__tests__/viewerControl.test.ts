@@ -232,9 +232,21 @@ it('ignores clipboard messages from the picture; shortcuts reach the host as key
   runtime.post?.({ type: 'clipboard', action: 'paste', epoch: 'lease' });
   await vi.advanceTimersByTimeAsync(0);
   expect(current.clipboard).not.toHaveBeenCalled();
-  expect(runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0]).not.toHaveProperty(
-    'clipboardShortcuts',
-  );
+  const init = runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0];
+  expect(init).not.toHaveProperty('clipboardShortcuts');
+  expect(init).toMatchObject({ macKeyboard: false });
+});
+
+it('tells the picture when the controller keyboard follows macOS Command rules', async () => {
+  vi.stubGlobal('window', { electronAPI: { platform: 'darwin' } });
+  try {
+    await fixture();
+    expect(runtime.receive.mock.calls.find(([m]) => m.type === 'init')?.[0]).toMatchObject({
+      macKeyboard: true,
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 it('drops queued clipboard work after host control is lost', async () => {
