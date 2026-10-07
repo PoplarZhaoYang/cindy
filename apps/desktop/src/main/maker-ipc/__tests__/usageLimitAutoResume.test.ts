@@ -66,6 +66,8 @@ describe('isAccountUsageLimitError', () => {
     expect(isAccountUsageLimitError({ codexErrorInfo: 'usageLimitExceeded', message: 'x' })).toBe(true);
     expect(isAccountUsageLimitError({ errorStatus: 529, message: 'overloaded_error' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'credit balance too low' })).toBe(false);
+    expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'quota exceeded' })).toBe(false);
+    expect(isAccountUsageLimitError({ errorStatus: 429, message: 'insufficient_quota' })).toBe(false);
     expect(isAccountUsageLimitError({ message: 'Connection closed mid-response' })).toBe(false);
   });
 });

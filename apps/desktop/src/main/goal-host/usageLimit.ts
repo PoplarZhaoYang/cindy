@@ -11,7 +11,10 @@
  *  - Codex:error 事件带 `codexErrorInfo: 'usageLimitExceeded'`,另有 `data.message` 文本兜底。
  */
 
-import { extractUsageLimitRecoveryHint } from '../../shared/usageLimitRecovery.js';
+import {
+  extractUsageLimitRecoveryHint,
+  isBillingDepletionError,
+} from '../../shared/usageLimitRecovery.js';
 
 /** turn error 的 data 是否表示"账号用量/限流"。 */
 export function classifyTurnUsageLimit(data: unknown): boolean {
@@ -23,6 +26,8 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
     usageLimit?: unknown;
     codexErrorInfo?: unknown;
   };
+  // 余额 / 计费耗尽要充值、不会周期重置,文案里带 quota 也不算(保持 blocked)。
+  if (isBillingDepletionError(data)) return false;
   // 结构化 tag(权威)。
   if (d.sdkError === 'rate_limit') return true;
   if (d.codexErrorInfo === 'usageLimitExceeded') return true;

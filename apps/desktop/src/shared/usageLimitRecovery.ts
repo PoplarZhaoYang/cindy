@@ -289,6 +289,20 @@ function parseTextResetAt(text: string, nowMs: number): number | null {
  * Returns a hint only for a restorable account usage/rate limit. Billing
  * depletion and temporary upstream overload are intentionally excluded.
  */
+const BILLING_DEPLETION_PATTERN =
+  /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
+
+/**
+ * 余额 / 计费耗尽（要充值，不会到点恢复）。即使文案里也出现 quota / limit，也不是周期额度上限，
+ * 所有「等额度重置」的判定都必须先排除它。
+ */
+export function isBillingDepletionError(data: unknown): boolean {
+  const root = asRecord(data);
+  if (!root) return false;
+  if (root.sdkError === 'billing_error') return true;
+  return BILLING_DEPLETION_PATTERN.test(collectText(collectRecords(root)));
+}
+
 export function extractUsageLimitRecoveryHint(
   data: unknown,
   nowMs = Date.now(),
@@ -303,12 +317,10 @@ export function extractUsageLimitRecoveryHint(
   const status = finiteNumber(root.errorStatus ?? root.status);
 
   if (
-    sdkError === 'billing_error' ||
+    isBillingDepletionError(root) ||
     codexErrorInfo === 'serverOverloaded' ||
     status === 529 ||
-    /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low)|at capacity|overloaded_error)\b/i.test(
-      text,
-    )
+    /\b(?:at capacity|overloaded_error)\b/i.test(text)
   ) {
     return null;
   }

@@ -126,6 +126,14 @@ describe('classifyTurnOverload', () => {
   });
 });
 
+describe('classifyTurnUsageLimit (billing depletion)', () => {
+  it('never treats billing depletion as a periodic limit, even with quota wording', () => {
+    expect(classifyTurnUsageLimit({ sdkError: 'billing_error', message: 'quota exceeded' })).toBe(false);
+    expect(classifyTurnUsageLimit({ errorStatus: 429, message: 'insufficient_quota: quota exceeded' })).toBe(false);
+    expect(classifyTurnUsageLimit({ message: 'Credit balance too low; usage limit reached' })).toBe(false);
+  });
+});
+
 describe('classifyTurnUsageLimit (Codex structured tag)', () => {
   it('matches codexErrorInfo usageLimitExceeded even without limit wording', () => {
     expect(classifyTurnUsageLimit({ codexErrorInfo: 'usageLimitExceeded', message: 'Upgrade to Pro' })).toBe(true);
