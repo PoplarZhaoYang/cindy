@@ -59,6 +59,32 @@ describe('usage limit recovery detection', () => {
     ).toBe(new Date(2026, 0, 27, 15, 5).getTime());
   });
 
+  it('drops zone-less clock times when the local time zone is not trusted (SSH sessions)', () => {
+    const remote = { localTimeZoneTrusted: false };
+    expect(
+      extractUsageLimitRecoveryHint(
+        { codexErrorInfo: 'usageLimitExceeded', message: 'Try again at Jan 27, 2026 3:05 PM.' },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBeNull();
+    // 带时区的钟点与相对时长不受影响。
+    expect(
+      extractUsageLimitRecoveryHint(
+        { sdkError: 'rate_limit', message: "You've hit your limit · resets 11pm (UTC)" },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBe(Date.parse('2026-01-24T23:00:00.000Z'));
+    expect(
+      extractUsageLimitRecoveryHint(
+        { codexErrorInfo: 'usageLimitExceeded', message: 'Try again in 1h 15m.' },
+        NOW,
+        remote,
+      )?.resetAtMs,
+    ).toBe(NOW + 75 * 60_000);
+  });
+
   it("parses Pi's approximate ChatGPT relative reset", () => {
     expect(
       extractUsageLimitRecoveryHint(

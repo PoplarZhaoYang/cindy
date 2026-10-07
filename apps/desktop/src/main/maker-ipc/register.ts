@@ -1367,7 +1367,10 @@ async function resolveSessionUsageResetAt(
   if (!row || !agentKind) return null;
   const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
   if (!subscriptionFamilyOf(agentKind, providerId)) return null;
-  const fromError = readTurnUsageResetAt(signals);
+  // SSH 远程会话的报错用远端主机的本地时间:不带时区的钟点不按本机时区理解。
+  const fromError = readTurnUsageResetAt(signals, Date.now(), {
+    localTimeZoneTrusted: !row.remoteHostId,
+  });
   if (fromError !== null) return fromError;
   // SSH 远程会话用远端主机自己的登录,本机快照属于另一个账号,不能拿来推算。
   if (row.remoteHostId) return null;

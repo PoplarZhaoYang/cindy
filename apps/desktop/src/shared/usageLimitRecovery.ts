@@ -222,7 +222,19 @@ const MONTH_INDEX: Record<string, number> = {
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
-function parseTimeOfDayResetAt(text: string, nowMs: number): number | null {
+export interface UsageLimitRecoveryParseOptions {
+  /**
+   * 不带时区的绝对钟点(Codex `try again at 3:05 PM`)是否可按本机时区理解。SSH 远程会话的
+   * 报错用的是远端主机的本地时间,传 false 时这类钟点不解析;相对时长与带时区的时刻不受影响。
+   */
+  localTimeZoneTrusted?: boolean;
+}
+
+function parseTimeOfDayResetAt(
+  text: string,
+  nowMs: number,
+  opts?: UsageLimitRecoveryParseOptions,
+): number | null {
   // Claude: "resets 1:20am (Pacific/Auckland)".
   // Codex: "try again at 3:05 PM." / "try again at Oct 8, 2026 3:05 PM." (local time).
   const match = text.match(
@@ -235,8 +247,10 @@ function parseTimeOfDayResetAt(text: string, nowMs: number): number | null {
   const meridiem = match[6].toLowerCase();
   if (hour === 12) hour = 0;
   if (meridiem === 'pm') hour += 12;
-  const fallbackTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const timeZone = match[7]?.trim() || fallbackTimeZone;
+  const explicitTimeZone = match[7]?.trim();
+  if (!explicitTimeZone && opts?.localTimeZoneTrusted === false) return null;
+  const timeZone =
+    explicitTimeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   if (match[1]) {
     const month = MONTH_INDEX[match[1].toLowerCase()];
@@ -267,7 +281,11 @@ function parseTimeOfDayResetAt(text: string, nowMs: number): number | null {
   return null;
 }
 
-function parseTextResetAt(text: string, nowMs: number): number | null {
+function parseTextResetAt(
+  text: string,
+  nowMs: number,
+  opts?: UsageLimitRecoveryParseOptions,
+): number | null {
   const isoMatches = text.match(
     /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})\b/g,
   );
@@ -282,7 +300,7 @@ function parseTextResetAt(text: string, nowMs: number): number | null {
     if (parsed !== null) return parsed;
   }
 
-  return parseRelativeResetAt(text, nowMs) ?? parseTimeOfDayResetAt(text, nowMs);
+  return parseRelativeResetAt(text, nowMs) ?? parseTimeOfDayResetAt(text, nowMs, opts);
 }
 
 /**
@@ -306,6 +324,7 @@ export function isBillingDepletionError(data: unknown): boolean {
 export function extractUsageLimitRecoveryHint(
   data: unknown,
   nowMs = Date.now(),
+  opts?: UsageLimitRecoveryParseOptions,
 ): UsageLimitRecoveryHint | null {
   const root = asRecord(data);
   if (!root) return null;
@@ -339,7 +358,7 @@ export function extractUsageLimitRecoveryHint(
 
   const planType = parsePlanType(records, text);
   return {
-    resetAtMs: parseStructuredResetAt(records, nowMs) ?? parseTextResetAt(text, nowMs),
+    resetAtMs: parseStructuredResetAt(records, nowMs) ?? parseTextResetAt(text, nowMs, opts),
     ...(isAccountUsageLimit ? { isAccountUsageLimit: true } : {}),
     ...(planType ? { planType } : {}),
   };

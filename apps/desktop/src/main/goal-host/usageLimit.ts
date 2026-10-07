@@ -14,6 +14,7 @@
 import {
   extractUsageLimitRecoveryHint,
   isBillingDepletionError,
+  type UsageLimitRecoveryParseOptions,
 } from '../../shared/usageLimitRecovery.js';
 
 /** turn error 的 data 是否表示"账号用量/限流"。 */
@@ -56,10 +57,14 @@ export function readStructuredUsageResetAt(data: unknown): number | null {
  * 只对订阅账号的会话调用:API key / Coding Plan / 网关等来源报错里的重试时刻是分钟级请求
  * 限流,不是周期额度重置。
  */
-export function readTurnUsageResetAt(data: unknown, nowMs = Date.now()): number | null {
+export function readTurnUsageResetAt(
+  data: unknown,
+  nowMs = Date.now(),
+  opts?: UsageLimitRecoveryParseOptions,
+): number | null {
   return (
     readStructuredUsageResetAt(data) ??
-    extractUsageLimitRecoveryHint(data, nowMs)?.resetAtMs ??
+    extractUsageLimitRecoveryHint(data, nowMs, opts)?.resetAtMs ??
     null
   );
 }

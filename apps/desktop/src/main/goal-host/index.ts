@@ -100,7 +100,10 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       if (subscriptionFamilyOf(agentKind, providerId)) {
         // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
         if (turnError !== undefined) {
-          const fromError = readTurnUsageResetAt(turnError);
+          // SSH 远程会话的报错用远端主机的本地时间:不带时区的钟点不按本机时区理解。
+          const fromError = readTurnUsageResetAt(turnError, Date.now(), {
+            localTimeZoneTrusted: !row?.remoteHostId,
+          });
           if (fromError !== null) return { limited: true, resetAtMs: fromError };
         }
         // SSH 远程会话用远端主机自己的登录,本机订阅快照属于另一个账号(与普通任务同一边界)。
