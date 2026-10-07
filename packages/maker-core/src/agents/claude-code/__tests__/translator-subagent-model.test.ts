@@ -62,6 +62,37 @@ async function collect(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): 
 }
 
 describe('Claude Code assistant text streaming contract', () => {
+  it.each([null, undefined])('keeps root text and thinking live after a child envelope (parent=%s)', async (parent) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx();
+    for (const [uuid, parentId] of [['root-envelope', null], ['child-envelope', 'toolu_child']]) {
+      translateSdkMessage({
+        type: 'assistant', uuid, parent_tool_use_id: parentId,
+        message: { model: 'claude-opus-4-6', content: [{ type: 'text', text: uuid }] },
+      }, queue, ctx);
+    }
+    translateSdkMessage({
+      type: 'stream_event', parent_tool_use_id: parent,
+      event: { type: 'message_start', message: { id: 'root-request', model: 'claude-opus-4-6' } },
+    }, queue, ctx);
+    for (const delta of [
+      { type: 'text_delta', text: 'root partial' },
+      { type: 'thinking_delta', thinking: 'root thinking' },
+    ]) {
+      translateSdkMessage({
+        type: 'stream_event', parent_tool_use_id: parent,
+        event: { type: 'content_block_delta', delta },
+      }, queue, ctx);
+    }
+    const events = (await collect(queue)).filter((event) => ['text', 'thinking'].includes(event.type));
+    expect(events).toHaveLength(5);
+    expect(events[1].agentMeta?.parentUuid).toBe('toolu_child');
+    for (const event of events.slice(2)) {
+      expect(event.agentMeta).toMatchObject({ uuid: 'root-envelope', requestId: 'root-request' });
+      expect(event.agentMeta).not.toHaveProperty('parentUuid');
+    }
+  });
+
   it('attributes pre-envelope text deltas to the current message_start request', async () => {
     const queue = createAsyncQueue<AgentEvent>();
     const ctx = createCtx();
