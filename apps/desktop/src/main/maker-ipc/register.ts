@@ -1339,6 +1339,25 @@ async function isUsageLimitAutoResumeEligible(sessionId: string): Promise<boolea
  * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
  * 周期额度耗尽,按产品规则只报错不等待。
  */
+/**
+ * 会话当前实际在跑的来源与模型:临时切换(set_session_runtime)或自动降级的运行时覆盖优先,
+ * 否则用会话保存的选择。分模型额度必须按实际运行的模型匹配。
+ */
+export function resolveSessionRuntimeRoute(
+  sessionId: string,
+  agentKind: string,
+  saved: { providerId?: string | null; model?: string | null } | null,
+): { providerId: string | null; modelId: string | null } {
+  const override = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
+  if (override && override.agentKind === agentKind) {
+    return { providerId: override.providerId ?? null, modelId: override.model ?? null };
+  }
+  return {
+    providerId: getSessionProvider(sessionId) ?? saved?.providerId ?? null,
+    modelId: saved?.model ?? null,
+  };
+}
+
 async function resolveSessionUsageResetAt(
   sessionId: string,
   signals: InterruptedTurnErrorSignals,
@@ -1346,13 +1365,13 @@ async function resolveSessionUsageResetAt(
   const row = await getSessionRowSnapshot(sessionId);
   const agentKind = row?.agentKind ? dbToMakerAgentKind(row.agentKind) : null;
   if (!row || !agentKind) return null;
-  const providerId = getSessionProvider(sessionId) ?? row.providerId ?? null;
+  const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
   if (!subscriptionFamilyOf(agentKind, providerId)) return null;
   const fromError = readTurnUsageResetAt(signals);
   if (fromError !== null) return fromError;
   // SSH 远程会话用远端主机自己的登录,本机快照属于另一个账号,不能拿来推算。
   if (row.remoteHostId) return null;
-  const limit = await readAccountUsageLimit(agentKind, providerId, row.model ?? null);
+  const limit = await readAccountUsageLimit(agentKind, providerId, modelId);
   return limit?.limited ? limit.resetAtMs : null;
 }
 

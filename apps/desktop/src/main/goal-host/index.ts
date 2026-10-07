@@ -14,12 +14,12 @@ import { createLogger } from '../logger.js';
 import {
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
+  resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
 } from '../maker-ipc/register.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
-import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { readAccountUsageLimit, subscriptionFamilyOf } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { GoalController } from './controller';
@@ -96,13 +96,13 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     // bridge 还是 Pi 上都读同一份额度),判 limited + 取 resetAt(unix ms)。
     getAccountLimit: async (agentKind, sessionId, turnError) => {
       const row = await getSessionRowSnapshot(sessionId);
-      const providerId = getSessionProvider(sessionId) ?? row?.providerId ?? null;
+      const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
       // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
       if (turnError !== undefined && subscriptionFamilyOf(agentKind, providerId)) {
         const fromError = readTurnUsageResetAt(turnError);
         if (fromError !== null) return { limited: true, resetAtMs: fromError };
       }
-      const subscription = await readAccountUsageLimit(agentKind, providerId, row?.model ?? null).catch(
+      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
         () => null,
       );
       if (subscription !== undefined) return subscription;
