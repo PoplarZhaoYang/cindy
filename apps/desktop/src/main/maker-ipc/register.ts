@@ -19824,16 +19824,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertTrustedSender: (event) => assertTrustedAppRendererEvent(
       event as Parameters<typeof assertTrustedAppRendererEvent>[0],
     ),
-    apply: async (sessionId, model, providerId, revision, selection) => {
-      const result = await handleSetModel(sessionId, model, providerId, revision, selection, {
-        source: 'user',
-      });
-      // 用户亲自换了模型或来源:旧额度的等待不再适用(新选择可能有额度),交还手动处理。
-      if (!result.superseded && !result.contextWindowConfirmationRequired) {
-        usageLimitAutoResume.noteUserAction(sessionId as string);
-        agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId as string);
+    apply: (sessionId, model, providerId, revision, selection) => {
+      // 用户动手换模型或来源即视为接手:在进入切换(含等锁、重建会话)之前就撤销额度等待,
+      // 不让到点的续跑抢在切换期间派发。切换失败时错误与手动重试仍在,不恢复等待。
+      if (typeof sessionId === 'string') {
+        usageLimitAutoResume.noteUserAction(sessionId);
+        agentInputCoordinatorHolder?.cancelUsageLimitWait(sessionId);
       }
-      return result;
+      return handleSetModel(sessionId, model, providerId, revision, selection, { source: 'user' });
     },
   });
 
