@@ -18,7 +18,7 @@ import { shouldShowOpenPathError } from '../../shared/openPathResult';
  */
 
 import { i18n } from '@/i18n';
-import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
+import { createFileTransferToast } from './fileTransferProgress';
 import { toast } from './toast';
 import type { SessionFileOrigin } from './sessionFileOrigin';
 
@@ -75,20 +75,9 @@ export async function fetchChatFileWithToasts(
   workdir: string,
   absPath: string,
 ): Promise<string | null> {
-  let fetchingToastId: string | null = null;
-  let progressText = i18n.t('chat.remoteFile.fetching');
-  const requestId = crypto.randomUUID();
-  const formatProgress = createChatTransferProgressText();
-  const offProgress = window.electronAPI.fileBrowser.onTransferProgress((e) => {
-    if (e.requestId !== requestId) return;
-    progressText = formatProgress(e);
-    if (fetchingToastId) toast.update(fetchingToastId, progressText);
-  });
-  const delayed = setTimeout(() => {
-    fetchingToastId = toast.loading(progressText);
-  }, 600);
+  const progress = createFileTransferToast();
   try {
-    const res = await fetchChatFileToCache(origin, workdir, absPath, requestId);
+    const res = await fetchChatFileToCache(origin, workdir, absPath, progress.requestId);
     if (!res.ok) {
       toast.error(chatFileErrorText(res.code));
       return null;
@@ -96,9 +85,7 @@ export async function fetchChatFileWithToasts(
     if (res.stale) toast.warning(i18n.t('chat.remoteFile.staleCopy'));
     return res.cachePath;
   } finally {
-    clearTimeout(delayed);
-    offProgress();
-    if (fetchingToastId) toast.dismiss(fetchingToastId);
+    progress.dispose();
   }
 }
 
@@ -125,47 +112,6 @@ function chatDownloadErrorText(code: ChatDownloadFailureCode): string {
   return chatFileErrorText(code);
 }
 
-type ChatTransferProgress = {
-  received: number;
-  total: number;
-  phase?: 'pack' | 'upload' | 'download' | 'extract';
-};
-
-/** Each transfer samples its own byte deltas; phase changes/fallback reset the speed. */
-function createChatTransferProgressText(): (e: ChatTransferProgress) => string {
-  let sample: { time: number; bytes: number; phase: string; speed: number | null } | undefined;
-  return (e) => {
-    const phase = e.phase ?? 'download';
-    const now = performance.now();
-    const received = Math.max(0, e.received);
-    if (!sample || sample.phase !== phase || received < sample.bytes) {
-      sample = { time: now, bytes: received, phase, speed: null };
-    } else if (now - sample.time >= 800) {
-      const speed = ((received - sample.bytes) * 1000) / (now - sample.time);
-      sample = { time: now, bytes: received, phase, speed };
-    }
-    if (phase === 'pack') {
-      return i18n.t('chat.remoteFile.downloadPacking', { size: formatBytes(received) });
-    }
-    if (phase === 'extract') return i18n.t('chat.remoteFile.downloadExtracting');
-    const values = {
-      percent: e.total > 0 ? Math.min(100, Math.floor((received / e.total) * 100)) : undefined,
-      received: formatBytes(received),
-      speed: sample.speed === null ? '—' : `${formatBytes(Math.round(sample.speed))}/s`,
-    };
-    if (phase === 'upload') {
-      return i18n.t(
-        e.total > 0 ? 'chat.remoteFile.uploadProgress' : 'chat.remoteFile.uploadProgressUnknown',
-        values,
-      );
-    }
-    return i18n.t(
-      e.total > 0 ? 'chat.remoteFile.downloadProgress' : 'chat.remoteFile.downloadProgressUnknown',
-      values,
-    );
-  };
-}
-
 /**
  * 远程会话「下载到本地」:文件或文件夹下载到系统「下载」文件夹(重名自动加编号),
  * 完成后在文件管理器中选中。取回超过 600ms 才弹进度 toast(缓存命中秒回时零打扰)。
@@ -175,25 +121,14 @@ export async function downloadRemoteChatEntry(
   workdir: string,
   absPath: string,
 ): Promise<void> {
-  let progressToastId: string | null = null;
-  let progressText = i18n.t('chat.remoteFile.fetching');
-  const delayed = setTimeout(() => {
-    progressToastId = toast.loading(progressText);
-  }, 600);
-  const requestId = crypto.randomUUID();
-  const formatProgress = createChatTransferProgressText();
-  const offProgress = window.electronAPI.fileBrowser.onTransferProgress((e) => {
-    if (e.requestId !== requestId) return;
-    progressText = formatProgress(e);
-    if (progressToastId) toast.update(progressToastId, progressText);
-  });
+  const progress = createFileTransferToast();
   const wireOrigin =
     origin.kind === 'device'
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
       : ({ kind: 'ssh', remoteHostId: origin.remoteHostId } as const);
   try {
     const res = await window.electronAPI.fileBrowser
-      .chatDownload({ origin: wireOrigin, workdir, absPath, requestId })
+      .chatDownload({ origin: wireOrigin, workdir, absPath, requestId: progress.requestId })
       .catch((err: unknown) => ({
         ok: false as const,
         code: 'FETCH_FAILED' as const,
@@ -208,9 +143,7 @@ export async function downloadRemoteChatEntry(
     const shown = await window.electronAPI.showItemInFolder({ filePath: res.path });
     if (!shown.success) toast.error(shown.error ?? i18n.t('chat.media.openFolderFailed'));
   } finally {
-    clearTimeout(delayed);
-    offProgress();
-    if (progressToastId) toast.dismiss(progressToastId);
+    progress.dispose();
   }
 }
 

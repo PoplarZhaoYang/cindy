@@ -2675,6 +2675,7 @@ interface ElectronAPI {
       mtimeMs: number;
       remoteHostId?: string | null;
       deviceId?: string | null;
+      requestId?: string;
     }) => Promise<{ ok: true; cachePath: string; stale: boolean } | { ok: false; message: string }>;
     readCached: (params: {
       cachePath: string;
@@ -2699,11 +2700,11 @@ interface ElectronAPI {
         received: number;
         total: number;
         phase?: 'pack' | 'upload' | 'download' | 'extract';
-        /** chatFetch / chatDownload 发起时带的请求 id。 */
+        /** fetchRemote / chatFetch / chatDownload 发起时带的请求 id。 */
         requestId?: string;
       }) => void,
     ) => () => void;
-    /** 聊天流文件取回:远端绝对路径 → 本地缓存副本(进度经 onTransferProgress,relPath 键 = absPath)。 */
+    /** 聊天流文件取回:远端绝对路径 → 本地缓存副本(进度经 onTransferProgress,按 requestId 关联)。 */
     previewHtml: (params: {
       origin:
         | { kind: 'local' }

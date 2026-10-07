@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { downloadRemoteChatEntry, fetchChatFileWithToasts } from '../lib/remoteFileOpen';
 import { getToastSnapshot, toast } from '../lib/toast';
 import messages from '../i18n/locales/en/common.json';
+import {
+  createFileTransferProgressValues,
+  observeFileTransferProgressText,
+} from '../lib/fileTransferProgress';
 
 vi.mock('@/i18n', () => ({
   i18n: {
@@ -77,6 +81,37 @@ afterEach(() => {
 });
 
 describe('remote file transfer toasts', () => {
+  it('preview observers ignore other requests and stop immediately on unmount', () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const first = observeFileTransferProgressText(a);
+    const second = observeFileTransferProgressText(b);
+    emit(first.requestId, 1024);
+    expect(a).toHaveBeenLastCalledWith('Downloading… 25% · —');
+    expect(b).not.toHaveBeenCalled();
+    first.dispose();
+    first.dispose();
+    emit(first.requestId, 2048);
+    emit(second.requestId, 3072);
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenLastCalledWith('Downloading… 75% · —');
+    second.dispose();
+    expect(listeners.size).toBe(0);
+  });
+
+  it('resets speed when bytes fall within a sample window and clamps percentage', () => {
+    const sample = createFileTransferProgressValues();
+    sample({ received: 0, total: 4096 });
+    vi.advanceTimersByTime(1000);
+    expect(sample({ received: 2048, total: 4096 }).speed).toBe('2.0 KB/s');
+    vi.advanceTimersByTime(100);
+    sample({ received: 3072, total: 4096 });
+    // Lower than the latest event but higher than the speed sample's 2048 bytes.
+    expect(sample({ received: 2500, total: 4096 }).speed).toBe('—');
+    expect(sample({ received: 5000, total: 4096 }).percent).toBe(100);
+    expect(sample({ received: 10, total: 0 }).percent).toBeUndefined();
+  });
+
   it('keeps cache hits silent and removes the progress subscription', async () => {
     chatFetch.mockResolvedValue(success);
     await expect(fetchChatFileWithToasts(origin, workdir, absPath)).resolves.toBe(

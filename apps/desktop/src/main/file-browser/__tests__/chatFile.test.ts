@@ -169,6 +169,27 @@ describe('fetchChatFile — ssh 来源', () => {
 describe('fetchChatFile — device 来源', () => {
   const origin = { kind: 'device', deviceId: 'd1' } as const;
 
+  it('reports media transfer bytes while the outside-workdir read is still pending', async () => {
+    let finish!: () => void;
+    const waiting = new Promise<void>((resolve) => { finish = resolve; });
+    const progress = vi.fn();
+    const deps = makeDeps({
+      deviceMediaFetch: vi.fn(async (_device, _url, _signal, onProgress) => {
+        onProgress?.(0, 20);
+        onProgress?.(8, 20);
+        await waiting;
+        onProgress?.(20, 20);
+        return { ossKey: 'k1', size: 20 };
+      }),
+    });
+    const pending = fetchChatFile({ origin, workdir: '/w', absPath: '/other/video.mp4' }, progress, deps);
+    expect(progress.mock.calls).toEqual([[0, 20], [8, 20]]);
+    expect(deps.fetchToCache).not.toHaveBeenCalled();
+    finish();
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    expect(progress).toHaveBeenLastCalledWith(20, 20);
+  });
+
   it('workdir 内:deviceStat + fetchBigFile(deviceId 分支)', async () => {
     const deps = makeDeps();
     const res = await fetchChatFile({ origin, workdir: '/w', absPath: '/w/x/b.png' }, noop, deps);
@@ -200,6 +221,7 @@ describe('fetchChatFile — device 来源', () => {
       'd1',
       buildDevicePathUrl('/other/c.pdf'),
       undefined,
+      noop,
     );
     expect(deps.downloadToFile).toHaveBeenCalledWith(
       'k1',
@@ -271,6 +293,7 @@ describe('fetchChatFile — device 来源', () => {
       'd1',
       buildDevicePathUrl('/other/c.pdf'),
       abort.signal,
+      noop,
     );
     expect(deps.downloadToFile).toHaveBeenCalledWith(
       'k1',

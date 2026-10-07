@@ -47,9 +47,7 @@ export interface ChatFileFetchArgs {
 }
 
 /** Bound renderer-provided correlation IDs before repeating them in progress events. */
-export function chatFileProgressRequestId(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 && value.length <= 64 ? value : undefined;
-}
+export { fileTransferRequestId as chatFileProgressRequestId } from './transfer-progress.js';
 
 /**
  * 返回形态走规则 13 的 `{success}` 例外:失败时 renderer 需要按 code 分流降级
@@ -94,6 +92,7 @@ export interface ChatFileDeps {
     deviceId: string,
     url: string,
     signal?: AbortSignal,
+    onProgress?: FetchProgressFn,
   ): Promise<
     | { ossKey: string; size: number; inlineBase64?: string }
     | { ossKey: string; size: number; path: string; dispose(): Promise<void> }
@@ -324,6 +323,7 @@ export async function fetchChatFile(
       origin.deviceId,
       buildDevicePathUrl(absPath),
       signal,
+      onProgress,
     );
     if ('path' in fetched || fetched.inlineBase64 !== undefined) {
       try {
