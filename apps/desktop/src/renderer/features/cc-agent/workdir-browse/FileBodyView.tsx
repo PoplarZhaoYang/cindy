@@ -1423,13 +1423,15 @@ function FetchingProgress({
       <Spinner size={18} className="text-[var(--cmd-palette-item-meta)]" />
       <span className="text-13 text-[var(--cmd-palette-item-meta)]">
         {t(
-          total <= 0
-            ? phase === 'upload'
-              ? 'chat.remoteFile.uploadProgressUnknown'
-              : 'chat.remoteFile.downloadProgressUnknown'
-            : phase === 'upload'
-              ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
-              : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
+          values.preparing
+            ? 'chat.remoteFile.fetching'
+            : total <= 0
+              ? phase === 'upload'
+                ? 'chat.remoteFile.uploadProgressUnknown'
+                : 'chat.remoteFile.downloadProgressUnknown'
+              : phase === 'upload'
+                ? 'ccAgent.workdirBrowse.fileBody.fetchingRemoteUpload'
+                : 'ccAgent.workdirBrowse.fileBody.fetchingRemote',
           values,
         )}
       </span>

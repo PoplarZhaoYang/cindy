@@ -131,10 +131,38 @@ describe('remote file transfer toasts', () => {
     await vi.advanceTimersByTimeAsync(600);
     const first = active()[0];
     expect(first).toMatchObject({ variant: 'loading', duration: 0 });
-    expect(first.message).toBe('Downloading… 0% · —');
+    expect(first.message).toBe(messages.chat.remoteFile.fetching);
     await vi.advanceTimersByTimeAsync(400);
     emit(requestId, 2048);
     expect(active()[0]).toMatchObject({ id: first.id, message: 'Downloading… 50% · 2.0 KB/s' });
+    result.resolve(success);
+    await pending;
+    expect(active()).toEqual([]);
+    expect(listeners.size).toBe(0);
+  });
+
+  it('restores preparation during peer fallback and resumes real download progress', async () => {
+    const result = deferred<typeof success>();
+    chatFetch.mockReturnValue(result.promise);
+    const pending = fetchChatFileWithToasts(origin, workdir, absPath);
+    const { requestId } = chatFetch.mock.calls[0][0];
+    const preview = vi.fn();
+    const observer = observeFileTransferProgressText(preview);
+    for (const id of [requestId, observer.requestId]) emit(id, 2048);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(active()[0].message).toContain('50%');
+    for (const id of [requestId, observer.requestId]) emit(id, 0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(active()[0]).toMatchObject({
+      variant: 'loading',
+      message: messages.chat.remoteFile.fetching,
+    });
+    expect(preview).toHaveBeenLastCalledWith(messages.chat.remoteFile.fetching);
+    expect(createFileTransferProgressValues()({ received: 0, total: 4096 }).preparing).toBe(true);
+    for (const id of [requestId, observer.requestId]) emit(id, 1024);
+    expect(active()[0].message).toContain('25%');
+    expect(preview.mock.lastCall?.[0]).toContain('25%');
+    observer.dispose();
     result.resolve(success);
     await pending;
     expect(active()).toEqual([]);
@@ -202,7 +230,7 @@ describe('remote file transfer toasts', () => {
     emit(requestId, 2048, 4096, 'upload');
     expect(active()[0].message).toBe('Remote computer is uploading… 50% · 2.0 KB/s');
     emit(requestId, 0, 0);
-    expect(active()[0].message).toBe('Downloading… 0 B · —');
+    expect(active()[0].message).toBe(messages.chat.remoteFile.fetching);
     await vi.advanceTimersByTimeAsync(1000);
     emit(requestId, 1024, 0);
     expect(active()[0].message).toBe('Downloading… 1.0 KB · 1.0 KB/s');

@@ -24,6 +24,8 @@ export function createFileTransferProgressValues() {
     }
     lastReceived = received;
     return {
+      // Until bytes arrive, an unavailable peer may be preparing an OSS fallback.
+      preparing: phase === 'download' && received === 0,
       percent: e.total > 0 ? Math.min(100, Math.floor((received / e.total) * 100)) : undefined,
       received: formatBytes(received),
       total: formatBytes(Math.max(0, e.total)),
@@ -39,6 +41,7 @@ export function createFileTransferProgressText(): (e: FileTransferProgress) => s
     if (e.phase === 'pack')
       return i18n.t('chat.remoteFile.downloadPacking', { size: values.received });
     if (e.phase === 'extract') return i18n.t('chat.remoteFile.downloadExtracting');
+    if (values.preparing) return i18n.t('chat.remoteFile.fetching');
     const key = e.phase === 'upload' ? 'uploadProgress' : 'downloadProgress';
     return i18n.t(`chat.remoteFile.${key}${e.total > 0 ? '' : 'Unknown'}`, values);
   };
