@@ -2007,6 +2007,16 @@ export class GoalController {
       }
     }
 
+    // 共享中的任务撞上账号限额不自动恢复(Dash 2026-10-08):停在 usageLimited 由房主手动恢复。
+    if (
+      status === 'usageLimited' &&
+      outcome.errorKind !== 'overload' &&
+      usageResetAt !== null &&
+      this.deps.isSessionShared?.(sessionId)
+    ) {
+      usageResetAt = null;
+    }
+
     // 目标改写(Option 1):模型澄清含糊目标后,经 refined_objective 报回更具体的目标。
     // 仅在目标继续推进(shouldFire)且新目标非空、与当前不同时确定性改写 storage.objective,
     // 让 chip 更新、后续续轮按新目标跑。终止/暂停态不改写(避免停掉的目标文案被无意义重写)。
@@ -2248,6 +2258,11 @@ export class GoalController {
       const state = await this.deps.storage.get(sessionId).catch(() => null);
       if (!isCurrent()) return;
       if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
+      // 等待期间开始共享:到点不自动恢复账号限额(过载短窗口照常),留给房主手动恢复。
+      if (state.lastReason !== OVERLOAD_LAST_REASON && this.deps.isSessionShared?.(sessionId)) {
+        this.deps.logger.info('[goal] skipped usage auto resume — task is shared', { sessionId });
+        return;
+      }
       // 预算已经用尽时一条都不该说：下面的 resumeGoal → fireTurn 有 preflight 预算守卫，
       // 会立刻把目标转成 budgetLimited、一轮都不发，而这张卡片已经落库，会在会话里永久
       // 留下一句「正在重试目标 / 用量已恢复」——那次重试根本没发生（review #844 codex P1）。

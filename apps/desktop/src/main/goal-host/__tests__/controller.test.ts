@@ -4123,6 +4123,42 @@ describe('GoalController', () => {
     }
   });
 
+  it('shared task: a usage limit stays usageLimited without scheduling an auto resume', async () => {
+    const local = makeController({ isSessionShared: () => true });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit', usageResetAt: 1000 });
+      await tick();
+      await tick();
+      const st = await local.storage.get('s1');
+      expect(st?.status).toBe('usageLimited');
+      expect(st?.usageResetAt).toBeNull();
+      expect(local.notices).toEqual([]);
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
+  it('shared task: a wait that becomes shared does not auto resume at the reset time', async () => {
+    // 报错时尚未共享(排了恢复),到点时已在共享。
+    const isSessionShared = vi.fn(() => isSessionShared.mock.calls.length > 1);
+    const local = makeController({ isSessionShared });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 });
+      await startGoal(local);
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+      await vi.waitFor(() => expect(isSessionShared).toHaveBeenCalledTimes(2));
+      await tick();
+      expect(local.notices).toEqual([]);
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+      expect(local.session.sends).toHaveLength(1);
+    } finally {
+      await local.controller.dispose();
+    }
+  });
+
   it('proactive: a would-be-continue turn flips to usageLimited when the account is limited', async () => {
     h.setAccountLimit({ limited: true, resetAtMs: 3_601_000 });
     await startGoal(h);

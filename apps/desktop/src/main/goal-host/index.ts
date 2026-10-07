@@ -17,6 +17,7 @@ import {
   resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
 } from '../maker-ipc/register.js';
+import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
@@ -126,6 +127,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       return null;
     },
     // usageLimited 到点自动续跑时,落一条"用量已恢复,继续目标"提示(渲染成 system card)。
+    isSessionShared: (sessionId) => isSessionSharedTaskActive(sessionId),
     persistGoalNotice: async (sessionId, kind) => {
       await createMessage(sessionId, {
         clientId: randomUUID(),

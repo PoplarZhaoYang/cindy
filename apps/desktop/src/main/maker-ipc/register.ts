@@ -1154,7 +1154,7 @@ import {
 import { stampSharedTaskInput } from './sharedTaskInput.js';
 import { createSharedTaskContextUsageGuard } from './sharedTaskContextUsage.js';
 import { createSharedTaskSettingGuard } from './sharedTaskSetting.js';
-import { assertSharedTaskInteractionResolveCurrent, setSharedTaskInteractionReader, setSharedTaskQueueReader } from '../device-link/sharedTaskDispatch.js';
+import { assertSharedTaskInteractionResolveCurrent, isSessionSharedTaskActive, setSharedTaskInteractionReader, setSharedTaskQueueReader } from '../device-link/sharedTaskDispatch.js';
 
 function captureSharedTaskSettingGuard(sessionId: string) {
   const context = getDeviceLinkInvokeContext();
@@ -1331,14 +1331,12 @@ async function isUsageLimitAutoResumeEligible(sessionId: string): Promise<boolea
   const row = await getSessionRowSnapshot(sessionId);
   // Orca worker 的失败已桥给 Lead 重新安排;伙伴有自己的候选链与群聊编排,都不在这里续跑。
   if (!row || row.orcaRole === 'worker' || row.source === 'bot') return false;
+  // 共享中的任务撞上限额不自动等待(Dash 2026-10-08):访客可能已影响本任务,等待期间撤权后
+  // 到点续跑不安全,交给房主手动处理。报错时与到点时都复核。
+  if (isSessionSharedTaskActive(sessionId)) return false;
   return !(await goalOwnsUsageLimitProbe?.(sessionId).catch(() => false));
 }
 
-/**
- * 会话所用账号的重置时刻:错误自带 → 报错原文 → 订阅用量快照(须显示已用满)。
- * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
- * 周期额度耗尽,按产品规则只报错不等待。
- */
 /**
  * 会话当前实际在跑的来源与模型:临时切换(set_session_runtime)或自动降级的运行时覆盖优先,
  * 否则用会话保存的选择。分模型额度必须按实际运行的模型匹配。
@@ -1358,6 +1356,11 @@ export function resolveSessionRuntimeRoute(
   };
 }
 
+/**
+ * 会话所用账号的重置时刻:错误自带 → 报错原文 → 订阅用量快照(须显示已用满)。
+ * 只服务订阅账号:API key / Coding Plan / 网关等来源的普通 429 即使带 Retry-After,也不是
+ * 周期额度耗尽,按产品规则只报错不等待。
+ */
 async function resolveSessionUsageResetAt(
   sessionId: string,
   signals: InterruptedTurnErrorSignals,
