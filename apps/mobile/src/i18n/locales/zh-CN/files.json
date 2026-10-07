@@ -96,7 +96,6 @@
     "downloadFailed": "下载失败",
     "fetchingVideo": "正在从电脑取回视频…",
     "fetchingAudio": "正在从电脑取回音频…",
-    "playFailed": "无法播放此视频",
     "videoBuffering": "正在缓冲…",
     "videoBufferingPercent": "正在缓冲 {{percent}}%",
     "fetchAvFailed": "取回失败：{{detail}}",

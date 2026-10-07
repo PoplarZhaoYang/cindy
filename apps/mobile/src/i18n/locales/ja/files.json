@@ -96,7 +96,6 @@
     "downloadFailed": "ダウンロードに失敗しました",
     "fetchingVideo": "パソコンから動画を取得中…",
     "fetchingAudio": "パソコンから音声を取得中…",
-    "playFailed": "この動画を再生できません",
     "videoBuffering": "バッファリング中…",
     "videoBufferingPercent": "バッファリング中 {{percent}}%",
     "fetchAvFailed": "取得に失敗しました：{{detail}}",

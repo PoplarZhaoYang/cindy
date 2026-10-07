@@ -104,10 +104,12 @@ describe('remote file preview pager wiring', () => {
   });
 
   it('plays video with the system player and keeps it filling the page', () => {
-    // 视频走系统原生播放器(控件、全屏、旋转都由系统负责);data: 地址原生播放器
-    // 不支持,与音频一起留在 WebView 播放器。
+    // 视频走系统原生播放器(控件、全屏、旋转都由系统负责);data: 地址与原生播放器
+    // 报错的格式(iOS 上的 WebM)退回 WebView 播放器,原来能播的文件不能退化。
     const avPage = source.slice(source.indexOf('function AvPreviewPage('), source.indexOf('function PdfPreviewPage('));
-    expect(avPage).toContain("if (kind === 'video' && !url.startsWith('data:')) {");
+    expect(avPage).toContain("if (kind === 'video' && !nativeFailed && !url.startsWith('data:')) {");
+    expect(avPage).toContain('onError={handleNativePlaybackError}');
+    expect(avPage).toContain('setNativeFailed(true);');
     const nativeSource = readSource('src/session/NativeVideoPlayer.tsx');
     expect(nativeSource).toMatch(/stage: \{[^}]*\bflex: 1\b[^}]*\}/);
     expect(nativeSource).toContain('nativeControls');

@@ -842,7 +842,8 @@ function FilePreviewPage({
 
 /**
  * 音视频页:导出→presign→播放(切后台/翻页失活自动暂停,回到本页不自动续播)。
- * 视频走系统原生播放器;音频与 data: 地址(原生播放器不支持)仍走消息同款 WebView 播放器。
+ * 视频走系统原生播放器;音频、data: 地址,以及原生播放器报错的格式(如 iOS 上的 WebM)
+ * 仍走消息同款 WebView 播放器——原来能在 WebView 里播的文件不能因换播放器而退化。
  * 电脑上传期间显示真实百分比与速度,旧版电脑不回报字节时只显示转圈。
  */
 function AvPreviewPage({
@@ -867,19 +868,21 @@ function AvPreviewPage({
   const { colors } = useTheme();
   const { t } = useTranslation();
   const [url, setUrl] = useState<string | null>(null);
-  const [failure, setFailure] = useState<'read' | 'play' | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [nativeFailed, setNativeFailed] = useState(false);
   const [progress, setProgress] = useState<TransferProgress | null>(null);
   const [requestEpoch, setRequestEpoch] = useState(0);
   const requestedRef = useRef(false);
   const retry = useCallback(() => {
     requestedRef.current = false;
-    setUrl(null);
     setRequestEpoch((epoch) => epoch + 1);
   }, []);
-  const handlePlaybackError = useCallback((detail: string) => {
-    mobileDebugLog('warn', 'files', 'av preview playback failed', { kind, error: sanitizeDiagnosticText(detail) });
-    setFailure('play');
-  }, [kind]);
+  const handleNativePlaybackError = useCallback((detail: string) => {
+    mobileDebugLog('warn', 'files', 'native video failed, falling back to web player', {
+      error: sanitizeDiagnosticText(detail),
+    });
+    setNativeFailed(true);
+  }, []);
 
   useEffect(() => {
     if (!active || requestedRef.current || !workdir) return undefined;
@@ -888,7 +891,7 @@ function AvPreviewPage({
     const startedAt = Date.now();
     const measure = createTransferProgressMeter();
     mobileDebugLog('debug', 'files', 'av preview fetch start', { kind, size: item.sizeBytes });
-    setFailure(null);
+    setFailed(false);
     setProgress(null);
     void exportToUrl(item.relPath, item.mtimeMs, {
       onProgress: (uploaded, total) => {
@@ -899,23 +902,24 @@ function AvPreviewPage({
         mobileDebugLog('debug', 'files', 'av preview fetch done', {
           kind, ms: Date.now() - startedAt, source: resolvedUrlKind(next), left: cancelled,
         });
-        if (!cancelled) setUrl(next);
+        if (cancelled) return;
+        setNativeFailed(false);
+        setUrl(next);
       })
       .catch((err) => {
         mobileDebugLog(cancelled ? 'debug' : 'warn', 'files', 'av preview fetch failed', {
           kind, ms: Date.now() - startedAt, left: cancelled, error: errorText(err),
         });
         if (cancelled) return;
-        setFailure('read');
+        setFailed(true);
       });
     return () => {
       cancelled = true;
     };
   }, [active, exportToUrl, item.mtimeMs, item.relPath, item.sizeBytes, kind, requestEpoch, workdir]);
 
-  if (failure) {
-    return <UnsupportedPage item={item} onDownload={onDownload} reason={t(failure === 'play' ? 'files.preview.playFailed' : 'files.preview.readFailed')}
-      onRetry={retry} />;
+  if (failed) {
+    return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.readFailed')} onRetry={retry} />;
   }
   if (!url) {
     return (
@@ -937,10 +941,10 @@ function AvPreviewPage({
       </View>
     );
   }
-  if (kind === 'video' && !url.startsWith('data:')) {
+  if (kind === 'video' && !nativeFailed && !url.startsWith('data:')) {
     return (
       <NativeVideoPlayer
-        onError={handlePlaybackError}
+        onError={handleNativePlaybackError}
         testID="filePreview.avPlayer"
         url={url}
         visible={visible}
