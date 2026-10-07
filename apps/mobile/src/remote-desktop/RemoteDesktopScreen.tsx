@@ -662,6 +662,17 @@ export function RemoteDesktopSession({
     () => ({ current: new RemoteDesktopViewerSession(request) }),
     [request],
   );
+  const updateLockOnExit = (enabled: boolean) => {
+    setLockOnExit(enabled);
+    // Requests and exit can run before React commits the preference update.
+    exitLockPolicy.current = enabled;
+    exitLock.current = enabled && caps?.lockOnExit === true;
+    const current = active.current;
+    if (current)
+      void request({ op: "heartbeat", lease: current.lease }).catch(() => {
+        // Local preference remains saved; the regular heartbeat retries sync.
+      });
+  };
   const authRef = useRef(auth);
   authRef.current = auth;
   const loadIceServers = (attemptId: string) =>
@@ -3331,7 +3342,7 @@ export function RemoteDesktopSession({
                     lockOnExit,
                     lockOnExitAvailable:
                       lockOnExitLoaded && caps?.lockOnExit === true,
-                    onLockOnExit: setLockOnExit,
+                    onLockOnExit: updateLockOnExit,
                   }}
                   connected={Boolean(lease) && !connectionPending}
                   controlling={Boolean(lease?.controlling)}

@@ -3147,6 +3147,65 @@ describe("remote desktop controls", () => {
       }
     },
   );
+  it.each([true, false])(
+    "syncs a changed lock policy immediately and retries after failure, enabled=%s",
+    async (enabled) => {
+      act(() => root.unmount());
+      fixture.lockPreferenceFromStorage = true;
+      const key = "cindy.mobile.remote-desktop.lock-on-exit.v1.computer";
+      storage.items.set(key, String(!enabled));
+      root = createRoot(host);
+      await act(async () => root.render(<RemoteDesktopScreen />));
+      await connect();
+      act(() => button("operations").click());
+      act(() => button("security").click());
+      let rejectSync!: (error: Error) => void;
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "heartbeat"
+          ? new Promise((_, reject) => {
+              rejectSync = reject;
+            })
+          : original(...args),
+      );
+      const toggle = host.querySelector(
+        '[data-testid="remoteDesktop.lockOnExit"]',
+      ) as HTMLButtonElement;
+      await act(async () => toggle.click());
+      // No timer advance: the first heartbeat must already carry the new value.
+      expect(requests().filter((r) => r.op === "heartbeat")).toEqual([
+        { op: "heartbeat", lease: "lease", lockOnExit: enabled },
+      ]);
+      expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+      expect(storage.items.get(key)).toBe(String(enabled));
+      await act(async () => rejectSync(new Error("offline")));
+      expect(toggle.getAttribute("aria-checked")).toBe(String(enabled));
+      let finishRenewal!: (value: unknown) => void;
+      fixture.invoke.mockImplementation((...args) =>
+        args[2][0].op === "heartbeat"
+          ? new Promise((resolve) => {
+              finishRenewal = resolve;
+            })
+          : original(...args),
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(3000));
+      expect(requests().filter((r) => r.op === "heartbeat")).toHaveLength(2);
+      expect(
+        requests().filter((r) => r.op === "heartbeat").at(-1),
+      ).toMatchObject({ lockOnExit: enabled });
+      await act(async () => button("disconnect").click());
+      expect(requests().filter((r) => r.op === "stop")).toEqual([
+        {
+          op: "stop",
+          lease: "lease",
+          ...(enabled ? { lockScreen: true } : {}),
+        },
+      ]);
+      await act(async () => finishRenewal({ controlling: true }));
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(goBackGuarded).toHaveBeenCalledTimes(1);
+    },
+  );
   it("requests lock once on explicit exit, independent of automatic unlock", async () => {
     fixture.lockOnExit = true;
     await act(async () => root.render(<RemoteDesktopScreen />));
