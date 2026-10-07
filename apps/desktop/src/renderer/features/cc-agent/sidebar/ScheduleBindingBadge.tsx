@@ -12,20 +12,19 @@
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
-import type { Schedule } from '@cindy/maker-scheduler';
+import type { ScheduleBinding } from '@/features/scheduler/lib/scheduleBindingIndex';
 
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
-import {
-  cronToConfig,
-  summarizeConfig,
-} from '@/features/scheduler/lib/cronCodexPreset';
+import { cronToConfig, summarizeConfig } from '@/features/scheduler/lib/cronCodexPreset';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 
 export interface ScheduleBindingBadgeProps {
   /** 绑定到当前会话的 schedules(expired 已由 selector 滤掉)。空数组不渲染。 */
-  schedules: readonly Schedule[];
+  schedules: readonly ScheduleBinding[];
+  /** 远程只展示绑定信息，不把远程 ID 带进本机自动化管理页。 */
+  deviceLinkDeviceId?: string | null;
   /** Timer 图标尺寸,sidebar 10 / header 13。 */
   size?: number;
   className?: string;
@@ -35,7 +34,7 @@ export interface ScheduleBindingBadgeProps {
 
 /** 单条 schedule 的触发频率文案(与 RunHistoryPane 同源逻辑)。 */
 function frequencyText(
-  schedule: Schedule,
+  schedule: ScheduleBinding,
   t: ReturnType<typeof useTranslation>['t'],
 ): string {
   return schedule.manual
@@ -45,6 +44,7 @@ function frequencyText(
 
 export function ScheduleBindingBadge({
   schedules,
+  deviceLinkDeviceId,
   size = 10,
   className,
   activeForeground = false,
@@ -54,32 +54,42 @@ export function ScheduleBindingBadge({
   if (schedules.length === 0) return null;
 
   const allPaused = schedules.every((s) => s.status === 'paused');
+  const icon = (
+    <AutomationTimerIcon size={size} paused={allPaused} activeForeground={activeForeground} />
+  );
 
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <button
-          type="button"
-          aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-          onClick={(e) => {
-            // 防止冒泡触发 SessionItem 行导航(与 WorktreeBadge 同款处理)
-            e.stopPropagation();
-            navigate(scheduleFocusPath(schedules[0].id));
-          }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-          className={cn(
-            'inline-flex shrink-0 items-center justify-center',
-            'cursor-pointer focus:outline-none',
-            className,
-          )}
-        >
-          <AutomationTimerIcon
-            size={size}
-            paused={allPaused}
-            activeForeground={activeForeground}
-          />
-        </button>
+        {deviceLinkDeviceId ? (
+          <span
+            role="img"
+            aria-label={t('ccAgent.sidebar.scheduleBinding.label')}
+            tabIndex={0}
+            className={cn('inline-flex shrink-0 items-center justify-center', className)}
+          >
+            {icon}
+          </span>
+        ) : (
+          <button
+            type="button"
+            aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
+            onClick={(e) => {
+              // 防止冒泡触发 SessionItem 行导航(与 WorktreeBadge 同款处理)
+              e.stopPropagation();
+              navigate(scheduleFocusPath(schedules[0].id));
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            className={cn(
+              'inline-flex shrink-0 items-center justify-center',
+              'cursor-pointer focus:outline-none',
+              className,
+            )}
+          >
+            {icon}
+          </button>
+        )}
       </Tooltip.Trigger>
       <Tooltip.Content side="top" variant="mono">
         <div className="flex flex-col gap-1">
