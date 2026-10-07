@@ -116,6 +116,7 @@ import {
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
+import { useAgentDeviceModelMemoryVersion } from '@/state/agentDeviceModelMemory';
 import {
   deliverRecoverableHandoff,
   rememberRecoverableHandoff,
@@ -173,7 +174,8 @@ import {
 } from './deferredUiAssignment';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { ChevronDown, Cpu, MessageSquare, MonitorSmartphone } from 'lucide-react';
+import { ChevronDown, MessageSquare, MonitorSmartphone } from 'lucide-react';
+import { VendorIcon } from '@/components/sidebar/VendorIcon';
 import { HomeSuggestionList } from './HomeSuggestionList';
 import { type HomeSuggestionId, homeSuggestionPromptKey } from './homeSuggestions';
 import {
@@ -1559,14 +1561,22 @@ export function NewMakerDraftRoute() {
   ]);
 
   // 运行 Agent 的电脑只提供模型目录：任务在本机，没有远程草稿默认值，改用本次运行内对这台
-  // 电脑的上一次选择(见 agentDeviceDraftMemory)。
+  // 电脑的上一次选择 + 本机为这台电脑记的每模型档位(见 agentDeviceDraftMemory)。
+  const agentDeviceModelMemoryVersion = useAgentDeviceModelMemoryVersion();
   const deviceDraftDefaultsReady = isAgentDeviceDraft || remoteDraftState.status === 'ready';
   const deviceDraftDefaults = useMemo<RemoteDraftDefaults | null>(
     () =>
       isAgentDeviceDraft && effectiveAgentDeviceId
         ? recallAgentDeviceSelection(effectiveAgentDeviceId, capabilityAgentKind)
         : remoteDraftState.value,
-    [isAgentDeviceDraft, effectiveAgentDeviceId, capabilityAgentKind, remoteDraftState.value],
+    // agentDeviceModelMemoryVersion:档位记忆变了要重新取回,切模型时才按最新档位还原。
+    [
+      isAgentDeviceDraft,
+      effectiveAgentDeviceId,
+      capabilityAgentKind,
+      remoteDraftState.value,
+      agentDeviceModelMemoryVersion,
+    ],
   );
 
   // seed dlSel:等被控端 capabilities + 草稿值都就绪后播种。切设备 / vendor 必须重种；同一目标
@@ -5775,7 +5785,13 @@ export function NewMakerDraftRoute() {
                     标识同位置、同样式,两者互斥。 */}
                 {isAgentDeviceDraft && (
                   <div className="mt-3 flex max-w-full items-center gap-2 self-center rounded-full border border-[var(--border-default)] bg-[var(--surface-chip)] px-3 py-1 text-12 text-[var(--text-secondary)]">
-                    <Cpu size={14} strokeWidth={2} className="shrink-0 text-[var(--folder-item-icon)]" />
+                    {/* 与侧栏同一标识:Agent 图标 + 右上信号波纹。 */}
+                    <VendorIcon
+                      vendor={persistedAgentKind}
+                      size={persistedAgentKind === 'cc' ? 14 : 13}
+                      remote
+                      colorClassName="text-[var(--folder-item-icon)]"
+                    />
                     <span className="min-w-0 truncate">
                       {t('ccAgent.draft.agentDeviceBanner', {
                         device: draft.agentDeviceName ?? effectiveAgentDeviceId ?? '',
