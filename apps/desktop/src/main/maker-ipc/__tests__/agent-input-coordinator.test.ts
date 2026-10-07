@@ -13470,6 +13470,64 @@ describe('usage-limit wait (ordinary tasks)', () => {
     expect(latestProjection(h.projections).error).toBe("You've hit your session limit");
   });
 
+  // 访客 steer 的两种时序都不得挂等待:ACK 先到时本轮归属换成访客 steer 项(被访客判据挡住);
+  // 终态先到时 steer 仍在途、不形成可续的 recovery,也就不会报告候选。
+  it('does not offer a wait once a guest steer joined the turn, even before its ack', async () => {
+    const guest = (sid: string, clientId: string) => ({
+      ...makeItem(clientId, 'guest steer'),
+      sharedTaskAuthor: {
+        sharedTaskId: 'st-1',
+        sessionId: sid,
+        memberId: 'm-1',
+        accountId: 'a-1',
+        displayName: 'Guest',
+      },
+    });
+    for (const ackBeforeError of [true, false]) {
+      const h = createHarness();
+      const sid = `usage-wait-guest-steer-${ackBeforeError}`;
+      h.sendToAgent.mockImplementationOnce(async () => {
+        h.setRunning(true);
+        return sendSuccess();
+      });
+      h.coordinator.enqueue(sid, makeItem('owner', 'owner task'));
+      await flush();
+      let ack!: () => void;
+      h.steerToAgent.mockImplementationOnce(() => new Promise<void>((resolve) => { ack = resolve; }));
+      const steering = h.coordinator.steer(sid, guest(sid, 'guest-steer'));
+      await flush();
+      if (ackBeforeError) {
+        ack();
+        await steering;
+      }
+      h.setRunning(false);
+      h.coordinator.onTurnEvent(sid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+      await flush();
+      if (!ackBeforeError) {
+        ack();
+        await steering;
+        await flush();
+      }
+      expect(h.onUsageLimitedTurnError).not.toHaveBeenCalled();
+    }
+
+    // 房主自己的 steer 不影响。
+    const owner = createHarness();
+    const ownerSid = 'usage-wait-owner-steer';
+    owner.sendToAgent.mockImplementationOnce(async () => {
+      owner.setRunning(true);
+      return sendSuccess();
+    });
+    owner.coordinator.enqueue(ownerSid, makeItem('owner', 'owner task'));
+    await flush();
+    await owner.coordinator.steer(ownerSid, makeItem('owner-steer', 'more detail'));
+    await flush();
+    owner.setRunning(false);
+    owner.coordinator.onTurnEvent(ownerSid, 'error', "You've hit your session limit", LIMIT_SIGNALS);
+    await flush();
+    expect(owner.onUsageLimitedTurnError).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an arm for a superseded candidate even if a newer error is showing', async () => {
     const sid = 'usage-wait-stale';
     const { h, candidate } = await failWithLimit(sid, true);
