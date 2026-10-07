@@ -97,10 +97,14 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     getAccountLimit: async (agentKind, sessionId, turnError) => {
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
-      // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
-      if (turnError !== undefined && subscriptionFamilyOf(agentKind, providerId)) {
-        const fromError = readTurnUsageResetAt(turnError);
-        if (fromError !== null) return { limited: true, resetAtMs: fromError };
+      if (subscriptionFamilyOf(agentKind, providerId)) {
+        // 报错原文写明的重置时刻只对订阅账号可信(非订阅来源的是分钟级请求限流)。
+        if (turnError !== undefined) {
+          const fromError = readTurnUsageResetAt(turnError);
+          if (fromError !== null) return { limited: true, resetAtMs: fromError };
+        }
+        // SSH 远程会话用远端主机自己的登录,本机订阅快照属于另一个账号(与普通任务同一边界)。
+        if (row?.remoteHostId) return null;
       }
       const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
         () => null,
