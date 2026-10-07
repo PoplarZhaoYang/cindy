@@ -1266,6 +1266,16 @@ export function LoginPage({
       };
     }
     if (loginState.step === 'error' || credentialStoreFailed || rateLimited) {
+      // A rate limit can cover a still-valid form. Dismiss only the notice:
+      // resetting main's flow would discard its ticket and require another code.
+      const resumeForm = rateLimited && loginState.step !== 'error';
+      const returnFromError = resumeForm
+        ? () => {
+            if (localModePendingRef.current) return;
+            setCredentialHelpOpen(false);
+            clearError();
+          }
+        : reset;
       return {
         ssoOrgGroupY: false,
         node: (
@@ -1273,7 +1283,7 @@ export function LoginPage({
             <LoginBackButton
               disabled={isLoading || localModePending}
               label={t('login.back')}
-              onClick={reset}
+              onClick={returnFromError}
             />
             <LoginTitleBlock
               title={t(
@@ -1292,8 +1302,12 @@ export function LoginPage({
               }
             />
             {(credentialStoreFailed || rateLimited) && (
-              <LoginTextLink disabled={isLoading} onClick={reset} testId="login-credential-recheck">
-                {t('credentialStore.recheck')}
+              <LoginTextLink
+                disabled={isLoading}
+                onClick={returnFromError}
+                testId="login-credential-recheck"
+              >
+                {t(resumeForm ? 'login.back' : 'credentialStore.recheck')}
               </LoginTextLink>
             )}
             <LoginPrimaryButton

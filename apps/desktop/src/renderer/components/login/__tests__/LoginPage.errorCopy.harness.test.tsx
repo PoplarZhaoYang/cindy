@@ -131,6 +131,59 @@ function mountWithError(code: string) {
 }
 
 describe('error-copy 桌面 19 码表 + 兜底(现网 i18n verbatim,#D91F37 族)', () => {
+  it.each([
+    ['verification-code', 'login-back-button'],
+    ['verification-code', 'login-credential-recheck'],
+    ['binding-contact', 'login-back-button'],
+    ['binding-contact', 'login-credential-recheck'],
+    ['binding-code', 'login-back-button'],
+    ['binding-code', 'login-credential-recheck'],
+  ])('returns from a rate limit to the unchanged %s form via %s', (step, entry) => {
+    const state =
+      step === 'verification-code'
+        ? { step, kind: 'email', identifier: 'person@example.com' }
+        : {
+            step: 'binding',
+            bindType: 'email',
+            codeRequested: step === 'binding-code',
+            contact: step === 'binding-code' ? 'person@example.com' : undefined,
+          };
+    loginHook.value.loginState = state;
+    loginHook.value.clearError = vi.fn(() => {
+      loginHook.value.errorCode = null;
+      loginHook.value.retryAt = undefined;
+    });
+    const view = render(<LoginPage />);
+    const value = step === 'binding-contact' ? 'person@example.com' : '123456';
+    fireEvent.change(screen.getByTestId('login-input'), { target: { value } });
+    loginHook.value.errorCode = 'RATE_LIMITED';
+    loginHook.value.retryAt = Date.now() + 120_000;
+    view.rerender(<LoginPage />);
+    fireEvent.click(screen.getByTestId(entry));
+    expect(loginHook.value.clearError).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+    expect(loginHook.value.loginState).toBe(state);
+    view.rerender(<LoginPage />);
+    const input = screen.getByTestId('login-input') as HTMLInputElement;
+    expect(input.value).toBe(value);
+    fireEvent.submit(input.closest('form')!);
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith(
+      step === 'verification-code'
+        ? { type: 'verify-code', kind: 'email', identifier: 'person@example.com', code: value }
+        : step === 'binding-code'
+          ? { type: 'verify-binding', contact: 'person@example.com', code: value }
+          : { type: 'request-binding-code', contact: value },
+    );
+  });
+
+  it('still resets when rate-limited initialization has no form to resume', () => {
+    loginHook.value.errorCode = 'RATE_LIMITED';
+    loginHook.value.loginState = { step: 'error', code: 'RATE_LIMITED', recoverTo: 'identifier' };
+    render(<LoginPage />);
+    fireEvent.click(screen.getByTestId('login-credential-recheck'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'reset' });
+  });
+
   it('distinguishes rate limits, shows the server deadline and offers private logs', async () => {
     const view = mountWithError('RATE_LIMITED');
     expect(screen.getByText(zhCN.login.rateLimit.unknownWait)).toBeTruthy();
