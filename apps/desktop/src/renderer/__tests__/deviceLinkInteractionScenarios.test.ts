@@ -813,6 +813,60 @@ describe('device-link 失效问题与计划收口', () => {
   };
   const plan = { kind: 'plan_review', requestId: 'stale-plan', plan: '# Plan', planFilePath: '' };
 
+  it.each(['rejected', 'lost', 'timeout', 'snapshot', 'push'] as const)(
+    '%s 后同一计划保留本地编辑，再次批准发送草稿', async (trigger) => {
+      vi.useFakeTimers();
+      try {
+        const s = openRemoteSession();
+        host.hostInteraction(s, plan, 'persist-edited-plan');
+        host.seedPending(s, plan, 'persist-edited-plan');
+        makerChatStore.updatePendingPlanReviewContent(s, plan.requestId, '# My edited plan');
+        makerChatStore.setPlanViewerState(s, 'edit');
+        if (trigger === 'snapshot') await makerChatStore.reconcilePendingInteractions(s);
+        else if (trigger === 'push') host.hostInteraction(s, plan, 'persist-edited-plan');
+        else {
+          if (trigger === 'rejected') host.invoke.mockResolvedValueOnce({ accepted: false });
+          if (trigger === 'lost') host.invoke.mockRejectedValueOnce(new Error('receipt lost'));
+          if (trigger === 'timeout') host.invoke.mockImplementationOnce(() => new Promise(() => {}));
+          makerChatStore.respondToPlanReview(s, plan.requestId, true);
+          await vi.advanceTimersByTimeAsync(trigger === 'timeout' ? 15_001 : 0);
+        }
+        const state = makerChatStore.getSnapshot(s);
+        expect(state.pendingPlanReview?.plan).toBe('# My edited plan');
+        expect(state.planViewerState).toBe('edit');
+        expect(state.lastExpandedPlanViewerState).toBe('edit');
+        expect(state.messages.find(m => m.planReviewRequestId === plan.requestId)?.planReviewPlan).toBe('# My edited plan');
+        makerChatStore.respondToPlanReview(s, plan.requestId, true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(host.resolved).toEqual([{ requestId: plan.requestId, decision: {
+          kind: 'plan_review', behavior: 'allow', editedPlan: '# My edited plan',
+        } }]);
+        expect(makerChatStore.getSnapshot(s).pendingPlanReview).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('本机重查保留收起的编辑草稿，新请求不会继承草稿或显示状态', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([{ request: plan, persistId: 'local-plan' }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    makerChatStore.updatePendingPlanReviewContent(s, plan.requestId, '# Local draft');
+    makerChatStore.setPlanViewerState(s, 'edit');
+    makerChatStore.setPlanViewerState(s, 'minimized');
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s)).toMatchObject({
+      pendingPlanReview: { plan: '# Local draft' }, planViewerState: 'minimized', lastExpandedPlanViewerState: 'edit',
+    });
+    local.localGetPendingInteractions.mockResolvedValue([{ request: { ...plan, requestId: 'new-plan', plan: '# New plan' }, persistId: 'new-plan' }]);
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(makerChatStore.getSnapshot(s)).toMatchObject({
+      pendingPlanReview: { requestId: 'new-plan', plan: '# New plan' }, planViewerState: 'expanded', lastExpandedPlanViewerState: 'expanded',
+    });
+    expect(makerChatStore.getSnapshot(s).messages.find(m => m.planReviewRequestId === plan.requestId)?.planReviewStatus).toBe('expired');
+  });
+
   it('重连后的空快照清掉错过撤回通知的卡片、草稿和历史待回答状态', async () => {
     const s = openRemoteSession();
     host.hostInteraction(s, ask, 'persist-stale-ask');

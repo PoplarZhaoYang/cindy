@@ -6757,6 +6757,15 @@ export function handleStreamEvent(
       // Guard against malformed events (Minor #6): empty requestId or plan
       // would produce an un-resolvable pending review. Drop on the floor.
       if (!data.requestId || !data.plan) return state;
+      // Host snapshots and duplicate pushes carry the original request, while
+      // remote plan edits only live here. Replaying the same pending request
+      // must preserve its draft and viewer state until a decision or dismissal.
+      const keepPlanProgress = state.pendingPlanReview?.requestId === data.requestId;
+      const pendingPlan = keepPlanProgress ? state.pendingPlanReview! : {
+        requestId: data.requestId,
+        plan: data.plan,
+        planFilePath: data.planFilePath,
+      };
       // F1-a: plan_review 消息的落库(+ 在飞 assistant flush)已收口 main
       // (onInteractionMessage),renderer 只做 UI:finalize + 用 main 下发的 persistId 建
       // plan_review 气泡(onCreated dedup;answered/feedback 回写命中这条 persistId 单行)。
@@ -6775,8 +6784,8 @@ export function handleStreamEvent(
                     ...m,
                     isStreaming: false,
                     planReviewStatus: 'pending' as const,
-                    planReviewPlan: data.plan,
-                    planReviewFilePath: data.planFilePath,
+                    planReviewPlan: pendingPlan.plan,
+                    planReviewFilePath: pendingPlan.planFilePath,
                     planReviewFeedback: undefined,
                   }
                 : m,
@@ -6793,22 +6802,18 @@ export function handleStreamEvent(
                 isStreaming: false,
                 planReviewStatus: 'pending' as const,
                 planReviewRequestId: data.requestId,
-                planReviewPlan: data.plan,
-                planReviewFilePath: data.planFilePath,
+                planReviewPlan: pendingPlan.plan,
+                planReviewFilePath: pendingPlan.planFilePath,
                 createdAt: new Date().toISOString(),
               },
             ];
 
       return {
         ...finalized,
-        pendingPlanReview: {
-          requestId: data.requestId,
-          plan: data.plan,
-          planFilePath: data.planFilePath,
-        },
+        pendingPlanReview: pendingPlan,
         // Default to expanded + remember as the restore target for minimized
-        planViewerState: 'expanded',
-        lastExpandedPlanViewerState: 'expanded',
+        planViewerState: keepPlanProgress ? state.planViewerState : 'expanded',
+        lastExpandedPlanViewerState: keepPlanProgress ? state.lastExpandedPlanViewerState : 'expanded',
         messages: planMessages,
       };
     }
