@@ -24,6 +24,7 @@ const loginHook = vi.hoisted(() => ({
   value: {
     isLoading: false,
     errorCode: null as string | null,
+    retryAt: undefined as number | undefined,
     loginState: null as unknown,
     dispatch: vi.fn(async () => true),
     dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
@@ -103,6 +104,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   loginHook.value.errorCode = null;
+  loginHook.value.retryAt = undefined;
   loginHook.value.dispatch = vi.fn(async () => true);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
@@ -119,6 +121,7 @@ function mountWithError(code: string) {
   loginHook.value = {
     isLoading: false,
     errorCode: code,
+    retryAt: undefined,
     loginState: identifierState,
     dispatch: vi.fn(async () => true),
     dispatchWithResult: vi.fn(async () => ({ success: true, code: null })),
@@ -128,6 +131,26 @@ function mountWithError(code: string) {
 }
 
 describe('error-copy 桌面 19 码表 + 兜底(现网 i18n verbatim,#D91F37 族)', () => {
+  it('distinguishes rate limits, shows the server deadline and offers private logs', async () => {
+    const view = mountWithError('RATE_LIMITED');
+    expect(screen.getByText(zhCN.login.rateLimit.unknownWait)).toBeTruthy();
+    const retryAt = Date.now() + 120_000;
+    loginHook.value.retryAt = retryAt;
+    view.rerender(<LoginPage />);
+    expect(
+      screen.getByText(
+        i18next.t('login.rateLimit.retryAt', {
+          time: new Date(retryAt).toLocaleString('zh-CN'),
+        }),
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByTestId('login-error-retry'));
+    expect(screen.getByText(zhCN.login.rateLimit.support)).toBeTruthy();
+    expect(screen.queryByText(zhCN.credentialStore.dialog.stepRestartMac)).toBeNull();
+    fireEvent.click(screen.getByText(zhCN.credentialStore.dialog.openLogs));
+    await waitFor(() => expect(window.electronAPI.openLogsDir).toHaveBeenCalledOnce());
+  });
+
   it('preserves the local-mode guard across remounts with no hook-local error', () => {
     loginHook.value.errorCode = null;
     loginHook.value.loginState = {

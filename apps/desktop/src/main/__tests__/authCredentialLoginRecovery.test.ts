@@ -19,9 +19,11 @@ function setup({
   authenticated = false,
   passive = false,
   code = 'CREDENTIAL_STORE_UNAVAILABLE',
+  retryAt = undefined as number | undefined,
 } = {}) {
   class AuthApiError extends Error {
     statusCode = 503;
+    retryAt = retryAt;
     constructor(public code: string) {
       super(code);
     }
@@ -58,6 +60,22 @@ function setup({
 }
 
 describe('credential failure during fresh sign-in', () => {
+  it('passes the server cooldown without triggering credential recovery or dropping the form', async () => {
+    const harness = setup({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000 });
+    const result = await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(result).toEqual({
+      success: false,
+      code: 'RATE_LIMITED',
+      retryAt: 1_800_000_000_000,
+      state: harness.previous,
+    });
+    expect(harness.needsRecovery()).toBe(false);
+  });
   it.each([
     { backendUnavailable: true, authenticated: false, passive: false, recovery: true },
     { backendUnavailable: false, authenticated: false, passive: false, recovery: false },

@@ -6584,6 +6584,13 @@
       "INVALID_LOGIN_TICKET": "登入會話已過期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已過期，請重新登入",
       "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配"
+    },
+    "rateLimit": {
+      "retryAt": "請在 {{time}}（本機時間）之後重試。",
+      "unknownWait": "伺服器未提供等待時間，請稍後再試，避免連續取得驗證碼。",
+      "intro": "登入服務暫時限制了請求次數。這與本機憑證儲存異常是不同的問題。",
+      "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
+      "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
     }
   },
   "legacyMigration": {

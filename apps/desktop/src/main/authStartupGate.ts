@@ -95,13 +95,21 @@ export interface PreparingGateLog {
 export type LoginProvidersLoadFailure = {
   success: false;
   code: string;
+  retryAt?: number;
   state: { step: 'error'; code: string; recoverTo: 'identifier' };
 };
 
 /** 把 getProviders 失败(含准备态超时)映射成既有可重试错误步。 */
 export function mapLoginProvidersLoadFailure(error: unknown): LoginProvidersLoadFailure {
   const code = error instanceof AuthApiError ? error.code : 'AUTH_SERVICE_UNAVAILABLE';
-  return { success: false, code, state: { step: 'error', code, recoverTo: 'identifier' } };
+  return {
+    success: false,
+    code,
+    state: { step: 'error', code, recoverTo: 'identifier' },
+    ...(code === 'RATE_LIMITED' && error instanceof AuthApiError && error.retryAt !== undefined
+      ? { retryAt: error.retryAt }
+      : {}),
+  };
 }
 
 /**

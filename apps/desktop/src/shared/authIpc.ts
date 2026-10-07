@@ -29,7 +29,7 @@ export type DesktopLoginAction =
 
 export type DesktopLoginActionResult =
   | { success: true; state: AuthFlowState }
-  | { success: false; code: string; state: AuthFlowState | null };
+  | { success: false; code: string; state: AuthFlowState | null; retryAt?: number };
 
 /**
  * 登录准备态(「正在连接登录服务」)最多转圈的时长。
@@ -39,7 +39,7 @@ export const LOGIN_PREPARING_UNLOCK_TIMEOUT_MS = 30_000;
 
 export type SettledDesktopLoginActionResult =
   | { success: true; state: AuthFlowState }
-  | { success: false; code: string; state: AuthFlowState };
+  | { success: false; code: string; state: AuthFlowState; retryAt?: number };
 
 export function loginPreparingErrorState(
   code = 'AUTH_SERVICE_UNAVAILABLE',
@@ -54,10 +54,10 @@ export function settleDesktopLoginResult(
   if (result.state) {
     return result.success
       ? { success: true, state: result.state }
-      : { success: false, code: result.code, state: result.state };
+      : { ...result, state: result.state };
   }
   const code = result.success === false ? result.code : 'AUTH_SERVICE_UNAVAILABLE';
-  return { success: false, code, state: loginPreparingErrorState(code) };
+  return { ...result, success: false, code, state: loginPreparingErrorState(code) };
 }
 
 /**

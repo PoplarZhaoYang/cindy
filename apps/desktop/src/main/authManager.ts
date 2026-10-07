@@ -553,7 +553,8 @@ export function needsCredentialProcessRecovery(): boolean {
   return (
     credentialEncryptionUnavailable &&
     (credentialStoreHealth.unavailable ||
-      (loginFlowState?.step === 'error' && loginFlowState.code === 'CREDENTIAL_STORE_UNAVAILABLE')) &&
+      (loginFlowState?.step === 'error' &&
+        loginFlowState.code === 'CREDENTIAL_STORE_UNAVAILABLE')) &&
     accessToken === null &&
     getActiveAppSession().mode === 'signed-out' &&
     !isPassiveSharedUserDataInstance()
@@ -5639,7 +5640,14 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'
         ? { step: 'error', code, recoverTo: 'identifier' }
         : (stateBeforeAction ?? { step: 'error', code, recoverTo: 'identifier' });
-    return { success: false, code, state: loginFlowState };
+    return {
+      success: false,
+      code,
+      state: loginFlowState,
+      ...(code === 'RATE_LIMITED' && error instanceof AuthApiError && error.retryAt !== undefined
+        ? { retryAt: error.retryAt }
+        : {}),
+    };
   }
 }
 

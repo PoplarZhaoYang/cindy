@@ -128,6 +128,7 @@ export function LoginPage({
   const {
     isLoading,
     errorCode,
+    retryAt,
     loginState,
     hasAccountDeletionReceipt = false,
     getAccountDeletionStatus,
@@ -137,11 +138,15 @@ export function LoginPage({
     clearError,
     enterLocalMode,
   } = useLogin({ autoLoad: intent !== 'add-account' });
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [credentialHelpOpen, setCredentialHelpOpen] = useState(false);
   const credentialStoreFailed =
     errorCode === 'CREDENTIAL_STORE_UNAVAILABLE' ||
     (loginState?.step === 'error' && loginState.code === 'CREDENTIAL_STORE_UNAVAILABLE');
+  const rateLimited =
+    !credentialStoreFailed &&
+    (errorCode === 'RATE_LIMITED' ||
+      (loginState?.step === 'error' && loginState.code === 'RATE_LIMITED'));
   const handoff = useLoginHandoff();
   const isAddAccount = intent === 'add-account';
   const accountListRef = useRef<HTMLDivElement>(null);
@@ -1260,7 +1265,7 @@ export function LoginPage({
         ),
       };
     }
-    if (loginState.step === 'error' || credentialStoreFailed) {
+    if (loginState.step === 'error' || credentialStoreFailed || rateLimited) {
       return {
         ssoOrgGroupY: false,
         node: (
@@ -1274,11 +1279,19 @@ export function LoginPage({
               title={t(
                 credentialStoreFailed ? 'credentialStore.dialog.title' : 'login.unavailable',
               )}
-              subtitle={t(
-                credentialStoreFailed ? 'login.savedLoginPreserved' : 'login.errors.fallback',
-              )}
+              subtitle={
+                rateLimited
+                  ? typeof retryAt === 'number' &&
+                    Number.isFinite(retryAt) &&
+                    Math.abs(retryAt) <= 8.64e15
+                    ? t('login.rateLimit.retryAt', {
+                        time: new Date(retryAt).toLocaleString(i18n.language),
+                      })
+                    : t('login.rateLimit.unknownWait')
+                  : t(credentialStoreFailed ? 'login.savedLoginPreserved' : 'login.errors.fallback')
+              }
             />
-            {credentialStoreFailed && (
+            {(credentialStoreFailed || rateLimited) && (
               <LoginTextLink disabled={isLoading} onClick={reset} testId="login-credential-recheck">
                 {t('credentialStore.recheck')}
               </LoginTextLink>
@@ -1286,12 +1299,18 @@ export function LoginPage({
             <LoginPrimaryButton
               disabled={isLoading}
               loading={isLoading}
-              onClick={credentialStoreFailed ? () => setCredentialHelpOpen(true) : reset}
+              onClick={
+                credentialStoreFailed || rateLimited ? () => setCredentialHelpOpen(true) : reset
+              }
               testId="login-error-retry"
             >
               {isLoading
                 ? t('login.working')
-                : t(credentialStoreFailed ? 'credentialStore.banner.viewHelp' : 'login.retry')}
+                : t(
+                    credentialStoreFailed || rateLimited
+                      ? 'credentialStore.banner.viewHelp'
+                      : 'login.retry',
+                  )}
             </LoginPrimaryButton>
             <LoginErrorText>
               {t(
@@ -1396,8 +1415,9 @@ export function LoginPage({
         {node}
       </LoginStage>
       <CredentialStoreHelpDialog
-        open={credentialHelpOpen && credentialStoreFailed}
+        open={credentialHelpOpen && (credentialStoreFailed || rateLimited)}
         onOpenChange={setCredentialHelpOpen}
+        reason={rateLimited ? 'rate-limit' : 'credentials'}
       />
       {/* 注销状态提示气泡(figma 678:1075「注销状态」组件集):浮层——不占文档流、
           不推挤下方内容,z-30 盖过 stage 全部内容(低于拖拽条 z-40 与协议弹窗 z-50);

@@ -6586,6 +6586,13 @@
       "INVALID_LOGIN_TICKET": "The sign-in session expired. Start again.",
       "INVALID_BIND_TICKET": "The verification session expired. Start again.",
       "REGION_MISMATCH": "The sign-in service region does not match this app."
+    },
+    "rateLimit": {
+      "retryAt": "Try again after {{time}} (local time).",
+      "unknownWait": "The server did not provide a waiting time. Please wait before trying again.",
+      "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
+      "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
+      "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
     }
   },
   "legacyMigration": {
