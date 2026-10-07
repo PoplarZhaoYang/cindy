@@ -399,6 +399,43 @@ it('keeps explicit exit locking on a start reply that arrives after close and re
   expect(connection.active).toBe(true);
 });
 
+it.each([false, true])(
+  'returns the saved preference before a failed remote sync, enabled=%s',
+  async (enabled) => {
+    let fail!: (error: Error) => void;
+    const sync = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    const request = vi.fn(async (_target, message, check) => {
+      check();
+      if (message.op === 'heartbeat') return sync;
+      return message.op === 'start' ? { lease: 'lease' } : {};
+    });
+    const connection = new RemoteViewerConnection({
+      owner: () => 'owner',
+      request,
+      readClipboard: () => '',
+      writeClipboard: () => {},
+      preferences: () => ({ ...DEFAULT_VIEWER_PREFERENCES, lockOnExit: !enabled }),
+      savePreferences: async (_device, patch) => ({ ...DEFAULT_VIEWER_PREFERENCES, ...patch }),
+    });
+    connection.bind({ deviceId: 'target', name: 'Target' });
+    connection.setActive(true);
+    const generation = connection.generation;
+    await connection.request(generation, { op: 'start', displayId: 'screen' });
+    await expect(
+      connection.preferences(generation, { lockOnExit: enabled }),
+    ).resolves.toMatchObject({ lockOnExit: enabled });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ op: 'heartbeat', lockOnExit: enabled });
+    fail(new Error('INVOKE_TIMEOUT'));
+    await connection.request(generation, { op: 'heartbeat', lease: 'lease' });
+    await expect(connection.preferences(generation)).resolves.toMatchObject({
+      lockOnExit: enabled,
+    });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ lockOnExit: enabled });
+  },
+);
+
 it('sends the lock policy before a lease starts and immediately after changing the preference', async () => {
   const request = vi.fn(async (_target, message, check) => {
     check();

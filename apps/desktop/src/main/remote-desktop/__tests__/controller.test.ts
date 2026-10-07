@@ -296,6 +296,115 @@ describe('remote desktop authority and lifecycle', () => {
     expect(settled).toHaveBeenCalledOnce();
     expect(h.deps.restoreResolution).toHaveBeenCalledOnce();
   });
+  it.each([false, true])(
+    'awaits display restoration after a pending shutdown lock, failed=%s',
+    async (failed) => {
+      const h = harness();
+      let finishLock!: () => void;
+      h.deps.lockScreen = vi.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finishLock = () => (failed ? reject(new Error('LOCK_FAILED')) : resolve());
+          }),
+      );
+      h.deps.displayModes = async () => [
+        { id: '1', width: 1920, height: 1080, current: true },
+        { id: '2', width: 3840, height: 2160, current: false },
+      ];
+      h.deps.resolution = async (_display, _mode, beforeChange) => beforeChange();
+      let finishRestore!: () => void;
+      h.deps.restoreResolution = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishRestore = resolve;
+          }),
+      );
+      const { lease } = await h.start();
+      await h.controller.request('phone', { op: 'heartbeat', lease, lockOnExit: true });
+      await h.controller.request('phone', { op: 'control', lease, enabled: true });
+      await h.controller.request('phone', {
+        op: 'resolution',
+        lease,
+        modeId: '2',
+        temporary: true,
+      });
+      const settled = vi.fn();
+      // The synchronous quit phase may already have started the lock.
+      void h.controller.stop().catch(() => {});
+      const quitting = h.controller.stopAndRestore().then(settled, settled);
+      await vi.waitFor(() => expect(h.deps.lockScreen).toHaveBeenCalledOnce());
+      expect(h.deps.restoreResolution).not.toHaveBeenCalled();
+      finishLock();
+      await vi.waitFor(() => expect(h.deps.restoreResolution).toHaveBeenCalledOnce());
+      expect(h.controller.state).toBeNull();
+      expect(settled).not.toHaveBeenCalled();
+      finishRestore();
+      await quitting;
+      expect(settled).toHaveBeenCalledWith(
+        failed ? expect.objectContaining({ message: 'LOCK_FAILED' }) : undefined,
+      );
+      expect(h.deps.restoreResolution).toHaveBeenCalledOnce();
+    },
+  );
+  it.each([
+    'temporary-missing',
+    'temporary-failed',
+    'system',
+    'system-failed',
+    'viewer',
+    'restore-viewer',
+    'system-restore-failed',
+  ] as const)('does not lock during display cleanup: %s', async (operation) => {
+    const h = harness();
+    h.deps.lockScreen = vi.fn(async () => {});
+    h.deps.displayModes = async () => [{ id: '1', width: 1920, height: 1080, current: true }];
+    h.deps.resolution = async (_display, _mode, beforeChange) => {
+      beforeChange();
+      if (operation !== 'system') throw new Error('MODE_FAILED');
+    };
+    const handle = {
+      resize: vi.fn(async () => ({ id: '1', name: 'Main', width: 1280, height: 720 })),
+      restore: vi.fn(async () => {
+        throw new Error('MODE_FAILED');
+      }),
+      dispose: vi.fn(),
+    };
+    if (operation === 'viewer') handle.resize.mockRejectedValueOnce(new Error('MODE_FAILED'));
+    h.deps.createViewerDisplay = vi.fn(async () => handle);
+    const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'heartbeat', lease, lockOnExit: true });
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    if (operation === 'restore-viewer' || operation === 'system-restore-failed') {
+      await h.controller.request('phone', {
+        op: 'viewerDisplay',
+        lease,
+        width: 1280,
+        height: 720,
+        control: true,
+      });
+    }
+    const changing = h.controller.request(
+      'phone',
+      operation === 'viewer'
+        ? { op: 'viewerDisplay', lease, width: 1280, height: 720 }
+        : operation === 'restore-viewer'
+          ? { op: 'restoreViewerDisplay', lease }
+          : {
+              op: 'resolution',
+              lease,
+              modeId: operation === 'temporary-missing' ? '2' : '1',
+              temporary: operation.startsWith('temporary'),
+            },
+    );
+    if (operation === 'system') await changing;
+    else
+      await expect(changing).rejects.toThrow(
+        operation === 'temporary-missing' ? 'DESKTOP_DISPLAY_MODE_MISSING' : 'MODE_FAILED',
+      );
+    await Promise.resolve();
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    expect(h.controller.state).toBeNull();
+  });
   it('waits for an in-flight mode change before restoring after disconnect', async () => {
     const h = harness();
     let finish!: () => void;

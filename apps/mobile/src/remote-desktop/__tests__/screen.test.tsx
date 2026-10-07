@@ -68,16 +68,23 @@ vi.mock("../useAutoUnlockSettings", () => ({
     };
   },
 }));
-vi.mock("../useLockOnExitPreference", () => ({
-  useRemoteDesktopPreference: () => [false, vi.fn(), true],
-  useLockOnExitPreference: () => [
-    fixture.lockOnExit,
-    (value: boolean) => {
-      fixture.lockOnExit = value;
-    },
-    true,
-  ],
-}));
+vi.mock("../useLockOnExitPreference", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../useLockOnExitPreference")>();
+  return {
+    useRemoteDesktopPreference: () => [false, vi.fn(), true],
+    useLockOnExitPreference: (deviceId: string) =>
+      fixture.lockPreferenceFromStorage
+        ? actual.useLockOnExitPreference(deviceId)
+        : [
+            fixture.lockOnExit,
+            (value: boolean) => {
+              fixture.lockOnExit = value;
+            },
+            true,
+          ],
+  };
+});
 vi.mock("../usePictureInPicturePreference", () => ({
   usePictureInPicturePreference: () => {
     const [enabled, setEnabled] = useState(fixture.pipEnabled);
@@ -106,6 +113,7 @@ const fixture = vi.hoisted(() => ({
   securityBusy: false,
   themeMode: "light",
   lockOnExit: false,
+  lockPreferenceFromStorage: false,
   lockSupported: true,
   alert: vi.fn(),
   resetUnlockAttempt: vi.fn(),
@@ -417,6 +425,7 @@ beforeEach(async () => {
   fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
   fixture.themeMode = "light";
   fixture.lockOnExit = false;
+  fixture.lockPreferenceFromStorage = false;
   fixture.lockSupported = true;
   fixture.views = {};
   fixture.keyboardListeners = {};
@@ -3105,6 +3114,37 @@ describe("remote desktop controls", () => {
         type: "events",
         events: [{ kind: "release" }],
       });
+    },
+  );
+  it.each([false, true])(
+    "waits for the saved lock policy before starting, enabled=%s",
+    async (enabled) => {
+      act(() => root.unmount());
+      fixture.lockPreferenceFromStorage = true;
+      let finish!: (value: string | null) => void;
+      const original = storage.getItem;
+      const read = vi.spyOn(storage, "getItem").mockImplementation((key) =>
+        key.includes(".lock-on-exit.")
+          ? new Promise<string | null>((resolve) => {
+              finish = resolve;
+            })
+          : original(key),
+      );
+      try {
+        root = createRoot(host);
+        await act(async () => root.render(<RemoteDesktopScreen />));
+        await act(async () =>
+          fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } }),
+        );
+        expect(finish).toBeTypeOf("function");
+        expect(requests().filter((r) => r.op === "start")).toHaveLength(0);
+        await act(async () => finish(String(enabled)));
+        expect(requests().filter((r) => r.op === "start")).toEqual([
+          { op: "start", displayId: "display", lockOnExit: enabled },
+        ]);
+      } finally {
+        read.mockRestore();
+      }
     },
   );
   it("requests lock once on explicit exit, independent of automatic unlock", async () => {

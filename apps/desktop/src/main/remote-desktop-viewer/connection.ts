@@ -391,9 +391,9 @@ export class RemoteViewerConnection {
       this.preferencesValue = value;
       this.safetyState.invalidate(reset);
       if (patch.lockOnExit !== undefined && this.lease) {
-        const reply = await this.request(generation, { op: 'heartbeat', lease: this.lease });
-        if (!reply.ok) throw new Error(reply.code);
-        this.check(generation);
+        // Saving is local; a slow or failed sync must not leave the switch
+        // showing the old value. Regular heartbeats also carry this policy.
+        void this.request(generation, { op: 'heartbeat', lease: this.lease });
       }
     }
     return { ...this.preferencesValue };

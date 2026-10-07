@@ -1087,6 +1087,7 @@ export function RemoteDesktopSession({
         linkRef.current.status !== "online" ||
         !ready.current ||
         !videoPreferencesLoaded ||
+        !lockOnExitLoaded ||
         !deviceId ||
         AppState.currentState !== "active"
       )
@@ -1243,6 +1244,7 @@ export function RemoteDesktopSession({
       stop,
       t,
       videoPreferencesLoaded,
+      lockOnExitLoaded,
       viewerSession,
     ],
   );
@@ -1610,7 +1612,7 @@ export function RemoteDesktopSession({
       restoreInlinePresentationRef.current();
       if (!active.current) void connectRef.current();
     }
-  }, [focused, pause, videoPreferencesLoaded]);
+  }, [focused, pause, videoPreferencesLoaded, lockOnExitLoaded]);
   useEffect(() => {
     send({
       type: "theme",

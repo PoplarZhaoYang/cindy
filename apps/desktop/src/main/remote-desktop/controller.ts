@@ -420,7 +420,7 @@ export class RemoteDesktopController {
       };
       return control ? await this.withControl(peer, active, reply) : reply;
     } catch (error) {
-      if (this.active === active) this.stop(peer);
+      if (this.active === active) this.stop(peer, false);
       throw error;
     } finally {
       this.resolutionWrite = null;
@@ -461,8 +461,13 @@ export class RemoteDesktopController {
   }
   /** Join the same restoration used by disconnects before the process exits. */
   async stopAndRestore(): Promise<void> {
-    const safety = this.stop();
-    await Promise.all([safety, this.restoreStoppedDisplay()]);
+    try {
+      await this.stop();
+    } finally {
+      // Locking retains the lease until it settles, even on failure. Only then
+      // can restoration start; process shutdown must also await that work.
+      await this.restoreStoppedDisplay();
+    }
   }
   /**
    * Input injection failed while the lease is still valid. Input belongs to the
@@ -896,7 +901,7 @@ export class RemoteDesktopController {
           // Input restarts on the new geometry within the same request.
           return request.control ? await this.withControl(peer, active, reply) : reply;
         } catch (error) {
-          if (this.active === active) this.stop(peer);
+          if (this.active === active) this.stop(peer, false);
           throw error;
         } finally {
           this.resolutionWrite = null;
@@ -1042,7 +1047,7 @@ export class RemoteDesktopController {
           if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
           // Release old geometry before the native write can emit display events.
           // Completion must not inspect or stop a replacement lease.
-          this.stop(peer);
+          this.stop(peer, false);
         };
         try {
           if (this.viewerDisplay) {
@@ -1072,7 +1077,7 @@ export class RemoteDesktopController {
           await this.deps.resolution(active.sourceDisplayId, request.modeId, beforeChange);
           return { ok: true };
         } catch (error) {
-          if (restoringViewer && current()) this.stop(peer);
+          if (restoringViewer && current()) this.stop(peer, false);
           throw error;
         }
       }
