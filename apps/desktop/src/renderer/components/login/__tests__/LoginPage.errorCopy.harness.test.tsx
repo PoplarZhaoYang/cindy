@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
@@ -102,9 +102,11 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  loginHook.value.errorCode = null;
+  loginHook.value.dispatch = vi.fn(async () => true);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    value: { platform: 'darwin' },
+    value: { platform: 'darwin', openLogsDir: vi.fn(async () => ({ success: true })) },
   });
 });
 
@@ -164,8 +166,61 @@ describe('error-copy 桌面 19 码表 + 兜底(现网 i18n verbatim,#D91F37 族)
       zhErrors.CREDENTIAL_STORE_UNAVAILABLE,
     );
     fireEvent.click(screen.getByTestId('login-error-retry'));
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: zhCN.credentialStore.dialog.confirm }));
+    fireEvent.click(screen.getByTestId('login-credential-recheck'));
     expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'reset' });
   });
+
+  it('replaces the verification form with help even for a hook-local storage error', () => {
+    mountWithError('CREDENTIAL_STORE_UNAVAILABLE');
+    expect(screen.getByTestId('login-panel-error')).toBeTruthy();
+    expect(screen.queryByTestId('login-input')).toBeNull();
+    expect(screen.queryByTestId('login-local-mode')).toBeNull();
+  });
+
+  it.each(['darwin', 'win32', 'linux'])(
+    'provides platform-specific help and a private diagnostic exit on %s',
+    async (platform) => {
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: {
+          platform,
+          openLogsDir: vi.fn(async () => ({ success: true })),
+        },
+      });
+      mountWithError('CREDENTIAL_STORE_UNAVAILABLE');
+      fireEvent.click(screen.getByTestId('login-error-retry'));
+      const copy = zhCN.credentialStore.dialog;
+      expect(Boolean(screen.queryByText(copy.stepMacKeychain))).toBe(platform === 'darwin');
+      expect(Boolean(screen.queryByText(copy.stepLinuxKeyring))).toBe(platform === 'linux');
+      expect(
+        screen.getByText(platform === 'darwin' ? copy.stepRestartMac : copy.stepRestart),
+      ).toBeTruthy();
+      expect(screen.getByText(copy.stepSupport)).toBeTruthy();
+      expect(screen.getByText(copy.preserveData)).toBeTruthy();
+      expect(screen.getByText('CREDENTIAL_STORE_UNAVAILABLE')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: copy.openLogs }));
+      await waitFor(() => expect(window.electronAPI.openLogsDir).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole('alertdialog')).toBeTruthy();
+    },
+  );
+
+  it.each(['reject', 'result'])(
+    'keeps useful guidance if opening logs fails via %s',
+    async (failure) => {
+      vi.mocked(window.electronAPI.openLogsDir).mockImplementation(async () => {
+        if (failure === 'reject') throw new Error('private path must not be shown');
+        return { success: false, error: 'private path must not be shown' };
+      });
+      mountWithError('CREDENTIAL_STORE_UNAVAILABLE');
+      fireEvent.click(screen.getByTestId('login-error-retry'));
+      fireEvent.click(screen.getByRole('button', { name: zhCN.credentialStore.dialog.openLogs }));
+      expect(await screen.findByText(zhCN.credentialStore.dialog.logsFailed)).toBeTruthy();
+      expect(screen.queryByText('private path must not be shown')).toBeNull();
+    },
+  );
 
   for (const code of NAMED_CODES) {
     it(`error-copy ${code} 文案 verbatim`, async () => {

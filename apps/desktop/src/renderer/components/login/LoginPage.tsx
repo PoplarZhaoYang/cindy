@@ -23,6 +23,7 @@ import { createLogger } from '@/lib/logger';
 import { setLoginEmailCaptchaGate } from '@/lib/loginCaptchaGate';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { WindowControls } from '@/components/title-bar/WindowControls';
+import { CredentialStoreHelpDialog } from '@/components/auth/CredentialStoreHelpDialog';
 import { useLogin } from '@/hooks/useLogin';
 import { endLoginFirstLaunchLightGate, loginFirstLaunchLightActive } from '@/hooks/useTheme';
 import { LOGIN_HANDOFF_TIMINGS, useLoginHandoff } from '@/contexts/LoginHandoffContext';
@@ -137,6 +138,10 @@ export function LoginPage({
     enterLocalMode,
   } = useLogin({ autoLoad: intent !== 'add-account' });
   const { t } = useTranslation();
+  const [credentialHelpOpen, setCredentialHelpOpen] = useState(false);
+  const credentialStoreFailed =
+    errorCode === 'CREDENTIAL_STORE_UNAVAILABLE' ||
+    (loginState?.step === 'error' && loginState.code === 'CREDENTIAL_STORE_UNAVAILABLE');
   const handoff = useLoginHandoff();
   const isAddAccount = intent === 'add-account';
   const accountListRef = useRef<HTMLDivElement>(null);
@@ -326,7 +331,7 @@ export function LoginPage({
   // 「跳过登录」常驻入口在面板内(identifier 视图 SKIP_ENTRY 文字链);footer 仅保留
   // error 步的逃生入口——登录服务不可用时用户仍能进入本地模式(既有产品保证)。
   const showLocalModeFooter =
-    !isAddAccount && loginState?.step === 'error' && loginState.code !== 'CREDENTIAL_STORE_UNAVAILABLE';
+    !isAddAccount && loginState?.step === 'error' && !credentialStoreFailed;
   // 面板底部预留恒取全流程最大值(footer 124;协议行 48 被其覆盖):step 切换时
   // 面板/品牌层零跳位(规则 7,codex 审查 P1)。browser-redirect/completed 维持 0,
   // 与迁移前 main 口径一致(该两步由品牌 overlay/跳转态接管)。
@@ -1255,7 +1260,7 @@ export function LoginPage({
         ),
       };
     }
-    if (loginState.step === 'error') {
+    if (loginState.step === 'error' || credentialStoreFailed) {
       return {
         ssoOrgGroupY: false,
         node: (
@@ -1266,21 +1271,41 @@ export function LoginPage({
               onClick={reset}
             />
             <LoginTitleBlock
-              title={t(loginState.code === 'CREDENTIAL_STORE_UNAVAILABLE'
-                ? 'credentialStore.dialog.title' : 'login.unavailable')}
-              subtitle={t(loginState.code === 'CREDENTIAL_STORE_UNAVAILABLE'
-                ? 'login.savedLoginPreserved' : 'login.errors.fallback')}
+              title={t(
+                credentialStoreFailed ? 'credentialStore.dialog.title' : 'login.unavailable',
+              )}
+              subtitle={t(
+                credentialStoreFailed ? 'login.savedLoginPreserved' : 'login.errors.fallback',
+              )}
             />
+            {credentialStoreFailed && (
+              <LoginTextLink disabled={isLoading} onClick={reset} testId="login-credential-recheck">
+                {t('credentialStore.recheck')}
+              </LoginTextLink>
+            )}
             <LoginPrimaryButton
               disabled={isLoading}
               loading={isLoading}
-              onClick={reset}
+              onClick={credentialStoreFailed ? () => setCredentialHelpOpen(true) : reset}
               testId="login-error-retry"
             >
-              {isLoading ? t('login.working') : t('login.retry')}
+              {isLoading
+                ? t('login.working')
+                : t(credentialStoreFailed ? 'credentialStore.banner.viewHelp' : 'login.retry')}
             </LoginPrimaryButton>
             <LoginErrorText>
-              {t(`login.errors.${loginState.code}`, { defaultValue: t('login.errors.fallback') })}
+              {t(
+                `login.errors.${
+                  credentialStoreFailed
+                    ? 'CREDENTIAL_STORE_UNAVAILABLE'
+                    : loginState.step === 'error'
+                      ? loginState.code
+                      : errorCode
+                }`,
+                {
+                  defaultValue: t('login.errors.fallback'),
+                },
+              )}
             </LoginErrorText>
           </LoginPanel>
         ),
@@ -1370,6 +1395,10 @@ export function LoginPage({
       >
         {node}
       </LoginStage>
+      <CredentialStoreHelpDialog
+        open={credentialHelpOpen && credentialStoreFailed}
+        onOpenChange={setCredentialHelpOpen}
+      />
       {/* 注销状态提示气泡(figma 678:1075「注销状态」组件集):浮层——不占文档流、
           不推挤下方内容,z-30 盖过 stage 全部内容(低于拖拽条 z-40 与协议弹窗 z-50);
           窗口顶 72px 恒定、水平窗口居中、宽 670 恒定,均不随 loginScale 缩放。

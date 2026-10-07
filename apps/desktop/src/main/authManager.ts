@@ -552,7 +552,8 @@ function isCredentialEncryptionAvailable(): boolean {
 export function needsCredentialProcessRecovery(): boolean {
   return (
     credentialEncryptionUnavailable &&
-    credentialStoreHealth.unavailable &&
+    (credentialStoreHealth.unavailable ||
+      (loginFlowState?.step === 'error' && loginFlowState.code === 'CREDENTIAL_STORE_UNAVAILABLE')) &&
     accessToken === null &&
     getActiveAppSession().mode === 'signed-out' &&
     !isPassiveSharedUserDataInstance()
@@ -5631,11 +5632,13 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
       pendingSsoVerificationTicket = null;
       pendingAuthRealm = null;
     }
-    // Keep the last usable screen so validation/network failures can be retried
-    // without discarding the entered identifier or requesting another code.
-    loginFlowState = flowCannotRetry
-      ? { step: 'error', code, recoverTo: 'identifier' }
-      : (stateBeforeAction ?? { step: 'error', code, recoverTo: 'identifier' });
+    // Storage failures need recovery guidance, not another verification-code
+    // submission. Preserve private tickets and saved credentials; only change
+    // the presentation. Ordinary validation/network failures keep their form.
+    loginFlowState =
+      flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'
+        ? { step: 'error', code, recoverTo: 'identifier' }
+        : (stateBeforeAction ?? { step: 'error', code, recoverTo: 'identifier' });
     return { success: false, code, state: loginFlowState };
   }
 }
