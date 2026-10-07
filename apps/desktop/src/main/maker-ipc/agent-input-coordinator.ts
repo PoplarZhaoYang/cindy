@@ -6430,8 +6430,15 @@ export class AgentInputCoordinator {
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): void {
     // scheduler origin(含复用它的 Slack / X / Telegram Hook 消息)终态失败时本就不留
-    // recovery、由各自 runner 收尾,没有可续的入口。
-    if (!this.deps.onUsageLimitedTurnError || isSchedulerOriginItem(item)) return;
+    // recovery、由各自 runner 收尾,没有可续的入口。共享任务访客的回合也不自动续:
+    // 授权可能在等待期间被撤销,数小时后替访客重发原指令不安全,交给房主手动处理。
+    if (
+      !this.deps.onUsageLimitedTurnError ||
+      isSchedulerOriginItem(item) ||
+      item.sharedTaskAuthor
+    ) {
+      return;
+    }
     const state = this.states.get(sessionId);
     if (!state || state.recovery?.kind !== 'active-turn' || state.error === null) return;
     const token = ++this.usageLimitWaitSeq;
