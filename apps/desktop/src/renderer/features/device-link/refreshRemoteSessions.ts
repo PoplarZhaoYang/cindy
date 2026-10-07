@@ -439,7 +439,9 @@ async function runRefreshRemoteDeviceSessions(
         try {
           if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
           if (unresponsiveDevicesStore.has(deviceId)) return 'gave-up';
-          const raw = await window.electronAPI.deviceLink.invoke(deviceId, 'maker:schedule:list', []);
+          const raw = await window.electronAPI.deviceLink.invoke(
+            deviceId, 'maker:schedule:list', [null, { sessionBindings: true }],
+          );
           if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch, status)) return 'superseded';
           remoteProjectsStore.setDeviceScheduleBindings(deviceId, parseScheduleBindings(raw));
         } catch (error) {

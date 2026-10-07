@@ -25,7 +25,10 @@ vi.mock('@/features/scheduler/lib/schedulesStore', () => ({
 }));
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, values?: { name?: string }) => values?.name ?? key }),
+  useTranslation: () => ({
+    t: (key: string, values?: { name?: string; frequency?: string; defaultValue?: string }) =>
+      values?.name ?? values?.frequency ?? values?.defaultValue ?? key,
+  }),
 }));
 vi.mock('@/components/ui/tooltip', () => ({
   Tooltip: {
@@ -171,7 +174,12 @@ describe('remote schedule binding badges', () => {
         channel === 'maker:schedule:list' ? pending : { runs: [] },
       );
       const refresh = refreshRemoteDeviceSessions('A', undefined, { scope: 'schedule' });
-      await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('A', 'maker:schedule:list', []));
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith('A', 'maker:schedule:list', [
+          null,
+          { sessionBindings: true },
+        ]),
+      );
       remoteProjectsStore[action]('A');
       resolve([binding()]);
       expect(await refresh).toBe('superseded');
@@ -185,6 +193,28 @@ describe('remote schedule binding badges', () => {
     ]);
     expect(() => parseScheduleBindings({})).toThrow();
     expect(() => parseScheduleBindings([{ ...binding(), cronExpr: null }])).toThrow();
+    for (const invalid of [0, -1, Infinity, NaN, '600000']) {
+      expect(() => parseScheduleBindings([{ ...binding(), intervalMs: invalid }])).toThrow();
+    }
+    expect(() => parseScheduleBindings([{ ...binding(), recurring: 'false' }])).toThrow();
+  });
+
+  it.each([
+    [{ intervalMs: 600_000 }, 'Every 10 minutes'],
+    [{ intervalMs: 1_680_000 }, 'Every 28 minutes'],
+    [{ intervalMs: 90_000 }, 'Every 1.5 minutes'],
+    [{ intervalMs: 7_200_000 }, 'Every 2 hours'],
+    [{ recurring: false, intervalMs: 600_000 }, 'scheduler.cell.subtitleOnce'],
+    [{ manual: true, recurring: false, intervalMs: 600_000 }, 'scheduler.detail.manualTrigger'],
+    [{}, 'Every 5 minutes'],
+  ])('uses authoritative timing for local and remote badges: %j', (timing, expected) => {
+    const schedule = binding({ cronExpr: '*/5 * * * *', ...timing });
+    const { rerender } = render(<ScheduleBindingBadge schedules={[schedule]} />);
+    expect(screen.getByText(expected)).toBeTruthy();
+    seed('A');
+    remoteProjectsStore.setDeviceScheduleBindings('A', parseScheduleBindings([schedule]));
+    rerender(<Badge deviceId="A" />);
+    expect(screen.getByText(expected)).toBeTruthy();
   });
 
   it('reads bindings even when the older peer lacks the run index, and propagates revoked access', async () => {

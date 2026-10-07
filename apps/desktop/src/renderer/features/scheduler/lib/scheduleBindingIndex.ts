@@ -3,8 +3,9 @@ import type { Schedule } from '@cindy/maker-scheduler';
 /** 图标与提示需要的绑定信息；远程镜像不保留 prompt 等执行配置。 */
 export type ScheduleBinding = Pick<
   Schedule,
-  'id' | 'name' | 'status' | 'targetSessionId' | 'cronExpr' | 'manual'
->;
+  'id' | 'name' | 'status' | 'targetSessionId' | 'cronExpr' | 'manual' | 'intervalMs'
+> &
+  Partial<Pick<Schedule, 'recurring'>>;
 
 let lastInput: readonly ScheduleBinding[] | null = null;
 let lastMap: ReadonlyMap<string, ScheduleBinding[]> = new Map();
@@ -45,7 +46,10 @@ export function parseScheduleBindings(raw: unknown): ScheduleBinding[] {
       typeof s.name !== 'string' ||
       typeof s.cronExpr !== 'string' ||
       (s.status !== 'active' && s.status !== 'paused') ||
-      (s.manual !== undefined && typeof s.manual !== 'boolean')
+      (s.manual !== undefined && typeof s.manual !== 'boolean') ||
+      (s.recurring !== undefined && typeof s.recurring !== 'boolean') ||
+      (s.intervalMs !== undefined &&
+        (typeof s.intervalMs !== 'number' || !Number.isFinite(s.intervalMs) || s.intervalMs <= 0))
     )
       throw new Error('Invalid remote schedule binding');
     result.push({
@@ -55,6 +59,8 @@ export function parseScheduleBindings(raw: unknown): ScheduleBinding[] {
       targetSessionId: s.targetSessionId,
       cronExpr: s.cronExpr,
       manual: s.manual === true,
+      recurring: s.recurring as boolean | undefined,
+      intervalMs: s.intervalMs as number | undefined,
     });
   }
   return result;

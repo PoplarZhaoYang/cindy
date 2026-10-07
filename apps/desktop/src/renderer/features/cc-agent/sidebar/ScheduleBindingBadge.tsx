@@ -16,7 +16,11 @@ import type { ScheduleBinding } from '@/features/scheduler/lib/scheduleBindingIn
 
 import { cn } from '@/lib/utils';
 import { Tooltip } from '@/components/ui/tooltip';
-import { cronToConfig, summarizeConfig } from '@/features/scheduler/lib/cronCodexPreset';
+import {
+  cronToConfig,
+  DEFAULT_CONFIG,
+  summarizeConfig,
+} from '@/features/scheduler/lib/cronCodexPreset';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
 
@@ -32,14 +36,25 @@ export interface ScheduleBindingBadgeProps {
   activeForeground?: boolean;
 }
 
-/** 单条 schedule 的触发频率文案(与 RunHistoryPane 同源逻辑)。 */
+/** 手动、单次、相对间隔优先于兼容用的 Cron 占位值。 */
 function frequencyText(
   schedule: ScheduleBinding,
   t: ReturnType<typeof useTranslation>['t'],
 ): string {
-  return schedule.manual
-    ? t('scheduler.detail.manualTrigger')
-    : summarizeConfig(cronToConfig(schedule.cronExpr), t);
+  if (schedule.manual) return t('scheduler.detail.manualTrigger');
+  if (schedule.recurring === false) return t('scheduler.cell.subtitleOnce');
+  if (schedule.intervalMs !== undefined) {
+    return summarizeConfig(
+      {
+        ...DEFAULT_CONFIG,
+        mode: schedule.intervalMs % 3_600_000 === 0 ? 'interval' : 'intervalMinutes',
+        intervalHours: schedule.intervalMs / 3_600_000,
+        intervalMinutes: schedule.intervalMs / 60_000,
+      },
+      t,
+    );
+  }
+  return summarizeConfig(cronToConfig(schedule.cronExpr), t);
 }
 
 export function ScheduleBindingBadge({
