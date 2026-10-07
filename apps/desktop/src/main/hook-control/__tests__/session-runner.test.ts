@@ -3151,7 +3151,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
 
-  it('isolates child output, media and terminal events from the hook reply', async () => {
+  it.each([false, true])('isolates child events before root completion (isFinal=%s)', async (isFinal) => {
     const session = makeManualSession('sess-subagent-output');
     const onProgress = vi.fn();
     const onToolResult = vi.fn();
@@ -3179,7 +3179,8 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(onToolResult).not.toHaveBeenCalled();
     expect(onTurnTerminal).not.toHaveBeenCalled();
     expect(observer.text()).toBe('主代理前半');
-    emit({ type: 'text', source: 'claude-code', agentMeta: { uuid: 'main-message' }, data: { text: '主代理前半和最终结论', isFinal: true } });
+    // A recovered result tail is an unanchored delta, not a final envelope.
+    emit({ type: 'text', source: 'claude-code', ...(isFinal ? { agentMeta: { uuid: 'main-message' } } : {}), data: { text: isFinal ? '主代理前半和最终结论' : '和最终结论', isFinal } });
     emit({ type: 'done', data: {} });
     await observer.finished;
     expect(observer.finalText()).toBe('主代理前半和最终结论');
