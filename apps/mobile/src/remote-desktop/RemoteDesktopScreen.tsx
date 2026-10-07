@@ -407,6 +407,8 @@ export function RemoteDesktopSession({
   );
   exitLock.current =
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
+  const exitLockPolicy = useRef(false);
+  exitLockPolicy.current = lockOnExitLoaded && lockOnExit;
   const [status, setStatus] = useState("connecting");
   const [appState, setAppState] = useState(AppState.currentState);
   const [error, setError] = useState<string | null>(null);
@@ -631,6 +633,8 @@ export function RemoteDesktopSession({
   );
   const request = useCallback(
     async <T,>(message: RemoteDesktopRequest, preSend?: () => void) => {
+      if (message.op === "start" || message.op === "heartbeat")
+        message = { ...message, lockOnExit: exitLockPolicy.current };
       const relay = () =>
         linkRef.current.invoke<T>(deviceId, REMOTE_DESKTOP_CHANNEL, [message], {
           preSend,

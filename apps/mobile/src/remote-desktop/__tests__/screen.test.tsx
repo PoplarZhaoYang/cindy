@@ -1693,7 +1693,7 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(6000));
     expect(host.textContent).not.toContain("remoteDesktop.upgrade");
     expect(requests().filter((request) => request.op === "start")).toEqual([
-      { op: "start", displayId: "display" },
+      { op: "start", displayId: "display", lockOnExit: false },
     ]);
   });
   it("keeps the video when a fallback input is rejected because control was released", async () => {
@@ -3111,6 +3111,13 @@ describe("remote desktop controls", () => {
     fixture.lockOnExit = true;
     await act(async () => root.render(<RemoteDesktopScreen />));
     await connect();
+    expect(requests().find((r) => r.op === "start")).toMatchObject({
+      lockOnExit: true,
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(
+      requests().filter((r) => r.op === "heartbeat").at(-1),
+    ).toMatchObject({ lockOnExit: true });
     await act(async () => button("back").click());
     expect(requests().filter((r) => r.op === "stop")).toEqual([
       { op: "stop", lease: "lease", lockScreen: true },
@@ -4138,8 +4145,8 @@ describe("remote desktop controls", () => {
     await connect();
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toEqual([
-      { op: "start", displayId: "display" },
-      { op: "start", displayId: "display", resume: true },
+      { op: "start", displayId: "display", lockOnExit: false },
+      { op: "start", displayId: "display", resume: true, lockOnExit: false },
     ]);
     expect(button("connect")).not.toBeNull();
   });
@@ -4182,7 +4189,7 @@ describe("remote desktop controls", () => {
         requests()
           .filter((r) => r.op === "start")
           .at(-1),
-      ).toEqual({ op: "start", displayId: "second" });
+      ).toEqual({ op: "start", displayId: "second", lockOnExit: false });
       expect(host.textContent).not.toContain("remoteDesktop.upgrade");
       if (native)
         expect(
@@ -4243,6 +4250,7 @@ describe("remote desktop controls", () => {
       op: "start",
       displayId: "display",
       resume: true,
+      lockOnExit: false,
     });
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(2);
@@ -4253,7 +4261,7 @@ describe("remote desktop controls", () => {
       requests()
         .filter((r) => r.op === "start")
         .at(-1),
-    ).toEqual({ op: "start", displayId: "display" });
+    ).toEqual({ op: "start", displayId: "display", lockOnExit: false });
   });
   it("reloads a viewer that died while permissions were blocked", async () => {
     const original = fixture.invoke.getMockImplementation()!;
@@ -4814,6 +4822,7 @@ describe("remote desktop controls", () => {
       op: "start",
       displayId: "display",
       takeover: true,
+      lockOnExit: false,
     });
   });
   it('resends the upper-pane bounds whenever a folded viewer becomes ready', async () => {
