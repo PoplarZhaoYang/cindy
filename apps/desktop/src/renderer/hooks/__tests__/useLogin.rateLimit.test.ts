@@ -3,7 +3,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({
-  loginState: null,
+  loginState: null as { step: string; retryAt?: number } | null,
   loadLoginState: vi.fn(),
   dispatchLoginAction: vi.fn(),
 }));
@@ -13,10 +13,12 @@ import { useLogin } from '../useLogin';
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+  auth.loginState = null;
 });
 
 it('shows the received deadline and clears it for a subsequent storage error or reset', async () => {
   const hook = renderHook(() => useLogin({ autoLoad: false }));
+  auth.loginState = { step: 'identifier', retryAt: 1_800_000_000_000 };
   auth.dispatchLoginAction.mockResolvedValueOnce({
     success: false,
     code: 'RATE_LIMITED',
@@ -44,10 +46,13 @@ it('shows the received deadline and clears it for a subsequent storage error or 
 });
 
 it('preserves the deadline when loading the initial login state', async () => {
-  auth.loadLoginState.mockResolvedValueOnce({
-    success: false,
-    code: 'RATE_LIMITED',
-    retryAt: 1_800_000_000_000,
+  auth.loadLoginState.mockImplementationOnce(async () => {
+    auth.loginState = { step: 'identifier', retryAt: 1_800_000_000_000 };
+    return {
+      success: false,
+      code: 'RATE_LIMITED',
+      retryAt: 1_800_000_000_000,
+    };
   });
   const hook = renderHook(() => useLogin());
   await waitFor(() => expect(hook.result.current.errorCode).toBe('RATE_LIMITED'));

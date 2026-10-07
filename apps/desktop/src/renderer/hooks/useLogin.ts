@@ -45,7 +45,6 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
   } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const [retryAt, setRetryAt] = useState<number>();
   const loadingRef = useRef(false);
 
   useEffect(() => {
@@ -56,7 +55,6 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
       .then((result) => {
         if (!result.success) {
           setErrorCode(result.code);
-          setRetryAt(result.retryAt);
         }
       })
       .catch(() => setErrorCode('AUTH_SERVICE_UNAVAILABLE'))
@@ -74,12 +72,10 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
       loadingRef.current = true;
       setIsLoading(true);
       setErrorCode(null);
-      setRetryAt(undefined);
       try {
         const result = await dispatchLoginAction(action);
         if (!result.success) {
           setErrorCode(result.code === 'USER_CANCELLED' ? null : result.code);
-          setRetryAt(result.code === 'RATE_LIMITED' ? result.retryAt : undefined);
           return { success: false, code: result.code };
         }
         return { success: true, code: null };
@@ -103,7 +99,10 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
   return {
     isLoading,
     errorCode,
-    retryAt,
+    retryAt:
+      (errorCode ?? (loginState?.step === 'error' ? loginState.code : null)) === 'RATE_LIMITED'
+        ? loginState?.retryAt
+        : undefined,
     loginState,
     hasAccountDeletionReceipt,
     getAccountDeletionStatus,
@@ -113,7 +112,6 @@ export function useLogin({ autoLoad = true }: { autoLoad?: boolean } = {}): UseL
     dispatchWithResult,
     clearError: () => {
       setErrorCode(null);
-      setRetryAt(undefined);
     },
     enterLocalMode,
   };
