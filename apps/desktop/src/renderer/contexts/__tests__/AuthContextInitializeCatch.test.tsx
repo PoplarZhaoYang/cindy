@@ -122,6 +122,16 @@ describe('AuthContext initialize .catch 归一未登录', () => {
         await invoke();
       });
       expect(result.result.current.login.retryAt).toBe(failure.retryAt);
+      // A renderer reload receives main's already-cached screen as success,
+      // with no top-level error envelope. It must preserve the original deadline.
+      mocks.service.getLoginState.mockResolvedValue({
+        success: true,
+        state: { ...failure.state!, retryAt: failure.retryAt },
+      });
+      await act(async () => {
+        await result.result.current.auth.loadLoginState();
+      });
+      expect(result.result.current.login.retryAt).toBe(failure.retryAt);
       // A later response with no header must not inherit the earlier deadline.
       service.mockResolvedValue({ ...failure, retryAt: undefined });
       await act(async () => {

@@ -22,7 +22,6 @@ import {
   createAuthService,
   type AuthService,
   type AuthState,
-  type AuthFlowState,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
   type DesktopAccountSwitcherSnapshot,
@@ -57,17 +56,19 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
-import { awaitDesktopLoginStateLoad } from '../../shared/authIpc';
+import { awaitDesktopLoginStateLoad, type DesktopLoginState } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
-type LoginPresentationState = AuthFlowState & { retryAt?: number };
-
 /** Keep response metadata attached to the exact screen it describes. */
-function presentLoginResult(result: DesktopLoginActionResult): LoginPresentationState | null {
+function presentLoginResult(result: DesktopLoginActionResult): DesktopLoginState | null {
   if (!result.state) return null;
   return {
     ...result.state,
-    retryAt: !result.success && result.code === 'RATE_LIMITED' ? result.retryAt : undefined,
+    retryAt: result.success
+      ? result.state.retryAt
+      : result.code === 'RATE_LIMITED'
+        ? (result.retryAt ?? result.state.retryAt)
+        : undefined,
   };
 }
 
@@ -100,7 +101,7 @@ export interface AuthContextValue {
   /** SkillHub 跨设备识别：本机 deviceId（machineIdSync），登录前后都有值；初始化前为 null */
   deviceId: string | null;
   /** Renderer-safe login screen state; auth tickets remain in main. */
-  loginState: LoginPresentationState | null;
+  loginState: DesktopLoginState | null;
   loadLoginState: () => Promise<DesktopLoginActionResult>;
   dispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
   logout: () => Promise<void>;
@@ -176,7 +177,7 @@ export function AuthProvider({
   const [hasAccountDeletionReceipt, setHasAccountDeletionReceipt] = useState(false);
   const [accountDeletionRestored, setAccountDeletionRestored] = useState(false);
   const [credentialStoreUnavailable, setCredentialStoreUnavailable] = useState(false);
-  const [loginState, setLoginState] = useState<LoginPresentationState | null>(null);
+  const [loginState, setLoginState] = useState<DesktopLoginState | null>(null);
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 

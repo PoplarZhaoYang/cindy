@@ -115,12 +115,14 @@ import {
 } from './clientEndpointsService.js';
 import {
   parseDesktopLoginAction,
+  loginPreparingErrorState,
   parseDesktopAccountKey,
   type DesktopAccountDeletionChallenge,
   type DesktopAccountSwitcherSnapshot,
   type DesktopSavedAccount,
   type DesktopLoginAction,
   type DesktopLoginActionResult,
+  type DesktopLoginState,
 } from '../shared/authIpc';
 import { LOGIN_CAPTCHA_PAGE_PATH } from '../shared/webviewPartition';
 import {
@@ -403,7 +405,7 @@ function isOwnerChangeShellPending(): boolean {
  */
 const deviceId = process.env.XDT_DEVICE_ID_OVERRIDE?.trim() || machineIdSync();
 
-let loginFlowState: AuthFlowState | null = null;
+let loginFlowState: DesktopLoginState | null = null;
 let providerConfig: ProviderConfig | null = null;
 let discoveredMethods: LoginMethod[] = [];
 // These live only within the current fresh-login flow; no credentials reach Renderer.
@@ -5636,17 +5638,19 @@ async function runLoginAction(action: DesktopLoginAction): Promise<DesktopLoginA
     // Storage failures need recovery guidance, not another verification-code
     // submission. Preserve private tickets and saved credentials; only change
     // the presentation. Ordinary validation/network failures keep their form.
+    const errorState = loginPreparingErrorState(
+      code,
+      error instanceof AuthApiError ? error.retryAt : undefined,
+    );
     loginFlowState =
       flowCannotRetry || code === 'CREDENTIAL_STORE_UNAVAILABLE'
-        ? { step: 'error', code, recoverTo: 'identifier' }
-        : (stateBeforeAction ?? { step: 'error', code, recoverTo: 'identifier' });
+        ? errorState
+        : (stateBeforeAction ?? errorState);
     return {
       success: false,
       code,
       state: loginFlowState,
-      ...(code === 'RATE_LIMITED' && error instanceof AuthApiError && error.retryAt !== undefined
-        ? { retryAt: error.retryAt }
-        : {}),
+      ...(errorState.retryAt !== undefined ? { retryAt: errorState.retryAt } : {}),
     };
   }
 }

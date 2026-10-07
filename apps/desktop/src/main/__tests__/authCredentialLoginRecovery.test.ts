@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { AuthApiError as ClientAuthApiError } from '@cindy/auth-client';
+import { loginPreparingErrorState } from '../../shared/authIpc';
+import { mapLoginProvidersLoadFailure } from '../authStartupGate';
 
 // Execute the production login action and eligibility predicate without loading
 // Electron or opening a real credential store (same boundary as the wiring tests).
@@ -20,6 +23,7 @@ function setup({
   passive = false,
   code = 'CREDENTIAL_STORE_UNAVAILABLE',
   retryAt = undefined as number | undefined,
+  initialError = false,
 } = {}) {
   class AuthApiError extends Error {
     statusCode = 503;
@@ -31,6 +35,7 @@ function setup({
   const previous = { step: 'verification-code', kind: 'email', identifier: 'user@example.invalid' };
   const deps = {
     AuthApiError,
+    loginPreparingErrorState,
     createAuthClient: () => ({ verifyCode: vi.fn(async () => ({ status: 'ok' })) }),
     acceptLoginOutcome: vi.fn(async () => {
       throw new AuthApiError(code);
@@ -42,10 +47,11 @@ function setup({
     getActiveAppSession: () => ({ mode: authenticated ? 'signed-in' : 'signed-out' }),
     isPassiveSharedUserDataInstance: () => passive,
     previous,
+    initialError,
   };
   const compiled = transpileModule(
     `
-    let loginFlowState = previous;
+    let loginFlowState = initialError ? { step: 'error', code: 'NETWORK_ERROR' } : previous;
     let loginFlowEpoch = 1;
     const AUTH_REGION = 'global', activeAuthRealm = 'global';
     let pendingAuthRealm = null;
@@ -60,6 +66,53 @@ function setup({
 }
 
 describe('credential failure during fresh sign-in', () => {
+  it('replays provider deadlines from main without another request, then drops them on a new flow', async () => {
+    const loadLoginProviders = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ClientAuthApiError('RATE_LIMITED', 429, 'limited', 1_800_000_000_000),
+      )
+      .mockResolvedValue({ step: 'identifier', providers: {} });
+    const deps = {
+      loadLoginProviders,
+      mapLoginProvidersLoadFailure,
+      isOwnerChangeShellPending: () => false,
+      log: { warn: vi.fn() },
+    };
+    const getSource = source.slice(
+      source.indexOf('export async function getLoginState('),
+      source.indexOf('\nasync function completeLogin('),
+    );
+    const compiled = transpileModule(
+      `
+      let loginFlowState = null, loginFlowEpoch = 1, accessToken = null;
+      const credentialStoreHealth = { unavailable: false };
+      ${getSource.replace('export async function', 'async function')}
+      return { get: getLoginState, newFlow: () => { loginFlowState = null; loginFlowEpoch++; } };
+    `,
+      { compilerOptions: { target: ScriptTarget.ES2022 } },
+    ).outputText;
+    const main = new Function(...Object.keys(deps), compiled)(...Object.values(deps));
+    const first = await main.get();
+    expect(first.state.retryAt).toBe(1_800_000_000_000);
+    const replay = await main.get();
+    expect(replay).toEqual({ success: true, state: first.state });
+    expect(loadLoginProviders).toHaveBeenCalledTimes(1);
+    main.newFlow();
+    expect((await main.get()).state.retryAt).toBeUndefined();
+  });
+
+  it('keeps the deadline in a terminal action error state for renderer reload', async () => {
+    const harness = setup({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000, initialError: true });
+    const result = await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(result.state).toEqual(loginPreparingErrorState('RATE_LIMITED', 1_800_000_000_000));
+  });
+
   it('passes the server cooldown without triggering credential recovery or dropping the form', async () => {
     const harness = setup({ code: 'RATE_LIMITED', retryAt: 1_800_000_000_000 });
     const result = await harness.run({
