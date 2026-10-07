@@ -33,6 +33,7 @@ function setup({
     }
   }
   const previous = { step: 'verification-code', kind: 'email', identifier: 'user@example.invalid' };
+  const backend = { available: !backendUnavailable };
   const deps = {
     AuthApiError,
     loginPreparingErrorState,
@@ -41,7 +42,11 @@ function setup({
       throw new AuthApiError(code);
     }),
     log: { warn: vi.fn() },
-    credentialEncryptionUnavailable: backendUnavailable,
+    credentialEncryptionUnavailable: false,
+    safeStorage: { isEncryptionAvailable: () => backend.available },
+    app: { isReady: () => true },
+    powerMonitor: { getSystemIdleState: () => 'active' },
+    code,
     credentialStoreHealth: { unavailable: false },
     accessToken: authenticated ? 'test-only-token' : null,
     getActiveAppSession: () => ({ mode: authenticated ? 'signed-in' : 'signed-out' }),
@@ -56,16 +61,50 @@ function setup({
     const AUTH_REGION = 'global', activeAuthRealm = 'global';
     let pendingAuthRealm = null;
     const providerConfig = {};
+    let credentialEncryptionFailureLogged = false;
+    ${source.slice(source.indexOf('function isCredentialEncryptionAvailable('), source.indexOf('/** Main-process recovery signal'))}
+    const originalAccept = acceptLoginOutcome;
+    acceptLoginOutcome = async (...args) => {
+      if (code === 'CREDENTIAL_STORE_UNAVAILABLE') isCredentialEncryptionAvailable();
+      return originalAccept(...args);
+    };
+    async function loadLoginProviders() {
+      loginFlowState = { step: 'identifier', providers: {} };
+      return loginFlowState;
+    }
     ${actionSource}
     ${eligibilitySource.replace('export function', 'function')}
-    return { run: runLoginAction, needsRecovery: needsCredentialProcessRecovery };
+    return { run: runLoginAction, needsRecovery: needsCredentialProcessRecovery,
+      observeBackend: isCredentialEncryptionAvailable };
   `,
     { compilerOptions: { target: ScriptTarget.ES2022 } },
   ).outputText;
-  return { ...new Function(...Object.keys(deps), compiled)(...Object.values(deps)), previous };
+  return {
+    ...new Function(...Object.keys(deps), compiled)(...Object.values(deps)),
+    previous,
+    backend,
+  };
 }
 
 describe('credential failure during fresh sign-in', () => {
+  it('retains an observed backend failure across reset and clears it on backend recovery', async () => {
+    const harness = setup();
+    expect(harness.needsRecovery()).toBe(false);
+    await harness.run({
+      type: 'verify-code',
+      kind: 'email',
+      identifier: 'user@example.invalid',
+      code: '123456',
+    });
+    expect(harness.needsRecovery()).toBe(true);
+    expect((await harness.run({ type: 'reset' })).state.step).toBe('identifier');
+    expect(harness.needsRecovery()).toBe(true);
+    await harness.run({ type: 'reset' });
+    expect(harness.needsRecovery()).toBe(true);
+    harness.backend.available = true;
+    harness.observeBackend();
+    expect(harness.needsRecovery()).toBe(false);
+  });
   it('replays provider deadlines from main without another request, then drops them on a new flow', async () => {
     const loadLoginProviders = vi
       .fn()

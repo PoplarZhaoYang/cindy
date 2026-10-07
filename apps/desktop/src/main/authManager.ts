@@ -554,9 +554,6 @@ function isCredentialEncryptionAvailable(): boolean {
 export function needsCredentialProcessRecovery(): boolean {
   return (
     credentialEncryptionUnavailable &&
-    (credentialStoreHealth.unavailable ||
-      (loginFlowState?.step === 'error' &&
-        loginFlowState.code === 'CREDENTIAL_STORE_UNAVAILABLE')) &&
     accessToken === null &&
     getActiveAppSession().mode === 'signed-out' &&
     !isPassiveSharedUserDataInstance()
