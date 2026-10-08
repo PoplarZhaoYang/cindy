@@ -2108,6 +2108,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES]),
         ),
       );
+    await caller.groupAuthority?.refresh();
     if (active.length >= maxActiveChildren) {
       return {
         ok: false,
@@ -2681,6 +2682,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ),
       )
       .limit(1);
+    await caller.groupAuthority?.refresh();
     if (!row) return { ok: false, errorCode: 'NOT_FOUND', message: '后台任务不存在' };
     if (!ACTIVE_DELEGATION_STATUSES.includes(row.status as (typeof ACTIVE_DELEGATION_STATUSES)[number])) {
       return {
@@ -2689,7 +2691,6 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         message: `后台任务已结束（${row.status}）`,
       };
     }
-    await caller.groupAuthority?.refresh();
     if (!matchesDelegatedExecution(row)) return finishCancelledDelegation(row);
     if (row.childSessionId) {
       const wasHeld = !!readTaskPause(row) || heldSessionIds.has(row.childSessionId);
@@ -2802,6 +2803,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ),
       )
       .limit(1);
+    await caller.groupAuthority?.refresh();
     if (!row) return { ok: false, errorCode: 'NOT_FOUND', message: '后台任务不存在' };
     if (!isActiveDelegation(row.status as DelegationStatus)) {
       return {
@@ -3135,6 +3137,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ),
       )
       .limit(1);
+    await caller.groupAuthority?.refresh();
     if (!row) return { ok: false, errorCode: 'NOT_FOUND', message: '后台任务不存在' };
 
     if (input.kind === 'resume') return { ok: false, errorCode: 'NOT_PAUSED', message: 'Task is not paused' };

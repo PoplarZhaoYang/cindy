@@ -3709,6 +3709,7 @@ describe('Bot Session task end-to-end runtime', () => {
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
     taskRoute?: Parameters<typeof createBotDelegationService>[0]['taskRoute'];
     taskControl?: boolean;
+    maxActiveChildren?: number;
     queueSnapshots?: Map<string, AgentInputQueuedMessage[]>;
     onNativeStarted?: (sessionId: string) => void;
     beforeNativeAcceptance?: (sessionId: string) => void;
@@ -3944,6 +3945,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const flushInput = vi.fn(async (): Promise<void> => undefined);
     const closeSession = vi.fn(options.closeSession ?? (async () => undefined));
     const delegation = createBotDelegationService({
+      maxActiveChildren: options.maxActiveChildren,
       readSessionExecution: options.readSessionExecution,
       collectArtifacts: options.collectArtifacts,
       discardDelegationQueuedInputs: options.discardDelegationQueuedInputs ?? (coordinator
@@ -4647,6 +4649,52 @@ describe('Bot Session task end-to-end runtime', () => {
         expect(runtime.flushInput).not.toHaveBeenCalled();
       }
     } finally { release(); runtime.dispose(); }
+  });
+
+  it.each([
+    { path: 'preflight', read: 1, expected: 'CONCURRENCY_LIMIT' },
+    { path: 'cancel', read: 1, expected: 'ALREADY_TERMINAL' },
+    { path: 'reply', read: 2, expected: 'WRONG_REPLY_KIND' },
+    { path: 'interject', read: 3, expected: 'SESSION_TASK_NOT_READY' },
+  ])('revalidates after the $path task read before returning $expected', async ({ path, read, expected }) => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const runtime = createDelegationRuntime({ maxActiveChildren: 1 });
+    let restore = () => {};
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Private task state fixture.' });
+      if (!task.ok) throw new Error(task.message);
+      if (path === 'cancel') h.sqlite!.prepare("UPDATE bot_delegations SET status='completed' WHERE id=?").run(task.delegationId);
+      if (path === 'interject') h.sqlite!.prepare("UPDATE bot_delegations SET status='queued' WHERE id=?").run(task.delegationId);
+      if (path === 'reply') await runtime.delegation.handleInteractionStart(task.childSessionId,
+        { kind: 'permission', requestId: 'fixture-private-approval', toolName: 'write_file', input: {} });
+      const call = () => path === 'preflight'
+        ? runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Another task.' })
+        : path === 'cancel' ? runtime.delegation.cancelDelegation('group-lane', task.delegationId)
+          : runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'message', text: 'Follow-up.' });
+      expect(await call()).toMatchObject({ ok: false, errorCode: expected });
+      runtime.dispatch.mockClear(); runtime.abortSession.mockClear();
+      const before = h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId);
+      let taskReads = 0;
+      const select = h.db!.select.bind(h.db!);
+      const spy = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+        const query = select(fields);
+        const from = query.from.bind(query);
+        vi.spyOn(query, 'from').mockImplementation(table => {
+          const result = from(table);
+          if (table === botDelegations && ++taskReads === read) queueMicrotask(() => { revoked = true; });
+          return result;
+        });
+        return query;
+      });
+      restore = () => spy.mockRestore();
+      expect(await call()).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(taskReads).toBe(read); expect(revoked).toBe(true);
+      expect(runtime.dispatch).not.toHaveBeenCalled(); expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId)).toEqual(before);
+    } finally { restore(); release(); runtime.dispose(); }
   });
 
   it.each((['inspect', 'advance'] as const).flatMap(operation =>
