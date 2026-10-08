@@ -3939,7 +3939,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const steer = vi.fn<NonNullable<Parameters<typeof createBotDelegationService>[0]['taskControl']>['steer']>(async () => options.steerUnsupported
       ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No same-turn steer' }
       : { ok: true as const, queuedMessageId: 'steered-message' });
-    const stopTurn = vi.fn(async () => options.stopUnsupported
+    const stopTurn = vi.fn<NonNullable<Parameters<typeof createBotDelegationService>[0]['taskControl']>['stop']>(async () => options.stopUnsupported
       ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No graceful stop' }
       : { ok: true as const, status: 'requested' as const });
     const waitForInputBoundary = vi.fn(async () => undefined);
@@ -4724,6 +4724,42 @@ describe('Bot Session task end-to-end runtime', () => {
       const result = await runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'message', mode: 'steer', text: 'Same-turn input.' });
       if (boundary === 'valid') { expect(result).toMatchObject({ ok: true }); expect(inject).toHaveBeenCalledOnce(); }
       else { expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' }); expect(inject).not.toHaveBeenCalled(); }
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each((['request-stop', 'pause'] as const).flatMap(mode =>
+    [true, false].map(revoke => ({ mode, revoke }))))
+  ('revalidates $mode after the native stop target lookup (revoked=$revoke)', async ({ mode, revoke }) => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const nativeStop = vi.fn(async () => ({ status: 'requested' as const, turnGeneration: 1 }));
+    const live = { agentKind: 'pi' as const, requestGracefulStop: nativeStop };
+    let targetChecked = false;
+    const controls = createSessionControlService({
+      getLiveSession: () => targetChecked ? live : null,
+      sessionExists: async () => { targetChecked = true; revoked = revoke; return true; },
+    } as never);
+    const runtime = createDelegationRuntime({ taskControl: true });
+    runtime.stopTurn.mockImplementation(params => controls.stopSessionTurn(params));
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Native stop admission fixture.' });
+      if (!task.ok) throw new Error(task.message);
+      const before = h.sqlite!.prepare('SELECT status, permission_snapshot_json FROM bot_delegations WHERE id=?').get(task.delegationId);
+      const result = await runtime.delegation.stopSessionTask('group-lane', task.delegationId, mode);
+      if (revoke) {
+        expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+        expect(nativeStop).not.toHaveBeenCalled();
+        expect(runtime.preparePause).not.toHaveBeenCalled();
+        expect(runtime.flushInput).not.toHaveBeenCalled();
+        expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+        expect(h.sqlite!.prepare('SELECT status, permission_snapshot_json FROM bot_delegations WHERE id=?').get(task.delegationId)).toEqual(before);
+      } else {
+        expect(result).toMatchObject({ ok: true });
+        expect(nativeStop).toHaveBeenCalledOnce();
+        expect(runtime.heldInputs.has(task.childSessionId)).toBe(mode === 'pause');
+      }
     } finally { release(); runtime.dispose(); }
   });
 

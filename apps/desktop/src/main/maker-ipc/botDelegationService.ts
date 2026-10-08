@@ -122,7 +122,7 @@ export interface BotDelegationServiceDeps {
   discardDelegationQueuedInputs?: (sessionId: string, delegationId: string) => Promise<void>;
   taskControl?: {
     steer(params: { callerSessionId: string; targetSessionId: string; message: string; queuedMessageId?: string; beforeMutation?: () => Promise<void> }): Promise<SessionSteerResult>;
-    stop(params: { targetSessionId: string }): Promise<SessionStopResult>;
+    stop(params: { targetSessionId: string; beforeMutation?: () => Promise<void> }): Promise<SessionStopResult>;
     /** Includes native pending interactions and in-flight sends, not just visible streaming. */
     isActive(sessionId: string): boolean;
     /** IDs of decisions synchronously applied while releasing the pause. */
@@ -3645,7 +3645,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       control: taskControlView(row) };
     if (mode === 'request-stop') {
       let result: Awaited<ReturnType<typeof control.stop>> = { ok: true, status: 'no-active-turn' };
-      const applied = await controlDelegatedExecution(row, async () => { await found.groupAuthority?.refresh(); result = await control.stop({ targetSessionId: row.childSessionId! }); }, true);
+      const applied = await controlDelegatedExecution(row, async () => {
+        await found.groupAuthority?.refresh();
+        result = await control.stop({ targetSessionId: row.childSessionId!,
+          ...(found.groupAuthority ? { beforeMutation: found.groupAuthority.refresh } : {}) });
+      }, true);
       if (!applied) return finishCancelledDelegation(row);
       if (result.ok) {
         await getDbClient().drizzle.update(botDelegations).set({
@@ -3686,10 +3690,20 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       let result: Awaited<ReturnType<typeof control.stop>> = { ok: true, status: 'no-active-turn' };
       const applied = await controlDelegatedExecution(row, async () => {
         await found.groupAuthority?.refresh();
-        admitted = true;
-        result = (pending && pause.interactionOnly) || !control.isActive(row.childSessionId!)
-          ? { ok: true, status: 'no-active-turn' }
-          : await control.stop({ targetSessionId: row.childSessionId! });
+        const beforeStop = async () => {
+          await found.groupAuthority?.refresh();
+          admitted = true;
+        };
+        if ((pending && pause.interactionOnly) || !control.isActive(row.childSessionId!)) {
+          admitted = true;
+          result = { ok: true, status: 'no-active-turn' };
+        } else {
+          // Keep rollback armed until Session control finishes its async target
+          // lookup and admits the native stop under the current group grant.
+          result = await control.stop({ targetSessionId: row.childSessionId!,
+            ...(found.groupAuthority ? { beforeMutation: beforeStop } : {}) });
+          admitted = true;
+        }
         if (result.ok) {
           await control.preparePause(row.childSessionId!);
           await control.flushInput(row.childSessionId!);

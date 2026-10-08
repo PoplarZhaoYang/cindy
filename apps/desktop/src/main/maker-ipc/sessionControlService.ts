@@ -292,8 +292,9 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       return { ok: true, queuedMessageId };
     },
 
-    async stopSessionTurn(params: { targetSessionId: string }): Promise<SessionStopResult> {
+    async stopSessionTurn(params: { targetSessionId: string; beforeMutation?: () => Promise<void> }): Promise<SessionStopResult> {
       const missing = await ensureTarget(params.targetSessionId);
+      if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
       const live = deps.getLiveSession(params.targetSessionId);
       if (!live) return { ok: true, status: 'no-active-turn' };
