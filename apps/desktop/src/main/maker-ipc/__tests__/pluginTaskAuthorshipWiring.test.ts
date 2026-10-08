@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { appendAutoReviewUserIntent, AUTO_REVIEW_DELEGATED_CONTINUATION, AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, type SendOptions } from '@cindy/maker-core';
+import { buildMakerUserMessage } from '../../../shared/agentInputQueue.js';
+import { redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
 
 const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
 const compile = (code: string) => ts.transpileModule(code, {
@@ -103,6 +105,19 @@ it('keeps host receipts hidden in the queue while the model text omits the trigg
   });
   // Queue rows mask on `text`; the prefix stays there and is dropped at wire assembly.
   expect(queued).toMatchObject({ text: `[UI_ACTION_TRIGGER]${receipt}`, persistedContent: `[UI_ACTION_TRIGGER]${receipt}`, agentOmitsTriggerPrefix: true });
+  // A group DM has a private wire envelope and a separate safe durable body.
+  // Keep the queue row hidden without substituting the safe body into the model input.
+  const envelope = '[Group source: Private group (group-private); lane: private-lane]\n\nMessage body';
+  const groupInput = await build({
+    targetSessionId: 'lead', clientId: 'bot-dm:fixture', meta: {},
+    message: envelope, persistedContent: '[UI_ACTION_TRIGGER]Message body',
+    origin: { kind: 'session', senderSessionId: 'private-lane', displayText: envelope },
+  });
+  expect(groupInput).toMatchObject({ text: `[UI_ACTION_TRIGGER]${envelope}`, agentOmitsTriggerPrefix: true,
+    persistedContent: '[UI_ACTION_TRIGGER]Message body', chatMessage: { content: '[UI_ACTION_TRIGGER]Message body' } });
+  expect(buildMakerUserMessage(groupInput)).toMatchObject({ content: envelope });
+  const guest = redactInputProjectionForSharedGuest({ pendingQueue: [groupInput], recovery: { item: groupInput } });
+  expect(JSON.stringify(guest)).not.toMatch(/Private group|group-private|private-lane|Group source/);
   // Ordinary prefixed synthetic input (continue prompts) is untouched.
   const continueItem = await build({
     targetSessionId: 'lead', clientId: 'c', meta: {},

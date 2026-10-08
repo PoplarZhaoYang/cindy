@@ -11911,10 +11911,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 排队行的遮蔽按 text 判定,所以 text 保留前缀,只在最终 wire 组装时去掉
     // (agentOmitsTriggerPrefix → buildMakerUserMessage)。
     const hiddenTriggerForAgent = !params.message.startsWith(UI_ACTION_TRIGGER_PREFIX)
-      && params.persistedContent === `${UI_ACTION_TRIGGER_PREFIX}${params.message}`;
+      && params.persistedContent.startsWith(UI_ACTION_TRIGGER_PREFIX);
     return {
       clientId: params.clientId,
-      text: hiddenTriggerForAgent ? params.persistedContent : params.message,
+      text: hiddenTriggerForAgent ? `${UI_ACTION_TRIGGER_PREFIX}${params.message}` : params.message,
       ...(hiddenTriggerForAgent ? { agentOmitsTriggerPrefix: true as const } : {}),
       ...(params.autoReviewUserText !== undefined ? { autoReviewUserText: params.autoReviewUserText } : {}),
       ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),

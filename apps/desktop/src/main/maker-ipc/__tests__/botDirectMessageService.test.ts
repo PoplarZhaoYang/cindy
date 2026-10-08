@@ -20,6 +20,9 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
 import { createBotMessageTransport } from '../botMessageTransport.js';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
+import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
+import { redactMessageRowForSharedGuest, redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
+import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -155,8 +158,25 @@ describe('botDirectMessageService', () => {
       expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
         dispatcherSessionId: 'a-group',
         message: expect.stringContaining('[Group source: Design (group-1); lane: a-group]'),
-        persistedContent: expect.stringContaining('Replies go to the sender teammate'),
+        persistedContent: `${UI_ACTION_TRIGGER_PREFIX}Bounded peer question`,
       }));
+      const sent = dispatch.mock.calls.at(-1)![0];
+      expect(sent.message).toContain('Replies go to the sender teammate');
+      const origin = sessionQueueOriginForDispatcher(sent);
+      const row = { sessionId: sent.targetSessionId, content: sent.persistedContent,
+        agentMeta: { origin, agentFacingWireContent: { type: 'user', content: sent.message } } };
+      const queued = { clientId: sent.clientId, text: sent.message, persistedContent: sent.persistedContent,
+        origin, chatMessage: { content: sent.persistedContent } };
+      const projection = { pendingQueue: [queued], recovery: { kind: 'active-turn', item: queued } };
+      // These are the actual history/message-push and queue/read-recovery
+      // redactors. The host's model input retains the full group source.
+      const guestRow = redactMessageRowForSharedGuest(row);
+      const guestProjection = redactInputProjectionForSharedGuest(projection);
+      expect(guestRow.content).toBe(`${UI_ACTION_TRIGGER_PREFIX}Bounded peer question`);
+      expect(JSON.stringify([guestRow, guestProjection])).not.toMatch(/Design|group-1|a-group|Group source/);
+      expect(JSON.stringify(guestProjection)).toContain('Bounded peer question');
+      expect(row.agentMeta.agentFacingWireContent.content).toContain('[Group source: Design (group-1); lane: a-group]');
+      expect(queued.text).toBe(sent.message);
       release();
       dispatch.mockImplementationOnce(async params => {
         await params.onAccepted?.();

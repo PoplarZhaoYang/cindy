@@ -815,7 +815,9 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           dispatched = await deps.dispatch({
             targetSessionId: targetSessionId!, message: envelope,
             ...(groupAuthority ? { dispatcherSessionId: input.callerSessionId } : {}),
-            persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${envelope}`,
+            // Group routing details belong only to the agent wire. Shared
+            // history and queue projections can expose the persisted body.
+            persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${groupAuthority ? message : envelope}`,
             clientId: `bot-dm:${thread.id}:${deliveryId}`,
             onAccepted, onAcceptedRollback: rollbackReservation,
           });

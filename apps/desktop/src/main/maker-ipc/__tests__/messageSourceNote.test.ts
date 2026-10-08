@@ -171,7 +171,7 @@ describe('delivery-path wiring (source contract)', () => {
       'const orcaInterAgentDispatcher',
     );
     expect(builder).toContain(
-      'text: hiddenTriggerForAgent ? params.persistedContent : params.message',
+      'text: hiddenTriggerForAgent ? `${UI_ACTION_TRIGGER_PREFIX}${params.message}` : params.message',
     );
     expect(builder).toContain('agentOmitsTriggerPrefix: true as const');
   });
