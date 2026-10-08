@@ -485,7 +485,9 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     // before the message is persisted or queued against a Session id.
     let targetSessionId: string | null = null;
     if (!remoteTarget && deps.ensureCanonicalSession) {
-      const ensured = await deps.ensureCanonicalSession(input.targetBotId);
+      const ensured = groupAuthority
+        ? await deps.ensureCanonicalSession(input.targetBotId, groupAuthority.refresh).finally(groupAuthority.refresh)
+        : await deps.ensureCanonicalSession(input.targetBotId);
       if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
       if (ensured.ok) targetSessionId = ensured.sessionId;
       else return failed(ensured.errorCode, ensured.message, true, groupAuthority?.refresh);

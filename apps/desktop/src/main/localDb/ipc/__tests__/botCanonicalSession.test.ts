@@ -4181,6 +4181,71 @@ describe('Bot Session task end-to-end runtime', () => {
       } finally { release(); runtime.dispose(); }
     });
 
+  it.each(['Private reply', '"Private reply"', '123', '{"reply":"ok"}', 'line one\nline two'])('compares exact persisted private text on retries: %s', async message => {
+    await seedPair(); seedGroupLane();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
+      sourceGroup: { groupId: 'fixture' }, isCurrent: () => true, validate: async () => {} });
+    const dispatch = vi.fn();
+    const service = createBotDirectMessageService({ dispatch });
+    const input = { callerSessionId: 'group-lane', message, idempotencyKey: 'exact-text-fixture' };
+    try {
+      const first = await service.sendToUser(input);
+      expect(first).toMatchObject({ ok: true, delivered: true });
+      if (!first.ok) throw new Error(first.message);
+      expect(h.sqlite!.prepare('SELECT content FROM messages WHERE id=?').pluck().get(first.messageId)).toBe(message);
+      expect(await service.sendToUser(input)).toEqual(first);
+      expect(await service.sendToUser({ ...input, message: message + ' changed' }))
+        .toMatchObject({ ok: false, errorCode: 'IDEMPOTENCY_CONFLICT' });
+      expect(h.sqlite!.prepare("SELECT count(*) FROM messages WHERE client_id LIKE 'bot-group-private:%'").pluck().get()).toBe(1);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
+  it.each((['missing', 'deleted'] as const).flatMap(state => [false, true].map(revoke => ({ state, revoke }))))(
+    'guards peer canonical recovery after its async lookup ($state, revoke=$revoke)', async ({ state, revoke }) => {
+      await seedPair(); seedGroupLane();
+      await invoke('local-db:bots:create', { id: 'bot-b', name: 'Peer', capabilities: { harness: 'pi', model: 'grok-4.5', providerId: PROVIDER } });
+      const peer = await invoke('local-db:bots:create-canonical-session', { botId: 'bot-b', expectedCanonicalSessionId: null, expectedProfileVersion: 1 }) as { canonicalSessionId: string };
+      if (state === 'missing') {
+        h.sqlite!.pragma('foreign_keys = OFF');
+        h.sqlite!.prepare('DELETE FROM sessions WHERE id=?').run(peer.canonicalSessionId);
+        h.sqlite!.pragma('foreign_keys = ON');
+      } else h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run(peer.canonicalSessionId);
+      let revoked = false;
+      let crossed = false;
+      const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
+        sourceGroup: { groupId: 'fixture' }, isCurrent: () => true,
+        validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+      const select = h.db!.select.bind(h.db!);
+      const spy = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+        const query = select(fields);
+        if (fields?.role === botSessionLinks.role && fields?.status === sessions.status) {
+          crossed = true;
+          queueMicrotask(() => { revoked = revoke; });
+        }
+        return query;
+      });
+      const runtime = createDelegationRuntime();
+      const service = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+      const sessionCount = h.sqlite!.prepare('SELECT count(*) FROM sessions').pluck().get();
+      try {
+        const result = await service.messageAgent({ callerSessionId: 'group-lane', targetBotId: 'bot-b', message: 'Fixture peer request' });
+        expect(crossed).toBe(true);
+        if (revoke) {
+          expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+          expect(h.sqlite!.prepare('SELECT count(*) FROM sessions').pluck().get()).toBe(sessionCount);
+          expect(h.sqlite!.prepare("SELECT session_id FROM bot_session_links WHERE bot_id='bot-b' AND role='canonical' AND archived_at IS NULL").pluck().get()).toBe(peer.canonicalSessionId);
+          expect(runtime.dispatch).not.toHaveBeenCalled();
+          expect(h.sqlite!.prepare('SELECT count(*) FROM bot_direct_messages').pluck().get()).toBe(0);
+        } else {
+          expect(result).toMatchObject({ ok: true });
+          if (!result.ok) throw new Error(result.message);
+          expect(result.targetSessionId).not.toBe(peer.canonicalSessionId);
+          expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id=?').pluck().get(result.targetSessionId)).toBe('active');
+        }
+      } finally { spy.mockRestore(); release(); runtime.dispose(); }
+    });
+
   it.each(['missing', 'deleted'] as const)('repairs a %s canonical chat for group private messages and independent tasks', async state => {
     await seedPair(); seedGroupLane();
     if (state === 'missing') {
