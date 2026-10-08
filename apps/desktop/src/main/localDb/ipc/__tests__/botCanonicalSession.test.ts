@@ -4534,7 +4534,7 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); }
   });
 
-  it.each(['reconciliation', 'resume-flush', 'release'] as const)('keeps a paused task held if group authority is revoked during %s', async boundary => {
+  it.each(['reconciliation', 'resume-flush', 'resume-commit', 'release'] as const)('keeps a paused task held if group authority is revoked during %s', async boundary => {
     await seedPair(); seedGroupLane();
     let revoke = false;
     let live = true;
@@ -4547,15 +4547,34 @@ describe('Bot Session task end-to-end runtime', () => {
       if (!task.ok) throw new Error(task.message);
       await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
       await runtime.settleChild(task.childSessionId, 'Paused');
+      const paused = h.sqlite!.prepare('SELECT status, permission_snapshot_json FROM bot_delegations WHERE id=?').get(task.delegationId) as { status: string; permission_snapshot_json: string };
       revoke = true;
       if (boundary === 'resume-flush') runtime.flushInput.mockImplementationOnce(async () => { live = false; });
+      if (boundary === 'resume-commit') {
+        h.sqlite!.function('revoke_group_resume', () => { queueMicrotask(() => { live = false; }); return 1; });
+        h.sqlite!.exec(`CREATE TEMP TRIGGER revoke_resume AFTER UPDATE OF permission_snapshot_json ON bot_delegations
+          WHEN json_extract(OLD.permission_snapshot_json, '$.taskPause') IS NOT NULL
+            AND json_extract(NEW.permission_snapshot_json, '$.taskPause') IS NULL
+          BEGIN SELECT revoke_group_resume(); END`);
+      }
       const before = runtime.started.length;
       expect(await runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'resume' }))
         .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
       expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
       expect(runtime.started).toHaveLength(before);
-      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { control: { queue_held: true } } });
-    } finally { release(); runtime.dispose(); }
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { control: { state: 'paused', queue_held: true } } });
+      const restored = h.sqlite!.prepare('SELECT status, permission_snapshot_json FROM bot_delegations WHERE id=?').get(task.delegationId) as typeof paused;
+      expect(restored.status).toBe(paused.status);
+      expect(JSON.parse(restored.permission_snapshot_json).taskPause).toEqual(JSON.parse(paused.permission_snapshot_json).taskPause);
+      expect(JSON.parse(restored.permission_snapshot_json).taskResume).toBeUndefined();
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_resume');
+      // The owner can retry with the same queued receipt; no stuck resuming card
+      // or replacement group lease is required to release the original pause.
+      revoke = false;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, resumed: true });
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+    } finally { h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_resume'); release(); runtime.dispose(); }
   });
 
   it.each(['pause', 'cancel', 'request-stop'] as const)('does not %s the runtime after losing group authority at the reservation boundary', async mode => {

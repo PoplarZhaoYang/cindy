@@ -3565,7 +3565,33 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       status = current.status as DelegationStatus;
     }
-    return finishTaskResume({ ...row, status, updatedAt: resumedAt, permissionSnapshotJson: JSON.stringify(snapshot) }, groupAuthority);
+    const previousRaisedAt = pending?.raisedAt;
+    try {
+      return await finishTaskResume({ ...row, status, updatedAt: resumedAt, permissionSnapshotJson: JSON.stringify(snapshot) }, groupAuthority);
+    } catch (error) {
+      if (error instanceof GroupToolAuthorizationError) {
+        // The resume write can finish after revocation. Keep accepted input
+        // receipts for retry, but restore the pause if this exact transition
+        // still owns the row; never overwrite a newer run or terminal result.
+        const [restored] = await getDbClient().drizzle.update(botDelegations).set({
+          status: row.status, permissionSnapshotJson: row.permissionSnapshotJson,
+          pendingInteractionJson: row.pendingInteractionJson, updatedAt: row.updatedAt,
+        }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence),
+          eq(botDelegations.status, status), eq(botDelegations.updatedAt, resumedAt),
+          eq(botDelegations.permissionSnapshotJson, JSON.stringify(snapshot))))
+          .returning({ id: botDelegations.id });
+        if (restored) {
+          holdTaskInput(row.childSessionId!, true);
+          if (pending && previousRaisedAt !== undefined) pending.raisedAt = previousRaisedAt;
+          clearTimer(row.id);
+          clearRetryTimer(row.id);
+          clearInteractionRetryTimer(row.id);
+          emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
+            childSessionId: row.childSessionId, status: row.status as DelegationStatus });
+        }
+      }
+      throw error;
+    }
   };
 
   const messageSessionTask = (callerSessionId: string, taskId: string, input: SessionTaskMessage) =>
