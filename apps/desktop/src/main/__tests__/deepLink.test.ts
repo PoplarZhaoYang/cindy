@@ -40,6 +40,7 @@ import {
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
   takePendingDeepLink,
+  takePendingDeepLinkFromRenderer,
 } from '../deepLink';
 
 function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
@@ -61,6 +62,25 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
 describe('chat invitation handoff', () => {
   const token = 'synthetic-invitation-'.padEnd(43, 'a');
   const link = `cindy://chat-invite/${token}`;
+  it('keeps the invitation for the main frame when secondary windows or subframes try to take it', () => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(link, 'open-url');
+    const sender = { mainFrame: {} } as BrowserWindow['webContents'];
+    const secondary = { mainFrame: {} } as BrowserWindow['webContents'];
+    const event = { sender, senderFrame: sender.mainFrame };
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    const isDestroyed = vi.fn(() => false);
+    setDeepLinkMainWindow({ isDestroyed, webContents: sender } as unknown as BrowserWindow);
+    expect(takePendingDeepLinkFromRenderer({ sender: secondary, senderFrame: secondary.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: secondary.mainFrame })).toBeNull();
+    expect(takePendingDeepLinkFromRenderer({ sender, senderFrame: null })).toBeNull();
+    isDestroyed.mockReturnValue(true);
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    isDestroyed.mockReturnValue(false);
+    expect(takePendingDeepLinkFromRenderer(event)).toEqual({ type: 'chat-invite', token });
+    expect(takePendingDeepLinkFromRenderer(event)).toBeNull();
+    setDeepLinkMainWindow(null);
+  });
   it('recognizes the existing generated link and rejects ambiguous targets', () => {
     expect(parseDeepLink(link)).toEqual({ type: 'chat-invite', token });
     expect(parseDeepLink(link.replace('cindy:', 'xdt-maker:'))).toEqual({ type: 'chat-invite', token });

@@ -40,7 +40,7 @@
  *   发布前仍需用 packaged build 做最终跨平台验证。
  */
 
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { parseProviderShareInvitationIntent, parseSharedTaskInvitationIntent } from '@cindy/device-link';
 import { createLogger } from './logger';
@@ -474,6 +474,16 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   // 意图就是要看到 app。
   if (shouldFocus) focusMainWindow();
   win!.webContents.send('deep-link:navigate', payload);
+}
+
+/** Only the main window can own and display retained invitation intents. */
+export function takePendingDeepLinkFromRenderer(
+  event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
+): DeepLinkPayload | null {
+  if (!mainWindowRef || mainWindowRef.isDestroyed()
+    || event.sender !== mainWindowRef.webContents
+    || !event.senderFrame || event.senderFrame !== event.sender.mainFrame) return null;
+  return takePendingDeepLink();
 }
 
 /**

@@ -24,6 +24,25 @@ const compiled = ts.transpileModule(`const bridge = {${source.slice(start, end)}
 }).outputText;
 
 afterEach(() => { cleanup(); setDeepLinkMainWindow(null); });
+it('does not pull invitations in a secondary window, leaving the intent for the main window', async () => {
+  const take = vi.fn(async () => takePendingDeepLink());
+  const receive = vi.fn();
+  const token = 'secondary-window-fixture-'.padEnd(43, 'a');
+  handleIncomingDeepLink(`cindy://chat-invite/${token}`, 'open-url');
+  const previousUrl = window.location.href;
+  try {
+    window.history.replaceState(null, '', '?secondaryWindow=1');
+    await drainPendingDeepLinks(take, receive);
+    expect(take).not.toHaveBeenCalled();
+    expect(receive).not.toHaveBeenCalled();
+  } finally {
+    window.history.replaceState(null, '', previousUrl);
+  }
+  await drainPendingDeepLinks(take, receive);
+  expect(receive).toHaveBeenCalledExactlyOnceWith({ type: 'chat-invite', token });
+  expect(takePendingDeepLink()).toBeNull();
+});
+
 it.each([false, true])('continues an offline browser anchor through preload and the pending queue (already open: %s)', async alreadyOpen => {
   let listener: ((payload: unknown) => void) | undefined;
   const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', `${compiled}; return bridge;`)(
