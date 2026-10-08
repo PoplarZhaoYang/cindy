@@ -408,6 +408,8 @@ export interface MessageInsertArgs {
   createdAt: number;
   guarded: boolean;
   expectedClearBoundaryMs?: number | null;
+  /** Host-only two-phase publication; staged rows are hidden from live history. */
+  publication?: 'stage' | 'publish';
 }
 
 export interface MessageUpdateContentArgs {

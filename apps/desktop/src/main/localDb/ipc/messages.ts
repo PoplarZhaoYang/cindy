@@ -1578,6 +1578,9 @@ export async function createMessage(
      * final "is this still current?" check is actually meaningful.
      */
     shouldBroadcast?: () => boolean;
+    /** Host-only admission guard, after hidden persistence and before publication.
+     * Failed guards remove only this call's hidden row, before any side effects. */
+    beforePublish?: () => Promise<void>;
     /**
      * Optional clear-boundary compare-and-set for optimistic user sends.  The
      * insert is accepted only while the session still has this exact
@@ -1618,6 +1621,7 @@ export async function createMessage(
     if (existing.length > 0) return messageToCamel(existing[0]);
   }
 
+  if (guarded && opts?.beforePublish) throw new Error('Publication guard cannot be combined with optimistic input');
   const id = createId();
   const now = Date.now();
   const visibleCreatedAt =
@@ -1626,7 +1630,7 @@ export async function createMessage(
       : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
   try {
-    const inserted = await dbClient.tx('message.insert', {
+    const insertArgs = {
       id: insertRow.id,
       clientId: insertRow.clientId,
       sessionId,
@@ -1638,7 +1642,15 @@ export async function createMessage(
       createdAt: insertRow.createdAt,
       guarded,
       expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+    };
+    const inserted = await dbClient.tx('message.insert', { ...insertArgs,
+      ...(opts?.beforePublish ? { publication: 'stage' as const } : {}),
     });
+    if (opts?.beforePublish) {
+      await opts.beforePublish();
+      const published = await dbClient.tx('message.insert', { ...insertArgs, publication: 'publish' });
+      if (published.changes !== 1) throw new Error('Message publication lost its pending row');
+    }
     if (guarded && inserted.changes === 0) {
       const [existingAfterGuard] = await db
         .select()
@@ -1670,6 +1682,11 @@ export async function createMessage(
       throw new Error('Message insert skipped without a clear-boundary change');
     }
   } catch (err) {
+    if (opts?.beforePublish) {
+      await db.delete(messages).where(and(eq(messages.id, id), eq(messages.sessionId, sessionId),
+        eq(messages.clientId, `pending-publication:${id}`), eq(messages.rewindAt, visibleCreatedAt)));
+      throw err;
+    }
     const after = await db
       .select()
       .from(messages)

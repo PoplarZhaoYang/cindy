@@ -1123,7 +1123,11 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           clientId, role: 'assistant', content: message, agentKind: null,
           agentMeta: { sourceGroup: authority.sourceGroup, origin: { kind: 'session', senderSessionId: input.callerSessionId,
             senderBotId: caller.botId, senderBotName: caller.botName } },
-        }, { broadcastOwnerScope: scope });
+        }, { broadcastOwnerScope: scope, beforePublish: async () => {
+          await authority.refresh();
+          if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+            throw new GroupToolAuthorizationError();
+        } });
         return { ok: true as const, messageId: saved.id, targetSessionId: target.sessionId, delivered: true };
       });
     } catch (error) {

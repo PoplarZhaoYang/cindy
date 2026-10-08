@@ -121,6 +121,41 @@ describe('message write paths avoid large-content readback', () => {
     setupDb();
   });
 
+  it.each([false, true])('publishes only after the post-write guard succeeds (revoked=%s)', async revoked => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    const beforePublish = vi.fn(async () => {
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages WHERE rewind_at IS NULL').pluck().get()).toBe(0);
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+      if (revoked) throw new Error('revoked at server');
+    });
+    const sending = createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
+    if (revoked) {
+      await expect(sending).rejects.toThrow('revoked at server');
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    } else {
+      await expect(sending).resolves.toMatchObject({ clientId: 'private-message', content: 'Private result' });
+      expect(h.sqlite!.prepare('SELECT client_id, rewind_at FROM messages').get()).toEqual({ client_id: 'private-message', rewind_at: null });
+      expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created', expect.anything());
+      expect(h.mediaRefCalls).toHaveLength(1);
+      await createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
+      expect(beforePublish).toHaveBeenCalledTimes(1);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+    }
+  });
+
   describe('createMessage happy path', () => {
     it('issues no SELECT after the INSERT and returns the inserted row', async () => {
       const msg = await createMessage('s1', {

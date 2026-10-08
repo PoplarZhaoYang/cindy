@@ -1545,7 +1545,18 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
       : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
   const transaction = db.transaction(() => {
     let changes = 0;
-    if (guarded) {
+    if (payload.publication === 'publish') {
+      changes = db.prepare(
+        `UPDATE messages SET client_id = ?, rewind_at = NULL
+         WHERE id = ? AND session_id = ? AND client_id = ? AND rewind_at = ?`,
+      ).run(clientId, id, sessionId, `pending-publication:${id}`, createdAt).changes;
+    } else if (payload.publication === 'stage') {
+      changes = db.prepare(
+        `INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id,
+          agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, `pending-publication:${id}`, sessionId, role, content, toolUseId,
+        agentMeta, agentKind, createdAt, createdAt).changes;
+    } else if (guarded) {
       changes = db
         .prepare(
           `INSERT INTO messages (
@@ -1582,7 +1593,7 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
         .run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt)
         .changes;
     }
-    if (changes > 0) {
+    if (changes > 0 && payload.publication !== 'stage') {
       if (role === 'user' || role === 'assistant') {
         db.prepare(
           'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',

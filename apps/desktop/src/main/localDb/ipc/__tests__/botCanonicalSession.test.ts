@@ -4211,6 +4211,34 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); runtime.dispose(); }
   });
 
+  it.each(['revoked', 'owner-changed'] as const)('removes an unpublished group private message when %s during persistence', async failure => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
+      sourceGroup: { groupId: 'fixture' }, isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const originalTx = h.tx!;
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'message.insert' && (args as { publication?: string }).publication === 'stage') {
+        expect(h.sqlite!.prepare("SELECT count(*) FROM messages WHERE content = 'Must stay private' AND rewind_at IS NULL").pluck().get()).toBe(0);
+        if (failure === 'revoked') revoked = true;
+        else h.ownerScopeKey = 'owner-b:2';
+      }
+      return result;
+    };
+    const dispatch = vi.fn();
+    const service = createBotDirectMessageService({ dispatch,
+      captureOwnerScope: () => ({ ownerScopeKey: h.ownerScopeKey, ownerStamp: { dataOwnerId: 'owner-a', ownerGeneration: 1 } }),
+      isOwnerScopeCurrent: scope => scope.ownerScopeKey === h.ownerScopeKey });
+    try {
+      expect(await service.sendToUser({ callerSessionId: 'group-lane', message: 'Must stay private', idempotencyKey: 'post-write-revoke' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(h.sqlite!.prepare("SELECT count(*) FROM messages WHERE content = 'Must stay private'").pluck().get()).toBe(0);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { h.tx = originalTx; release(); }
+  });
+
   it.each(['healthy', 'missing'] as const)('keeps or repairs the %s owner chat when group work is the first entry', async state => {
     await seedPair(); seedGroupLane();
     if (state === 'missing') {

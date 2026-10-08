@@ -778,7 +778,16 @@ function messageInsert(readyDb, args) {
       : expectNumber(payload.expectedClearBoundaryMs, 'expectedClearBoundaryMs');
   return readyDb.transaction(() => {
     let changes = 0;
-    if (guarded) {
+    if (payload.publication === 'publish') {
+      changes = readyDb.prepare(
+        'UPDATE messages SET client_id = ?, rewind_at = NULL WHERE id = ? AND session_id = ? AND client_id = ? AND rewind_at = ?',
+      ).run(clientId, id, sessionId, 'pending-publication:' + id, createdAt).changes;
+    } else if (payload.publication === 'stage') {
+      changes = readyDb.prepare(
+        'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run(id, 'pending-publication:' + id, sessionId, role, content, toolUseId,
+        agentMeta, agentKind, createdAt, createdAt).changes;
+    } else if (guarded) {
       changes = readyDb.prepare(
         'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? FROM sessions AS s WHERE s.id = ? AND COALESCE(s.cleared_at, -1) = COALESCE(?, -1) ON CONFLICT(session_id, client_id) DO NOTHING',
       ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt, sessionId, expected).changes;
@@ -787,7 +796,7 @@ function messageInsert(readyDb, args) {
         'INSERT INTO messages (id, client_id, session_id, role, content, tool_use_id, agent_meta, agent_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(id, clientId, sessionId, role, content, toolUseId, agentMeta, agentKind, createdAt).changes;
     }
-    if (changes > 0) {
+    if (changes > 0 && payload.publication !== 'stage') {
       if (role === 'user' || role === 'assistant') {
         readyDb.prepare(
           'UPDATE sessions SET list_preview = NULL, list_preview_role = NULL, list_message_count = NULL WHERE id = ?',

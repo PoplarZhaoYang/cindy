@@ -962,6 +962,25 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it.each([false, true])('stages message publication without exposing live history or list changes (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 's1');
+      await client.exec("UPDATE sessions SET list_preview='keep', list_message_count=7 WHERE id='s1'");
+      const args = { id: 'staged', clientId: 'private', sessionId: 's1', role: 'assistant', content: 'private result',
+        toolUseId: null, agentMeta: null, agentKind: null, createdAt: 100, guarded: false };
+      await expect(client.tx('message.insert', { ...args, publication: 'stage' })).resolves.toEqual({ changes: 1 });
+      await expect(client.queryOne('SELECT COUNT(*) AS count FROM messages WHERE rewind_at IS NULL')).resolves.toEqual({ count: 0 });
+      await expect(client.queryOne("SELECT list_preview, list_message_count FROM sessions WHERE id='s1'"))
+        .resolves.toEqual({ list_preview: 'keep', list_message_count: 7 });
+      await expect(client.tx('message.insert', { ...args, publication: 'publish' })).resolves.toEqual({ changes: 1 });
+      await expect(client.queryOne('SELECT client_id, content, rewind_at FROM messages'))
+        .resolves.toEqual({ client_id: 'private', content: 'private result', rewind_at: null });
+      await expect(client.queryOne("SELECT list_preview, list_message_count FROM sessions WHERE id='s1'"))
+        .resolves.toEqual({ list_preview: null, list_message_count: null });
+      await expect(client.tx('message.insert', { ...args, publication: 'publish' })).resolves.toEqual({ changes: 0 });
+    }, { useInlineWorker });
+  });
+
   it.each([false, true])(
     'message.insert invalidates list projection in the same transaction (inline=%s)',
     async (useInlineWorker) => {
