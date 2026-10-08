@@ -1,4 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { ScriptTarget, transpileModule } from 'typescript';
 
 import { TurnDispatchUnconfirmedError } from '@cindy/maker-core';
 import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
@@ -26,6 +28,59 @@ import type {
   GoalStorageLike,
   SessionLike,
 } from '../types';
+
+// Execute the shared production steer closure with in-memory host dependencies.
+// This covers INPUT_STEER and the legacy STEER path without booting Electron.
+const registerSource = readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8');
+const steerSource = registerSource.slice(
+  registerSource.indexOf('  const steerToAgentAccepted = async ('),
+  registerSource.indexOf('  const trustedDesktopSteerText ='),
+);
+const compiledSteer = transpileModule(`${steerSource}\nreturn steerToAgentAccepted;`, {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+
+function productionSteer(session: FakeSession, deliver: () => Promise<void>, rejectBeforeDelivery = false) {
+  const query = { from: () => query, leftJoin: () => query, where: () => query, limit: async () => [] };
+  const deps = {
+    maker: {
+      getSession: () => ({
+        ...session,
+        capabilities: { sameTurnSteer: { supported: true } },
+        isTurnRunning: () => session.running,
+        getTurnGeneration: () => session.generation,
+        steer: deliver,
+      }),
+      getSessionMeta: async () => null,
+    },
+    getDbClient: () => ({ drizzle: { select: () => query } }),
+    sessions: {}, botSessionLinks: {}, botProfiles: {}, eq: () => undefined,
+    assertReviewExternalInputAllowed: async () => {},
+    botSessionInputBlockReason: () => null,
+    prepareUserMessageForAgent: async (_id: string, message: unknown) => message,
+    restoreAutoReviewSteerIntent: async () => undefined,
+    shouldPrependMobileClientPromptNote: () => false,
+    readWireSourceDevice: () => null,
+    isDeviceLinkInvoke: () => false,
+    assertRemoteInputClearNotInFlight: () => {},
+    readRemoteInputClearBoundaryPrecondition: () => ({ present: false }),
+    readExpectedInputGeneration: () => undefined,
+    assertCurrentInputGeneration: () => {
+      if (rejectBeforeDelivery) throw new Error('stale input generation');
+    },
+    MAIN_OWNED_SEND_CONTEXT: Symbol(), AUTO_REVIEW_SOURCE_CONTENT: Symbol(),
+    AUTO_REVIEW_DELEGATED_CONTINUATION: Symbol(), AUTO_REVIEW_USER_INTENT: Symbol(),
+    publishUiSessionIntervention,
+    summarizeIpcUserMessage: () => ({}),
+    log: { info: () => {}, warn: () => {}, debug: () => {} },
+    throwIpcError: (code: string, message: string) => { throw new Error(`${code}: ${message}`); },
+  };
+  // Keep Session identity stable across the production preflight checks.
+  const live = deps.maker.getSession();
+  deps.maker.getSession = () => live;
+  return new Function(...Object.keys(deps), compiledSteer)(...Object.values(deps)) as
+    (sessionId: string, message: string) => Promise<void>;
+}
 
 // ── decideNextGoalState (pure) ───────────────────────────────────────────────
 
@@ -2060,6 +2115,35 @@ describe('GoalController', () => {
       await h.controller.dispose();
     },
   );
+
+  it.each([false, true])('uses the production steer boundary before a pre-existing turn ends (rejected: %s)', async (rejected) => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    const finishOldTurn = () => {
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    };
+    const deliver = vi.fn(async () => {
+      // The vendor can emit done before acknowledging the steer RPC.
+      finishOldTurn();
+      await tick();
+    });
+    const steer = productionSteer(h.session, deliver, rejected);
+    if (rejected) {
+      await expect(steer('s1', 'new direction')).rejects.toThrow('stale input generation');
+      expect(deliver).not.toHaveBeenCalled();
+      finishOldTurn();
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect((await h.storage.get('s1'))?.status).toBe('active');
+    } else {
+      await steer('s1', 'new direction');
+      expect(deliver).toHaveBeenCalledOnce();
+      await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
+      expect(h.session.sends).toHaveLength(0);
+    }
+    await h.controller.dispose();
+  });
 
   it.each(['new turn', 'same-turn steer'] as const)(
     'does not exempt input that arrives during Goal persistence (%s)', async (delivery) => {
