@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       idle_seconds:
-        description: '恢复后不操作的秒数（正式对照至少 900）'
-        default: '900'
+        description: "恢复后不操作的秒数（正式对照至少 900）"
+        default: "900"
         required: true
         type: string
       hidden_seconds:
-        description: '关闭节流后保持隐藏的秒数（长时对照可用 8100）'
-        default: '3'
+        description: "关闭节流后保持隐藏的秒数（长时对照可用 8100）"
+        default: "3"
         required: true
         type: string
 
@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        electron: ['41.10.3', '43.7.9']
+        electron: ["41.10.3", "43.7.9"]
         scenario: [hide, minimize]
         surface: [window, view]
     env:
@@ -39,8 +39,6 @@ jobs:
       RENDER_PROBE_HIDDEN_SECONDS: ${{ inputs.hidden_seconds || '3' }}
       RENDER_PROBE_SCENARIO: ${{ matrix.scenario }}
       RENDER_PROBE_SURFACE: ${{ matrix.surface }}
-      RENDER_PROBE_ELECTRON_DIR: ${{ runner.temp }}/render-probe-electron
-      RENDER_PROBE_OUTPUT: ${{ runner.temp }}/render-probe-results
       ELECTRON_VERSION: ${{ matrix.electron }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,9 +47,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - name: Validate durations
+      - name: Prepare isolated paths and validate durations
         shell: pwsh
         run: |
+          "RENDER_PROBE_ELECTRON_DIR=$env:RUNNER_TEMP/render-probe-electron" >> $env:GITHUB_ENV
+          "RENDER_PROBE_OUTPUT=$env:RUNNER_TEMP/render-probe-results" >> $env:GITHUB_ENV
           if ($env:RENDER_PROBE_IDLE_SECONDS -notmatch '^\d+$' -or [int]$env:RENDER_PROBE_IDLE_SECONDS -lt 1 -or [int]$env:RENDER_PROBE_IDLE_SECONDS -gt 1800) { throw 'idle_seconds must be 1..1800' }
           if ($env:RENDER_PROBE_HIDDEN_SECONDS -notmatch '^\d+$' -or [int]$env:RENDER_PROBE_HIDDEN_SECONDS -lt 1 -or [int]$env:RENDER_PROBE_HIDDEN_SECONDS -gt 8100) { throw 'hidden_seconds must be 1..8100' }
       - name: Install isolated Electron (no Cindy dependencies or credentials)
