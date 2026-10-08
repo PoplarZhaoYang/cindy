@@ -34,16 +34,21 @@ export function imAutoReviewReferences(
 /**
  * The message an official Hook task answers, read from the server's raw TaskSource
  * before display bounding (`normalizeTaskSource` keeps only the oldest entries).
- * Telegram sends exactly the replied-to message; X and Slack send a chain whose last
- * entry other than the current request is the message being answered.
+ * An explicit `replyToMessageId` on the trigger names the parent; a parent missing from
+ * the chain is not guessed. Without one, Telegram sends exactly the replied-to message
+ * and X/Slack chains end with the message being answered (the current request excluded).
  */
 export function hookReplyTarget(
   source: Pick<TaskSource, 'threadContext' | 'triggerMessageId'> | undefined,
 ): AutoReviewQuotedMessage | undefined {
+  const chain = source?.threadContext ?? [];
   const trigger = source?.triggerMessageId;
-  const nearest = source?.threadContext
-    ?.filter((entry) => !trigger || entry.messageId !== trigger)
-    .at(-1);
+  const parentId = trigger
+    ? chain.find((entry) => entry.messageId === trigger)?.replyToMessageId
+    : undefined;
+  const nearest = parentId
+    ? chain.find((entry) => entry.messageId === parentId)
+    : chain.filter((entry) => !trigger || entry.messageId !== trigger).at(-1);
   return nearest
     ? projectAutoReviewUserReferences({
         quotedMessages: [{ author: nearest.author, text: nearest.text, isBot: nearest.isBot }],
