@@ -15,6 +15,7 @@ import {
 } from '../controller';
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
+import { publishUiSessionIntervention, resetUiContinuationListenersForTest } from '../../maker-ipc/uiContinuationSignal';
 import type {
   AccountLimitInfo,
   GoalCompletionSummary,
@@ -228,6 +229,11 @@ class FakeSession implements SessionLike {
   readonly sends: Array<{ content: string; originKind?: string }> = [];
   private listener: ((event: AgentEvent) => void) | null = null;
   running = false;
+  generation = 0;
+
+  getTurnGeneration(): number {
+    return this.generation;
+  }
 
   constructor(id: string, agentKind: SessionLike['agentKind'] = 'claude-code') {
     this.id = id;
@@ -414,6 +420,7 @@ function startGoal(h: ReturnType<typeof makeController>, objective = 'make tests
 describe('GoalController', () => {
   let h: ReturnType<typeof makeController>;
   beforeEach(() => {
+    resetUiContinuationListenersForTest();
     h = makeController();
   });
 
@@ -1949,6 +1956,141 @@ describe('GoalController', () => {
     expect(h.session.sends[0].content).not.toContain('[Goal] Continue working toward this goal');
     // #3 回归:目标文案只在创建时落一次,busy 重试重发首轮不得重复落库。
     expect(h.userMessages.filter((m) => m.content === 'think about it').length).toBe(1);
+  });
+
+  it('starts the first Goal turn after the pre-existing user turn finishes, without counting its output', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    const oldEvent = (event: AgentEvent) => h.session.emit({ ...event, sessionTurnGeneration: 7 });
+    oldEvent({ type: 'tool_use', data: { name: 'Bash' } });
+    oldEvent({ type: 'text', data: { text: '```json\n{"goal_status":"complete"}\n```', isFinal: true } });
+    oldEvent({ type: 'status', data: { isRunning: false, tokenUsage: 900 } });
+    // An SDK continuation boundary is not the end of the old product turn.
+    oldEvent({ type: 'done', data: {}, turnContinuationId: 1 });
+    await tick();
+    expect(h.session.sends).toHaveLength(0);
+
+    h.session.running = false;
+    oldEvent({ type: 'done', data: {} });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+    expect(h.session.sends[0].content).toContain('[Goal] Work autonomously');
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'active', turnsUsed: 0, tokensUsed: 0, noProgressStreak: 0, lastReason: null,
+    });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.completions).toHaveLength(0);
+
+    // A late duplicate cannot pause the newly dispatched Goal turn either.
+    oldEvent({ type: 'done', data: {} });
+    await tick();
+    expect(h.session.sends).toHaveLength(1);
+    h.session.emitGoalTurn({ tokens: 12, verdictJson: '{"goal_status":"continue"}' });
+    await vi.waitFor(() => expect(h.session.sends).toHaveLength(2));
+    expect(await h.storage.get('s1')).toMatchObject({ turnsUsed: 1, tokensUsed: 12, noProgressStreak: 1 });
+    await h.controller.dispose();
+  });
+
+  it.each(['pause', 'clear', 'dispose'] as const)(
+    'does not start a Goal after %s while the pre-existing turn is running', async (action) => {
+      h.session.generation = 7;
+      h.session.running = true;
+      await startGoal(h);
+      if (action === 'pause') await h.controller.pauseGoal('s1');
+      else if (action === 'clear') await h.controller.clearGoal('s1');
+      else await h.controller.dispose();
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await tick();
+      expect(h.session.sends).toHaveLength(0);
+      if (action === 'pause') expect((await h.storage.get('s1'))?.status).toBe('paused');
+      if (action === 'clear') expect(await h.storage.get('s1')).toBeNull();
+      await h.controller.dispose();
+    },
+  );
+
+  it.each(['same-turn steer', 'new turn'] as const)(
+    'still pauses for a new user message after Goal creation (%s)', async (delivery) => {
+      h.session.generation = 7;
+      h.session.running = true;
+      await startGoal(h);
+      if (delivery === 'same-turn steer') publishUiSessionIntervention('s1');
+      else h.session.generation = 8;
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
+      await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
+      expect((await h.storage.get('s1'))?.lastReason).toBe('paused: user sent a message during the goal');
+      expect(h.session.sends).toHaveLength(0);
+      await h.controller.dispose();
+    },
+  );
+
+  it.each(['new turn', 'same-turn steer'] as const)(
+    'does not exempt input that arrives during Goal persistence (%s)', async (delivery) => {
+      h.session.generation = 7;
+      h.session.running = true;
+      const upsert = h.storage.upsert.bind(h.storage);
+      vi.spyOn(h.storage, 'upsert').mockImplementation(async (state) => {
+        if (delivery === 'new turn') h.session.generation = 8;
+        else publishUiSessionIntervention('s1');
+        await upsert(state);
+      });
+      await startGoal(h);
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: h.session.generation });
+      await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
+      expect(h.session.sends).toHaveLength(0);
+      await h.controller.dispose();
+    },
+  );
+
+  it('does not confuse a replacement Session with the same generation for the pre-existing turn', async () => {
+    const replacement = new FakeSession('s1');
+    replacement.generation = 7;
+    replacement.running = true;
+    let live: FakeSession;
+    const local = makeController({
+      getSession: () => live,
+      ensureSession: async () => (live = replacement),
+    });
+    live = local.session;
+    live.generation = 7;
+    live.running = true;
+    await startGoal(local);
+    replacement.running = false;
+    replacement.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    await vi.waitFor(async () => expect((await local.storage.get('s1'))?.status).toBe('paused'));
+    expect(replacement.sends).toHaveLength(0);
+    await local.controller.dispose();
+  });
+
+  it('starts the first Goal turn if the pre-existing turn ends before the listener is attached', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    const upsert = h.storage.upsert.bind(h.storage);
+    vi.spyOn(h.storage, 'upsert').mockImplementation(async (state) => {
+      h.session.running = false;
+      h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await upsert(state);
+    });
+    await startGoal(h);
+    expect(h.session.sends).toHaveLength(1);
+    expect((await h.storage.get('s1'))?.status).toBe('active');
+    await h.controller.dispose();
+  });
+
+  it('keeps terminal errors of the pre-existing turn on the existing stop path', async () => {
+    h.session.generation = 7;
+    h.session.running = true;
+    await startGoal(h);
+    h.session.running = false;
+    h.session.emit({
+      type: 'error', data: { isTerminal: true, message: 'AbortError: aborted' },
+      sessionTurnGeneration: 7,
+    });
+    await vi.waitFor(async () => expect((await h.storage.get('s1'))?.status).toBe('paused'));
+    expect(h.session.sends).toHaveLength(0);
+    await h.controller.dispose();
   });
 
   it('continues to a second turn when the verdict is continue', async () => {
