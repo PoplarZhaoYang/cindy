@@ -856,6 +856,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
    * 进入发送 / 缓冲路径(终稿之后还要等卡片 drain)。
    */
   const publishingClientFinals = new Set<string>();
+  /** 出箱里这条兜底帧此刻是否不能重放(本进程仍在发布它对应的客户端终稿)。重连扫描与 task.dispatch 重投共用。 */
+  const isPublishingClientFinal = (connectionId: string, requestId: string): boolean =>
+    publishingClientFinals.has(ackKey(connectionId, requestId));
   /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
   const serverFeatures = new Map<string, readonly string[]>();
   // 官方 bot 的 ack 表情(👀 → 👍/👎) —— 个人 bot 早有, 官方侧靠 msg.op 补上。
@@ -2550,6 +2553,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       cacheAck(connectionId, terminalReplay.ack);
       const ackDelivered = send(makeTaskAck(terminalReplay.ack));
       if (!terminalReplay.turnEnd) return;
+      // 本进程仍在发布这一轮的客户端终稿: 出箱里的是不带 clientFinal 的兜底帧, 重放会让
+      // 服务端提前接管。只回放 ack, 正式 turn.end 发布结束后由正常路径发出(重启后集合为空,
+      // 兜底照常重放)。
+      if (isPublishingClientFinal(connectionId, payload.requestId)) return;
       // 投递时效在这里也生效, 规则统一: **过线的终稿一律不再发出**, 包括 server
       // 显式重投这一支。ack 已经回放了 —— server 由此知道这个 requestId 我们受理并
       // 处理过, 不会再叫一次 Agent; 缺的只是一份它自己也已经放弃发布的终稿(服务端
@@ -3250,7 +3257,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (flushedRequestIds.has(pending.requestId)) continue;
         if (!pending.turnEnd) continue;
         // 本进程正在发布客户端终稿: 兜底帧留给崩溃重启, 发布结束后由正常路径发送。
-        if (publishingClientFinals.has(ackKey(connectionId, pending.requestId))) continue;
+        if (isPublishingClientFinal(connectionId, pending.requestId)) continue;
         if (deliveryAck) {
           // 已在 ACK 缓冲中的条目由本函数开头的循环重放, 不再用文本帧重复补发。
           if (pendingDeliveryTurnEnds.has(ackKey(connectionId, pending.requestId))) continue;

@@ -5214,6 +5214,38 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     expect(c.ofType('interaction.cancel')).toHaveLength(0);
   });
 
+  it('发布客户端终稿期间服务端重投同一 task.dispatch: 只回放 ack, 不发兜底 turn.end', async () => {
+    vi.useFakeTimers();
+    try {
+      const ledger = memoryTerminalLedger();
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({ runner: fr.runner, terminalLedger: ledger });
+      const c = respondingCollector(d, (p) => (p.purpose === 'turn-final' ? null : {}));
+      d.onConnected('conn-1', c.send, ALL_FEATURES);
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await tick();
+      fr.finish({ finalText: '答案' });
+      await tick(20);
+      expect(ledger.get('conn-1', 'req-1')?.delivery).toBe('pending');
+      const acksBefore = c.ofType('task.ack').length;
+
+      // 服务端没收到最初的 ack, 重投同一个 requestId。
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await tick(20);
+      expect(c.ofType('task.ack').length).toBe(acksBefore + 1);
+      expect(c.ofType('turn.end')).toHaveLength(0);
+      expect(fr.calls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(3 * 31_000);
+      await tick(20);
+      const ends = c.ofType('turn.end');
+      expect(ends).toHaveLength(1);
+      expect(ends[0].payload.clientFinal).toEqual({ complete: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('终稿已发、卡片还在 drain 时重连: 仍不重放兜底帧, 正式 turn.end 带 clientFinal.complete', async () => {
     vi.useFakeTimers();
     try {
