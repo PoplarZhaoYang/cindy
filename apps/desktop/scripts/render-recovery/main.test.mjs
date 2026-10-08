@@ -13,6 +13,7 @@ const source = readFileSync(new URL('./main.cjs', import.meta.url), 'utf8');
 async function probe(fault) {
   let captures = 0;
   let clicks = 0;
+  let wokenByFrame = false;
   let report;
   let complete;
   const done = new Promise((resolve) => {
@@ -28,6 +29,7 @@ async function probe(fault) {
     setWindowOpenHandler() {},
     async loadFile() {},
     async executeJavaScript(script) {
+      if (script.includes('probeFrame') && clicks === 1) wokenByFrame = true;
       return script.includes('probeFrame') ? { arrived: true } : { clicks };
     },
     async capturePage() {
@@ -100,7 +102,12 @@ async function probe(fault) {
           : Promise.resolve(),
     },
     './pixels.cjs': {
-      inspectPixels: () => ({ pixelsMatch: !(captures === 2 && fault === 'pixels') }),
+      inspectPixels: () => ({
+        pixelsMatch: !(
+          captures === 2 &&
+          (fault === 'pixels' || (fault === 'woken-by-frame' && !wokenByFrame))
+        ),
+      }),
     },
   };
   vm.runInNewContext(source, {
@@ -142,5 +149,14 @@ describe('render probe evidence classification', () => {
   });
   it('passes healthy evidence', async () => {
     expect((await probe()).report.status).toBe('passed');
+  });
+  it('preserves a bad restored frame even when the rAF probe wakes the compositor', async () => {
+    const { code, report } = await probe('woken-by-frame');
+    expect(code).toBe(1);
+    expect(report.samples.at(-1)).toMatchObject({
+      pixelsMatch: false,
+      frame: { arrived: true },
+      inputResponded: true,
+    });
   });
 });

@@ -85,13 +85,14 @@ async function sample(label) {
   // Read without changing pixels first. capturePage/input may themselves wake a
   // stalled surface; record each observation separately, not just a final verdict.
   result.before = await bounded(contents.executeJavaScript('window.readProbe()'), 'snapshot');
-  result.frame = await bounded(contents.executeJavaScript('window.probeFrame()'), 'frame probe');
   // A capture/conversion/write exception reaches finish('inconclusive'). Only
   // successfully collected pixels may establish a color mismatch.
   const image = await bounded(contents.capturePage(), 'capture');
   fs.writeFileSync(path.join(outputDir, `${label}.png`), image.toPNG());
   const bitmap = image.resize({ width: 640, height: 480 }).toBitmap({ scaleFactor: 1 });
   Object.assign(result, inspectPixels(bitmap));
+  // Preserve pixels before requesting a new frame, which may wake the compositor.
+  result.frame = await bounded(contents.executeJavaScript('window.probeFrame()'), 'frame probe');
   contents.sendInputEvent({ type: 'mouseDown', x: 140, y: 140, button: 'left', clickCount: 1 });
   contents.sendInputEvent({ type: 'mouseUp', x: 140, y: 140, button: 'left', clickCount: 1 });
   await delay(150);
