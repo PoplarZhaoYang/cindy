@@ -1,6 +1,7 @@
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
 import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { assertSharedTaskQueueMutation } from './sharedTaskInput.js';
+import { isBotGroupClientId } from '../../shared/botGroupChat.js';
 import { SchedulerQueuedPreparationError } from './schedulerQueuedPreparation.js';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
@@ -1480,7 +1481,14 @@ export class AgentInputCoordinator {
     // 排队/直发,不丢任务只丢陈旧副本。
     const restorable = boundaryFilteredItems.filter((item) => !existingIds.has(item.clientId));
     const staleSchedulerItems = restorable.filter((item) => item.origin?.kind === 'scheduler');
-    const restored = restorable.filter((item) => item.origin?.kind !== 'scheduler');
+    // A group lane is reusable, but an execution lease is not. Snapshot rows
+    // have lost the originating execution's callbacks; a new claim on this
+    // lane must never authorize their prompts (including restored plan inputs).
+    const staleGroupItems = restorable.filter((item) => isBotGroupClientId(item.clientId));
+    const restored = restorable.filter((item) => item.origin?.kind !== 'scheduler' && !isBotGroupClientId(item.clientId));
+    for (const item of staleGroupItems) {
+      if (item.origin?.kind !== 'scheduler') this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+    }
     if (staleSchedulerItems.length > 0) {
       for (const item of staleSchedulerItems) {
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
