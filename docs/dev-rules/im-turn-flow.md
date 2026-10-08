@@ -90,6 +90,9 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
     （`captureChannelAccount`，先 prepare 再建的沿用 prepare 时捕获的），经
     `openChannelSession` 带进 `openSession`，准入前后与写库前都复核，建行之后的补写（来源、发送时间、worktree）也不例外；账号变了就终止这次派发（官方 hook 在 `session.send` 前复核），不只是跳过补写；一轮的出站 msg.op
     （进度、终稿、卡片、旧卡片帧）只经所属账号代次的连接发出，换账号后视同离线。
+    **边界**：`Maker.createSession` 内部「先异步启动 Agent、再取当前库写行」的窗口不在本条范围——
+    它是桌面、IM、目标恢复等所有建任务入口共有的既有问题，要堵需让账号守卫穿过 maker-core
+    启动 / 持久化边界或新增回滚机制，另行处理。
 
 ## 4. 状态模型（一轮）
 
