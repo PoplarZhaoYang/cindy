@@ -43,7 +43,8 @@ it('does not pull invitations in a secondary window, leaving the intent for the 
   expect(takePendingDeepLink()).toBeNull();
 });
 
-it.each([false, true])('continues an offline browser anchor through preload and the pending queue (already open: %s)', async alreadyOpen => {
+it.each(['darwin', 'win32', 'linux'].flatMap(platform => [false, true].map(alreadyOpen => ({ platform, alreadyOpen }))))(
+  'continues an offline browser anchor through preload and the pending queue ($platform, already open: $alreadyOpen)', async ({ platform, alreadyOpen }) => {
   let listener: ((payload: unknown) => void) | undefined;
   const bridge = new Function('fanOutDeepLinkNavigate', 'isDeepLinkProviderConnectId', `${compiled}; return bridge;`)(
     (callback: (payload: unknown) => void) => { listener = callback; return () => { listener = undefined; }; },
@@ -57,7 +58,7 @@ it.each([false, true])('continues an offline browser anchor through preload and 
   const pull = () => drainPendingDeepLinks(async () => takePendingDeepLink(), receive);
   const connect = () => bridge.onDeepLinkNavigate(() => void pull());
   const win = { isDestroyed: () => false, isMinimized: () => false, isVisible: () => true,
-    setAlwaysOnTop: vi.fn(), focus: vi.fn(),
+    setAlwaysOnTop: vi.fn(), moveTop: vi.fn(), focus: vi.fn(),
     webContents: { isLoading: () => false, send: (_channel: string, payload: unknown) => listener?.(payload) },
   } as unknown as BrowserWindow;
   setDeepLinkMainWindow(alreadyOpen ? win : null);
@@ -65,7 +66,18 @@ it.each([false, true])('continues an offline browser anchor through preload and 
   const token = 'offline-browser-fixture-'.padEnd(43, 'a');
   const anchor = document.createElement('a');
   anchor.href = `cindy://chat-invite/${token}`;
-  anchor.addEventListener('click', event => { event.preventDefault(); handleIncomingDeepLink(anchor.href, 'open-url'); });
+  anchor.addEventListener('click', event => {
+    event.preventDefault();
+    // Exercise the platform-specific focus branch on every CI host. Restore
+    // process.platform synchronously before any asynchronous renderer work.
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    try {
+      Object.defineProperty(process, 'platform', { value: platform });
+      handleIncomingDeepLink(anchor.href, 'open-url');
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor);
+    }
+  });
   await act(async () => { anchor.click(); anchor.click(); });
   if (!alreadyOpen) {
     expect(listener).toBeUndefined(); // login has not mounted the authenticated consumer

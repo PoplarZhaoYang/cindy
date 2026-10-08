@@ -102,7 +102,7 @@ describe('chat invitation handoff', () => {
   it('retains invitations while a loaded login page has no consumer, and redacts all argv copies', () => {
     const send = vi.fn();
     setDeepLinkMainWindow({ isDestroyed: () => false, isMinimized: () => false,
-      isVisible: () => true, isAlwaysOnTop: () => true, setAlwaysOnTop: vi.fn(), focus: vi.fn(),
+      isVisible: () => true, isAlwaysOnTop: () => true, setAlwaysOnTop: vi.fn(), moveTop: vi.fn(), focus: vi.fn(),
       webContents: { isLoading: () => false, send } } as unknown as BrowserWindow);
     handleIncomingDeepLink(link, 'open-url');
     expect(send).toHaveBeenCalledWith('deep-link:navigate', { type: 'chat-invite', token });
