@@ -228,7 +228,7 @@ describe('shared task guests never see the owner private message sources', () =>
     const sourceDevice = { deviceId: 'owner-phone', name: 'Owner iPhone', platform: 'mobile' };
     const sourcePlugin = { pluginId: 'owner-plugin', name: 'Owner Plugin' };
     const schedulerOrigin = { kind: 'scheduler', scheduleId: 'owner-schedule', scheduleName: 'Owner nightly', runId: 'run-1' };
-    const deviceRow = { clientId: 'm2', sessionId: 'task-a', role: 'user', content: 'hi', agentMeta: { sourceDevice, uuid: 'u2' } };
+    const deviceRow = { clientId: 'm2', sessionId: 'task-a', role: 'user', content: 'hi', agentMeta: { sourceDevice, sourceGroup: { groupId: 'owner-group', name: 'Private group' }, uuid: 'u2' } };
     const scheduledRow = {
       clientId: 'm3', sessionId: 'task-a', role: 'user', content: 'nightly',
       agentMeta: { origin: schedulerOrigin, sourcePlugin },
@@ -268,7 +268,7 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(guestQueue[1].origin).toEqual({ kind: 'scheduler' });
     expect(guestQueue[1].text).toBe('nightly');
     expect(JSON.stringify(guestPushes)).not.toMatch(
-      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack/,
+      /owner-phone|Owner iPhone|owner-plugin|Owner Plugin|owner-group|Private group|owner-schedule|Owner nightly|run-1|owner-conn|Owner Slack/,
     );
     // Same-account controllers keep the full attribution.
     expect(ownPushes.filter((payload) => payload.message).map((payload) => payload.message.agentMeta))

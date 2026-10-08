@@ -10496,7 +10496,8 @@
         "automation": "自動化 ID：{{id}}",
         "plugin": "插件 ID：{{id}}",
         "device": "裝置 ID：{{id}}",
-        "member": "成員 ID：{{id}}"
+        "member": "成員 ID：{{id}}",
+        "group": "群聊 ID：{{id}}"
       },
       "expandLongMessage": "展開全文",
       "collapseLongMessage": "收起",
@@ -10522,7 +10523,9 @@
         "sourceNeverRan": "原任務尚未執行，無法開啟新任務",
         "codexStateUnavailable": "Codex Agent 會話狀態不可用，無法開啟新任務。{{detail}}",
         "generic": "無法開啟新任務，請重試"
-      }
+      },
+      "groupSentNamed": "從群聊「{{name}}」傳送",
+      "groupSent": "從群聊傳送"
     },
     "threadContext": {
       "cindyFrom": "Cindy · 來自 {{platform}}",
@@ -14770,6 +14773,7 @@
     "invalidMessage": "訊息或重試識別碼無效。",
     "privateUnavailable": "目前夥伴的私聊無法使用，請稍後重試。",
     "idempotencyConflict": "此重試識別碼已用於另一則訊息。",
-    "privateUnconfirmed": "尚未確認私訊送達，請使用相同的重試識別碼重試。"
+    "privateUnconfirmed": "尚未確認私訊送達，請使用相同的重試識別碼重試。",
+    "verificationUnavailable": "暫時無法核驗群聊授權，請在連線恢復後重試。"
   }
 }

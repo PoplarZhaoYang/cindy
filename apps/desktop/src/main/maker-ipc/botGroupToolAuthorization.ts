@@ -1,3 +1,4 @@
+import type { MessageSourceGroup } from '@cindy/maker-shared/message-source';
 import { t } from '../i18n.js';
 
 /** A group link identifies a lane, not an authorization. Only its live Chat Server
@@ -5,6 +6,7 @@ import { t } from '../i18n.js';
 export type GroupToolOperation = 'read-self' | 'owner-action';
 export interface GroupToolAuthority {
   botId: string;
+  sourceGroup?: MessageSourceGroup;
   mode: 'owner' | 'chat' | 'tools';
   validate(): Promise<void>;
   isCurrent(): boolean;
@@ -12,8 +14,11 @@ export interface GroupToolAuthority {
 const authorities = new Map<string, GroupToolAuthority>();
 
 export class GroupToolAuthorizationError extends Error {
-  readonly code = 'GROUP_AUTHORIZATION_REQUIRED';
-  constructor() { super(t('groupTools.authorizationRequired')); }
+  readonly code: string;
+  constructor(readonly temporary = false) {
+    super(t(temporary ? 'groupTools.verificationUnavailable' : 'groupTools.authorizationRequired'));
+    this.code = temporary ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED';
+  }
 }
 
 export function registerGroupToolAuthority(sessionId: string, authority: GroupToolAuthority): () => void {
@@ -29,12 +34,15 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
       || (operation === 'owner-action' && authority.mode !== 'owner')) throw new GroupToolAuthorizationError();
   };
   assertCurrent();
-  try { await authority!.validate(); } catch {
-    if (authorities.get(sessionId) === authority) authorities.delete(sessionId);
-    throw new GroupToolAuthorizationError();
+  try { await authority!.validate(); } catch (error) {
+    const revoked = error instanceof GroupToolAuthorizationError && !error.temporary;
+    if (revoked && authorities.get(sessionId) === authority) authorities.delete(sessionId);
+    // A transport failure denies this attempt, without permanently revoking a live lease.
+    assertCurrent();
+    throw new GroupToolAuthorizationError(!revoked);
   }
   assertCurrent();
-  return { assertCurrent, refresh: async (): Promise<void> => {
+  return { assertCurrent, sourceGroup: authority!.sourceGroup, refresh: async (): Promise<void> => {
     assertCurrent();
     await authorizeGroupTool(sessionId, botId, operation);
     assertCurrent();

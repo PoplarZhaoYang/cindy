@@ -42,7 +42,7 @@ const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
 /** Only the live owner may select capabilities; no caller-supplied Bot or connection config. */
-async function context(callerSessionId: string, opts?: { allowPaused?: boolean; readOnly?: boolean }) {
+async function context(callerSessionId: string, opts?: { allowPaused?: boolean; readScope?: 'self' | 'owner' }) {
   const owner = activeOwnerScopeKey();
   const assertOwner = () => {
     if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== owner)
@@ -80,8 +80,8 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     .where(eq(botSessionLinks.sessionId, callerSessionId))
     .limit(1);
   assertOwner();
-  const groupAuthority = row?.role === 'group' && opts?.readOnly
-    ? await authorizeGroupTool(callerSessionId, row.botId, 'read-self') : null;
+  const groupAuthority = row?.role === 'group' && opts?.readScope
+    ? await authorizeGroupTool(callerSessionId, row.botId, opts.readScope === 'self' ? 'read-self' : 'owner-action') : null;
   assertOwner();
   const profileAllowed =
     row?.profileStatus === 'active' ||
@@ -178,7 +178,7 @@ async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context
 
 async function findBotCapabilities(input: Input & { query?: string }, deps: BotCapabilityServiceDeps) {
   try {
-    const ctx = await context(input.callerSessionId, { readOnly: true });
+    const ctx = await context(input.callerSessionId, { readScope: 'owner' });
     const query = input.query?.trim().toLocaleLowerCase() ?? '';
     const capabilities = (await catalog(input, ctx, deps)).filter(
       (item) =>
@@ -243,7 +243,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
   return {
     async models(input: { callerSessionId: string }) {
       try {
-        const ctx = await context(input.callerSessionId, { readOnly: true });
+        const ctx = await context(input.callerSessionId, { readScope: 'owner' });
         const selection = await inspectAppDefaultModel();
         ctx.assertOwner();
         return { ok: true as const, ...selection };
@@ -265,7 +265,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     },
     async inspect(input: { callerSessionId: string }) {
       try {
-        const ctx = await context(input.callerSessionId, { readOnly: true });
+        const ctx = await context(input.callerSessionId, { readScope: 'self' });
         const candidates = await readEffectiveBotModelChain(ctx.config);
         ctx.assertOwner();
         const state: BotControlState = {

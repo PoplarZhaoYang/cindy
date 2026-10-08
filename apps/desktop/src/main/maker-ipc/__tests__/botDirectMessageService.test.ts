@@ -110,7 +110,7 @@ describe('botDirectMessageService', () => {
 
   it('sends a group owner a real assistant message in their private chat, with stable retry receipts', async () => {
     sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
-    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1', name: 'Design' }, mode: 'owner', isCurrent: () => true, validate: async () => {} });
     h.createMessage.mockImplementationOnce(async (sessionId, body) => {
       sqlite.prepare('INSERT INTO messages (id,session_id,client_id,content) VALUES (?,?,?,?)').run('private-message', sessionId, body.clientId, body.content);
       return { id: 'private-message' };
@@ -120,7 +120,7 @@ describe('botDirectMessageService', () => {
       const input = { callerSessionId: 'a-group', message: 'Private reply for the owner', idempotencyKey: 'reply-request-1' };
       expect(await service.sendToUser(input)).toMatchObject({ ok: true, targetSessionId: 'a-main', messageId: 'private-message', delivered: true });
       expect(h.createMessage).toHaveBeenCalledWith('a-main', expect.objectContaining({ role: 'assistant', content: input.message,
-        agentMeta: { origin: { kind: 'session', senderSessionId: 'a-group', senderBotId: 'bot-a', senderBotName: '总控' } } }), expect.anything());
+        agentMeta: { sourceGroup: { groupId: 'group-1', name: 'Design' }, origin: { kind: 'session', senderSessionId: 'a-group', senderBotId: 'bot-a', senderBotName: '总控' } } }), expect.anything());
       expect(await service.sendToUser(input)).toMatchObject({ ok: true, messageId: 'private-message' });
       expect(await service.sendToUser({ ...input, message: 'Different message' })).toMatchObject({ ok: false, errorCode: 'IDEMPOTENCY_CONFLICT' });
       expect(h.createMessage).toHaveBeenCalledOnce();
@@ -146,7 +146,7 @@ describe('botDirectMessageService', () => {
 
   it('allows owner-authorized local peer messaging while retaining its group source', async () => {
     sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
-    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1', name: 'Design' }, mode: 'owner', isCurrent: () => true, validate: async () => {} });
     const service = createBotDirectMessageService({ dispatch });
     try {
       expect(await service.listAgents('a-group')).toMatchObject({ ok: true, agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) });

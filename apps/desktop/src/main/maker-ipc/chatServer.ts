@@ -13,7 +13,7 @@ import { createChatMedia } from './chatServerMedia.js';
 import { chatServerWorkspaces } from './chatServerWorkspaces.js';
 import { buildPlanStepBrief } from './botGroupDivision.js';
 import { chatMigrationReceipts } from './chatMigrationReceipts.js';
-import { registerGroupToolAuthority } from './botGroupToolAuthorization.js';
+import { registerGroupToolAuthority, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import WebSocket from 'ws';
@@ -610,18 +610,25 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       run.sessionId = lane.sessionId;
       run.releaseToolAuthority = registerGroupToolAuthority(lane.sessionId, {
         botId: bot.id, mode: execution.access_mode,
+        sourceGroup: { groupId: s.room.id, name: s.room.name },
         isCurrent: () => current() && running.get(execution.bot_id) === run && !run.settlement,
         validate: async () => {
           // Recheck metadata and the execution lease at the actual tool boundary.
           // Group administrators cannot grant access to someone else's companion.
-          const members = await api<Member[]>(`/conversations/${s.room.id}/members`);
-          const companion = members.find(m => m.id === execution.bot_id && m.kind === 'bot' && m.state === 'joined');
-          const requester = members.find(m => m.id === execution.requester_id && m.state === 'joined');
-          if (!companion || companion.ownerActorId !== selfId || !requester
-            || companion.accessRevision !== execution.access_revision
-            || (execution.access_mode === 'owner' ? requester.ownerActorId !== selfId : companion.guestAccess !== 'tools'))
-            throw new Error('BOT_ACCESS_DENIED');
-          await updateExecution(run, 'heartbeat');
+          try {
+            const members = await api<Member[]>(`/conversations/${s.room.id}/members`);
+            const companion = members.find(m => m.id === execution.bot_id && m.kind === 'bot' && m.state === 'joined');
+            const requester = members.find(m => m.id === execution.requester_id && m.state === 'joined');
+            if (!companion || companion.ownerActorId !== selfId || !requester
+              || companion.accessRevision !== execution.access_revision
+              || (execution.access_mode === 'owner' ? requester.ownerActorId !== selfId : companion.guestAccess !== 'tools'))
+              throw new GroupToolAuthorizationError();
+            await updateExecution(run, 'heartbeat');
+          } catch (error) {
+            if (error instanceof ChatResponseError && [401, 403, 404, 409, 410].includes(error.status))
+              throw new GroupToolAuthorizationError();
+            throw error;
+          }
         },
       });
       if (run.plan && run.workspace?.ownerSessionId) {

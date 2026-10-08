@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { authorizeGroupTool, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
+import { authorizeGroupTool, registerGroupToolAuthority, GroupToolAuthorizationError } from '../botGroupToolAuthorization.js';
 import { setMainLocale } from '../../i18n.js';
 
 const releases: Array<() => void> = [];
@@ -35,7 +35,7 @@ describe('live group tool authority', () => {
     let live = true;
     let revoked = false;
     releases.push(registerGroupToolAuthority('lane', { botId: 'bot', mode: 'owner', isCurrent: () => live,
-      validate: async () => { if (revoked) throw new Error('revision changed'); } }));
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } }));
     const authority = await authorizeGroupTool('lane', 'bot', 'owner-action');
     live = false; expect(authority.assertCurrent).toThrow();
     live = true; revoked = true;
@@ -51,8 +51,16 @@ describe('live group tool authority', () => {
     await expect(old.refresh()).rejects.toThrow();
     await expect(authorizeGroupTool('lane', 'bot', 'owner-action')).resolves.toBeDefined();
   });
+  it('denies transient failures but retries validation on the same live execution', async () => {
+    const validate = vi.fn().mockRejectedValueOnce(new Error('network timeout')).mockResolvedValue(undefined);
+    releases.push(registerGroupToolAuthority('lane', { botId: 'bot', mode: 'owner', isCurrent: () => true, validate }));
+    await expect(authorizeGroupTool('lane', 'bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_UNAVAILABLE' });
+    await expect(authorizeGroupTool('lane', 'bot', 'owner-action')).resolves.toBeDefined();
+    expect(validate).toHaveBeenCalledTimes(2);
+  });
   it.each(['en', 'zh-CN', 'zh-TW', 'ja', 'ko'] as const)('localizes a denied call in %s', async locale => {
     setMainLocale(locale);
+    expect(new GroupToolAuthorizationError(true).message).not.toContain('groupTools.');
     await expect(authorizeGroupTool('unregistered', 'bot', 'owner-action')).rejects.toMatchObject({
       code: 'GROUP_AUTHORIZATION_REQUIRED', message: expect.not.stringContaining('groupTools.'),
     });

@@ -133,3 +133,11 @@ it('attaches exact frozen results to their final reply across reload and keeps u
   expect(bodies([input[0], row('a6', 'assistant', 'Other reply', { turnCompleted: true })], false)
     .some(item => item.type === 'message' && item.message.companion)).toBe(true);
 });
+
+it('keeps explicit group private deliveries while the private model works and after later replies', () => {
+  const messages = [row('g1', 'assistant', 'Group delivery', { sourceGroup: { groupId: 'g-1' } }), ...base];
+  const text = (rows: RemoteMessage[], running: boolean) => bodies(rows, running)
+    .filter(item => item.type === 'message').map(item => item.message.body);
+  expect(text(messages, true)).toContain('Group delivery');
+  expect(text([...messages, row('a4', 'assistant', 'Answer', { turnCompleted: true })], false)).toContain('Group delivery');
+});

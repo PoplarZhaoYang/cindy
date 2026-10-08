@@ -123,7 +123,7 @@ describe('Chat Server result delivery and refresh', () => {
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
-  it.each(['revision', 'requester', 'companion-owner', 'left', 'lease', 'account', 'restart'])(
+  it.each(['revision', 'requester', 'companion-owner', 'left', 'lease', 'account', 'restart', 'temporary-members', 'temporary-heartbeat'])(
     'checks the server execution at the tool boundary and rejects %s changes', async change => {
       let changed = false;
       let accountCurrent = true;
@@ -136,6 +136,9 @@ describe('Chat Server result delivery and refresh', () => {
           const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' };
           claimed = true; return { body: { execution: next } };
         }
+        if (changed && (change === 'temporary-members' && route.endsWith('/members')
+          || change === 'temporary-heartbeat' && body?.action === 'heartbeat'))
+          return { status: 503, body: { error: { code: 'UNAVAILABLE' } } };
         if (route.endsWith('/members')) return { body: [
           { id: botId, kind: 'bot', ownerActorId: changed && change === 'companion-owner' ? 'other-owner' : selfId,
             state: changed && change === 'left' ? 'left' : 'joined', accessRevision: changed && change === 'revision' ? 2 : 1, guestAccess: 'tools' },
@@ -150,7 +153,12 @@ describe('Chat Server result delivery and refresh', () => {
       changed = true;
       if (change === 'account') accountCurrent = false;
       if (change === 'restart') service.dispose();
-      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({
+        code: change.startsWith('temporary-') ? 'GROUP_AUTHORIZATION_UNAVAILABLE' : 'GROUP_AUTHORIZATION_REQUIRED' });
+      if (change.startsWith('temporary-')) {
+        changed = false;
+        await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).resolves.toBeDefined();
+      }
     });
 
   it('keeps server plan steps in a grant-specific chat-only lane without opening a project', async () => {

@@ -40,12 +40,13 @@ export function createBotSessionTaskRouteBridge(
         next: next.candidate,
       };
     },
-    advance: async (childSessionId, expectedGeneration, route) => {
+    advance: async (childSessionId, expectedGeneration, route, beforeApply) => {
       const current = await deps.getSessionRuntime({ targetSessionId: childSessionId });
       if (!current.ok) return current;
       if (current.runtime.runtimeGeneration !== expectedGeneration) {
         return { ok: false, errorCode: 'CONFLICT', message: 'Task runtime changed before model selection' };
       }
+      await beforeApply?.();
       const result = await deps.setSessionRuntime({
         targetSessionId: childSessionId,
         expectedGeneration,

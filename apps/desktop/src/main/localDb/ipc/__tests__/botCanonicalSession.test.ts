@@ -4161,6 +4161,100 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); }
   });
 
+  it.each(['reconciliation', 'resume-flush', 'release'] as const)('keeps a paused task held if group authority is revoked during %s', async boundary => {
+    await seedPair(); seedGroupLane();
+    let revoke = false;
+    let live = true;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => live, validate: async () => {} });
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots: new Map(),
+      appliedOnResume: () => { if (revoke && boundary === 'release') live = false; return []; },
+      reconcileWorktree: async () => { if (revoke && boundary === 'reconciliation') live = false; } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture-only paused task' });
+      if (!task.ok) throw new Error(task.message);
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Paused');
+      revoke = true;
+      if (boundary === 'resume-flush') runtime.flushInput.mockImplementationOnce(async () => { live = false; });
+      const before = runtime.started.length;
+      expect(await runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      expect(runtime.started).toHaveLength(before);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { control: { queue_held: true } } });
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each(['pause', 'cancel', 'request-stop'] as const)('does not %s the runtime after losing group authority at the reservation boundary', async mode => {
+    await seedPair(); seedGroupLane();
+    let live = true;
+    let revoke = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => live, validate: async () => {} });
+    const runtime = createDelegationRuntime({ taskControl: true, withSessionLock: async (_id, operation) => {
+      if (revoke) live = false;
+      await operation();
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture-only control task' });
+      if (!task.ok) throw new Error(task.message);
+      revoke = true;
+      expect(await runtime.delegation.stopSessionTask('group-lane', task.delegationId, mode))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it('rejects changing a task model when the originating group execution is replaced during route inspection', async () => {
+    await seedPair(); seedGroupLane();
+    const grant = { botId: 'bot-a', mode: 'owner' as const, isCurrent: () => true, validate: async () => {} };
+    const release = registerGroupToolAuthority('group-lane', grant);
+    let releaseReplacement = () => {};
+    let replace = false;
+    const current = { agentKind: 'codex' as const, model: 'same-model', providerId: 'subscription', effort: null, fastMode: false };
+    const next = { ...current, providerId: 'paid' };
+    const advance = vi.fn(async () => ({ ok: true as const, status: 'applied' as const, generation: 8 }));
+    const runtime = createDelegationRuntime({ taskRoute: { advance, inspect: async () => {
+      if (replace) releaseReplacement = registerGroupToolAuthority('group-lane', { ...grant });
+      return { ok: true, generation: 7, current, next };
+    } } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture-only model control' });
+      if (!task.ok) throw new Error(task.message);
+      await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'error', error: 'Fixture stop' });
+      const preview = await runtime.delegation.inspectSessionTaskRoute('group-lane', task.delegationId);
+      if (!preview.ok) throw new Error(preview.message);
+      replace = true;
+      expect(await runtime.delegation.advanceSessionTaskRoute('group-lane', task.delegationId, 7, preview.selectionToken!))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(advance).not.toHaveBeenCalled();
+    } finally { release(); releaseReplacement(); runtime.dispose(); }
+  });
+
+  it('does not let a non-owner tools grant enumerate application capabilities or model routes', async () => {
+    await seedPair(); seedGroupLane();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'tools', isCurrent: () => true, validate: async () => {} });
+    const listMcpServers = vi.fn(capabilityDeps.listMcpServers);
+    const getPluginRegistry = vi.fn(capabilityDeps.getPluginRegistry);
+    const service = createBotCapabilityService({ ...capabilityDeps, listMcpServers, getPluginRegistry });
+    try {
+      for (const kind of ['skill', 'mcp', 'toolset'] as const)
+        expect(await service.list({ callerSessionId: 'group-lane', kind }))
+          .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(await service.models({ callerSessionId: 'group-lane' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(listMcpServers).not.toHaveBeenCalled();
+      expect(getPluginRegistry).not.toHaveBeenCalled();
+      // The owner can still discover their own configuration through a fresh owner execution.
+      release();
+      const releaseOwner = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+      try {
+        expect(await service.list({ callerSessionId: 'group-lane', kind: 'mcp' })).toMatchObject({ ok: true });
+        expect(listMcpServers).toHaveBeenCalledOnce();
+      } finally { releaseOwner(); }
+    } finally { release(); }
+  });
+
   it.each(['delete-first', 'message-first'])('serializes shared-history writes and deletion (%s)', async (order) => {
     await seedPair();
     const target = await invoke('local-db:bots:create-canonical-session', {

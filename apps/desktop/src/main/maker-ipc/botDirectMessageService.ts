@@ -1078,6 +1078,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active')
         return { ok: false as const, errorCode: 'GROUP_AUTHORIZATION_REQUIRED', message: t('groupTools.authorizationRequired') };
       const authority = await authorizeGroupTool(input.callerSessionId, caller.botId, 'owner-action');
+      if (!authority.sourceGroup) throw new GroupToolAuthorizationError();
       const message = input.message.trim();
       if (!message || message.length > MAX_MESSAGE_CHARS || !/^[\w-]{8,100}$/.test(input.idempotencyKey))
         return { ok: false as const, errorCode: 'INVALID_ARGS', message: t('groupTools.invalidMessage') };
@@ -1100,7 +1101,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         // Host-derived target prevents another account or a namesake from receiving it.
         const saved = await createMessage(target.sessionId, {
           clientId, role: 'assistant', content: message, agentKind: null,
-          agentMeta: { origin: { kind: 'session', senderSessionId: input.callerSessionId,
+          agentMeta: { sourceGroup: authority.sourceGroup, origin: { kind: 'session', senderSessionId: input.callerSessionId,
             senderBotId: caller.botId, senderBotName: caller.botName } },
         }, { broadcastOwnerScope: scope });
         return { ok: true as const, messageId: saved.id, targetSessionId: target.sessionId, delivered: true };

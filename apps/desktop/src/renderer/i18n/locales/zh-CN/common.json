@@ -10497,7 +10497,8 @@
         "automation": "自动化 ID：{{id}}",
         "plugin": "插件 ID：{{id}}",
         "device": "设备 ID：{{id}}",
-        "member": "成员 ID：{{id}}"
+        "member": "成员 ID：{{id}}",
+        "group": "群聊 ID：{{id}}"
       },
       "expandLongMessage": "展开全文",
       "collapseLongMessage": "收起",
@@ -10523,7 +10524,9 @@
         "sourceNeverRan": "原任务尚未运行，无法开启新任务",
         "codexStateUnavailable": "Codex Agent 会话状态不可用，无法开启新任务。{{detail}}",
         "generic": "无法开启新任务，请重试"
-      }
+      },
+      "groupSentNamed": "从群聊「{{name}}」发送",
+      "groupSent": "从群聊发送"
     },
     "threadContext": {
       "cindyFrom": "Cindy · 来自 {{platform}}",
@@ -14770,6 +14773,7 @@
     "invalidMessage": "消息或重试标识无效。",
     "privateUnavailable": "当前伙伴私聊不可用，请稍后重试。",
     "idempotencyConflict": "此重试标识已用于另一条消息。",
-    "privateUnconfirmed": "私聊未确认送达，请使用同一重试标识重试。"
+    "privateUnconfirmed": "私聊未确认送达，请使用同一重试标识重试。",
+    "verificationUnavailable": "暂时无法核验群聊授权，请在连接恢复后重试。"
   }
 }

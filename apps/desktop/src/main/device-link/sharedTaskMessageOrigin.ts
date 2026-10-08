@@ -2,7 +2,7 @@ import { queueItemVisibleText } from '@cindy/maker-shared/queue';
 
 const HOOK_SCHEDULE_ID_PREFIX = 'hook:';
 
-const GUEST_HIDDEN_META_KEYS = ['agentFacingWireContent', 'sourceDevice', 'sourcePlugin'] as const;
+const GUEST_HIDDEN_META_KEYS = ['agentFacingWireContent', 'sourceDevice', 'sourcePlugin', 'sourceGroup'] as const;
 
 function redactOriginForSharedGuest(origin: Record<string, unknown>): Record<string, unknown> | null {
   if (origin.kind === 'session') return { kind: 'session' };
