@@ -153,6 +153,16 @@ describe('messageHandler early user-message persist', () => {
     expect(turnArgs(h.runAgentTurn).text).toBe('出行要注意什么吗');
   });
 
+  it('把渠道 adapter 给的被回复消息交给 turn, 只作 Auto 审阅引用证据', async () => {
+    const h = wire();
+    const replyContext = { author: '群友', text: '[图片]', attachmentCount: 1 };
+    h.deliver(makeEvent({ text: '这啥情况', replyContext }));
+
+    await vi.waitFor(() => expect(h.runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(turnArgs(h.runAgentTurn).replyContext).toEqual(replyContext);
+    expect(turnArgs(h.runAgentTurn).text).toBe('这啥情况');
+  });
+
   it('落库用渠道原文, 不用拼了群上下文前缀的 agentText', async () => {
     const h = wire();
     h.deliver(makeEvent({ text: '总结上面' }));

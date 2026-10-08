@@ -435,6 +435,7 @@ export function createMessageHandler(
             }
           : {}),
         attachments: event.attachments,
+        ...(event.replyContext ? { replyContext: event.replyContext } : {}),
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: notificationSessionId || threadScoped ? event.scopeKey : undefined,
         // Title generation and similar detached work must stay visible to the
