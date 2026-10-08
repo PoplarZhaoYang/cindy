@@ -4534,6 +4534,59 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); }
   });
 
+  it.each((['resume', 'reopen'] as const).flatMap(mode =>
+    (['requester-read', 'child-read', 'reconcile'] as const).map(boundary => ({ mode, boundary }))))
+  ('rejects $mode preparation revoked during $boundary', async ({ mode, boundary }) => {
+    await seedPair(); seedGroupLane();
+    let armed = false;
+    let revoked = false;
+    let reconciliations = 0;
+    const mutation = vi.fn();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const runtime = createDelegationRuntime({ taskControl: true, reconcileWorktree: async (_id, beforeMutation) => {
+      if (armed && ++reconciliations === 2 && boundary === 'reconcile') {
+        revoked = true;
+        await beforeMutation?.();
+        mutation();
+        throw new Error('Private worktree failure');
+      }
+    } });
+    let read: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Preparation fixture' });
+      if (!task.ok) throw new Error(task.message);
+      if (mode === 'resume') await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Finished turn');
+      const before = h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId);
+      const select = h.db!.select.bind(h.db!);
+      read = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+        const query = select(fields);
+        const keys = Object.keys(fields ?? {});
+        if ((boundary === 'requester-read' && keys.length === 4 && keys.includes('profileStatus'))
+          || (boundary === 'child-read' && keys.includes('source') && keys.includes('status')
+            && (mode === 'reopen' ? keys.includes('workingDir') : keys.length === 2))) {
+          // Force the private-state failure branch, rather than relying on a
+          // later mutation check to reject an otherwise valid preparation.
+          h.sqlite!.prepare("UPDATE sessions SET status='archived' WHERE id=?")
+            .run(boundary === 'requester-read' ? 'session-1' : task.childSessionId);
+          queueMicrotask(() => { revoked = true; });
+        }
+        return query;
+      });
+      runtime.dispatch.mockClear();
+      armed = true;
+      expect(await runtime.delegation.messageSessionTask('group-lane', task.delegationId,
+        mode === 'resume' ? { kind: 'resume' } : { kind: 'message', text: 'Continue work' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(revoked).toBe(true);
+      expect(mutation).not.toHaveBeenCalled();
+      if (mode === 'reopen' && boundary !== 'reconcile') expect(reconciliations).toBe(1);
+      expect(runtime.dispatch).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId)).toEqual(before);
+    } finally { read?.mockRestore(); release(); runtime.dispose(); }
+  });
+
   it.each(['reconciliation', 'resume-flush', 'resume-commit', 'release'] as const)('keeps a paused task held if group authority is revoked during %s', async boundary => {
     await seedPair(); seedGroupLane();
     let revoke = false;

@@ -135,7 +135,7 @@ export interface BotDelegationServiceDeps {
   };
   discardUnusedWorktree?: (sessionId: string) => Promise<void>;
   getWorktree?: (sessionId: string) => { path: string } | null;
-  reconcileWorktree?: (sessionId: string) => Promise<void>;
+  reconcileWorktree?: (sessionId: string, beforeMutation?: () => Promise<void>) => Promise<void>;
   withTransferredWorktree?: <T extends { reopened: boolean }>(
     previousSessionId: string, sessionId: string, worktreePath: string, commit: () => Promise<T>,
     identity: { delegationId: string; requestingBotId: string },
@@ -597,7 +597,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES]))).returning();
     if (!saved) return { clientId, row: current, result: { ok: false, errorCode: 'TASK_CHANGED', message: 'Task changed before recovery retry' } };
     if (retryAttempt) return { clientId, row: saved, result: { ok: false, errorCode: 'TEMPORARILY_UNAVAILABLE', message: 'Recovery input has not reached native acceptance' } };
-    const validation = await validateDispatchPlan(saved);
+    const validation = await validateDispatchPlan(saved, groupAuthority);
     if (!validation.ok) return { clientId, row: saved, result: validation };
     return dispatchTrackedInput(saved, input, true, groupAuthority);
   };
@@ -1618,9 +1618,17 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     .filter(Boolean)
     .join('\n\n');
 
+  const reconcileTaskWorktree = async (sessionId: string, authority?: Awaited<ReturnType<typeof authorizeGroupTool>> | null) => {
+    await authority?.refresh();
+    try { await deps.reconcileWorktree?.(sessionId, authority?.refresh); }
+    finally { await authority?.refresh(); }
+  };
+
   const validateDispatchPlan = async (
     row: DelegationRow,
+    groupAuthority?: Awaited<ReturnType<typeof authorizeGroupTool>> | null,
   ): Promise<BotDelegationResult> => {
+    await groupAuthority?.refresh();
     const plan = parseBotDelegationPlanSnapshot(row.permissionSnapshotJson);
     if (!plan || plan.targetBotId !== row.targetBotId) {
       return {
@@ -1632,13 +1640,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (!row.childSessionId) {
       return { ok: false, errorCode: 'CHILD_SESSION_MISSING', message: '后台任务不存在' };
     }
-    try { await deps.reconcileWorktree?.(row.childSessionId); }
-    catch { return { ok: false, errorCode: 'WORKTREE_TRANSFER_PENDING', message: 'Task worktree ownership is awaiting reconciliation' }; }
+    try { await reconcileTaskWorktree(row.childSessionId, groupAuthority); }
+    catch (error) { if (error instanceof GroupToolAuthorizationError) throw error; return { ok: false, errorCode: 'WORKTREE_TRANSFER_PENDING', message: 'Task worktree ownership is awaiting reconciliation' }; }
     const db = getDbClient().drizzle;
     const liveRequesterSessionId = await requesterLiveSessionId(
       row.requestingBotId,
       row.parentSessionId,
     );
+    await groupAuthority?.refresh();
     if (!liveRequesterSessionId) {
       return { ok: false, errorCode: 'PARENT_SESSION_INACTIVE', message: '发起任务已归档或删除' };
     }
@@ -1656,6 +1665,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         .from(sessions)
         .where(eq(sessions.id, row.childSessionId))
         .limit(1);
+    await groupAuthority?.refresh();
     if (child?.status !== 'active'
       || child.source !== 'desktop') {
       return { ok: false, errorCode: 'CHILD_SESSION_INVALID', message: '后台任务已归档或删除' };
@@ -2945,6 +2955,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .from(sessions)
       .where(eq(sessions.id, row.childSessionId))
       .limit(1);
+    await groupAuthority?.refresh();
     if (
       !oldChild
       || !oldChild.workingDir
@@ -2962,7 +2973,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         message: oldChild.status === 'deleted' ? 'The Session was deleted and cannot be continued.' : 'Restore the existing Session before continuing this task.' };
     }
 
-    await deps.reconcileWorktree?.(row.childSessionId);
+    await reconcileTaskWorktree(row.childSessionId, groupAuthority);
     const worktreePath = deps.getWorktree?.(row.childSessionId)?.path ?? oldChild.worktreePath;
     const reopenedAt = now();
     const deadlineAt = reopenedAt + Math.min(MAX_TIMEOUT_MS, oldPlan.limits.timeoutMs);
@@ -3210,6 +3221,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
     if (!isActiveDelegation(row.status as DelegationStatus)) {
       const returnSessionId = caller.role === 'group' ? await requesterLiveSessionId(caller.botId, null) : callerSessionId;
+      await caller.groupAuthority?.refresh();
       if (!returnSessionId) throw new GroupToolAuthorizationError();
       return reopenTerminalDelegation(returnSessionId, caller.botId, row, input.text, caller.groupAuthority);
     }
@@ -3493,7 +3505,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (pending && text) {
       return { ok: false as const, errorCode: 'WRONG_REPLY_KIND', message: 'Resume without a message, then answer the pending interaction' };
     }
-    const validation = await validateDispatchPlan(row);
+    const validation = await validateDispatchPlan(row, groupAuthority);
     if (!validation.ok) return validation;
     // Reassert the durable hold before restore/dispatch, including a cold caller.
     await groupAuthority?.refresh();
@@ -3615,8 +3627,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return result.ok ? { ...result, childSessionId: row.childSessionId, resumed: false,
           delivery: input.kind === 'edit' ? 'queued' : 'withdrawn' } : result;
       }
-      try { if (row.childSessionId) await deps.reconcileWorktree?.(row.childSessionId); }
-      catch { return { ok: false as const, errorCode: 'WORKTREE_TRANSFER_PENDING', message: 'Task worktree ownership is awaiting reconciliation' }; }
+      try { if (row.childSessionId) await reconcileTaskWorktree(row.childSessionId, found.groupAuthority); }
+      catch (error) { if (error instanceof GroupToolAuthorizationError) throw error; return { ok: false as const, errorCode: 'WORKTREE_TRANSFER_PENDING', message: 'Task worktree ownership is awaiting reconciliation' }; }
       await found.groupAuthority?.refresh();
       if (input.kind === 'resume') return resumeTask(row, input.text, found.groupAuthority);
       if (readTaskPause(row) && isActiveDelegation(row.status as DelegationStatus)) {
