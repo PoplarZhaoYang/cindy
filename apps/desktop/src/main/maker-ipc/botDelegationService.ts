@@ -2391,6 +2391,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .from(sessions)
       .where(eq(sessions.id, input.callerSessionId))
       .limit(1);
+    await caller.groupAuthority?.refresh();
     if (!callerSession) {
       return { ok: false, errorCode: 'NOT_A_BOT_SESSION', message: '当前任务不属于任何伙伴' };
     }
@@ -2400,15 +2401,22 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id),
         eq(botProfileVersions.version, botProfiles.currentVersion)))
       .where(eq(botProfiles.id, caller.botId)).limit(1);
+    await caller.groupAuthority?.refresh();
     let taskModel: BotModelRoute | null;
     try {
       taskModel = input.modelSelection !== undefined
         ? await (deps.resolveTaskModelSelection ?? resolveTaskModelSelection)(input.modelSelection)
         : readBotTaskModelOverride(parseRecord(profile?.config).taskModelOverride);
-      if (input.modelSelection === undefined && taskModel && !await (deps.validateTaskModel ?? validateTaskModel)(taskModel)) {
+      await caller.groupAuthority?.refresh();
+      const valid = input.modelSelection !== undefined || !taskModel
+        || await (deps.validateTaskModel ?? validateTaskModel)(taskModel);
+      await caller.groupAuthority?.refresh();
+      if (!valid) {
         return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '任务模型不可用，请在伙伴模型设置中重新选择后重试' };
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof GroupToolAuthorizationError) throw error;
+      await caller.groupAuthority?.refresh();
       return { ok: false, errorCode: 'TASK_MODEL_UNAVAILABLE', message: '无法确认任务模型或参数，请重新查询可用模型并检查伙伴模型设置后重试' };
     }
     const taskRuntime = taskModel ? {
@@ -2418,6 +2426,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       effort: taskModel.effort as typeof callerRuntime.effort,
       fastMode: taskModel.fastMode,
     } : callerRuntime;
+    await caller.groupAuthority?.refresh();
     let workingDir = input.workingDir?.trim() || '';
     if (workingDir) {
       const isDirectory = (() => {
@@ -2439,7 +2448,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ownerScopedUserDataPath(),
         caller.botId,
         app.getPath('userData'),
-      );
+      ).finally(() => caller.groupAuthority?.refresh());
     }
     const plan: Omit<BotDelegationPlanSnapshot, 'permission'> = {
       version: 1,

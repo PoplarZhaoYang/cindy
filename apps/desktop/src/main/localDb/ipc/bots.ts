@@ -595,12 +595,15 @@ function normalizeBotModelCapabilitiesOrThrow(
 /** How many candidate rows the preview query inspects (see below). */
 const CANONICAL_PREVIEW_SCAN = 100;
 
-/** The transcript also accepts persisted usage/cost as a legacy turn seal. */
+/** Explicit group deliveries are complete replies independent of the canonical turn.
+ * The transcript also accepts persisted usage/cost as a legacy turn seal. */
 function canonicalReplyCompleted() {
   return sql`(json_extract(${messages.agentMeta}, '$.turnCompleted') = 1
     OR json_extract(${messages.agentMeta}, '$.turnMoney.amount') > 0
     OR json_extract(${messages.agentMeta}, '$.turnCostUsd') > 0
-    OR json_type(${messages.agentMeta}, '$.turnUsageDetails') IS NOT NULL)`;
+    OR json_type(${messages.agentMeta}, '$.turnUsageDetails') IS NOT NULL
+    OR (json_type(${messages.agentMeta}, '$.sourceGroup.groupId') = 'text'
+      AND length(trim(json_extract(${messages.agentMeta}, '$.sourceGroup.groupId'))) > 0))`;
 }
 
 /** Visibility shared by the local unread count and remote reply watermark. */

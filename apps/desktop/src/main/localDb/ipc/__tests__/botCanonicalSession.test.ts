@@ -4255,6 +4255,35 @@ describe('Bot Session task end-to-end runtime', () => {
       } finally { release(); runtime.dispose(); }
     });
 
+  it.each([true, false])('counts an explicit group private send with subsequent tools (canonical running=%s)', async running => {
+    await seedPair(); seedGroupLane();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
+      sourceGroup: { groupId: 'fixture', name: 'Fixture group' }, isCurrent: () => true, validate: async () => {} });
+    const dispatch = vi.fn();
+    const service = createBotDirectMessageService({ dispatch });
+    try {
+      h.getSession.mockReturnValue({ isTurnRunning: () => running, compactSession: vi.fn() });
+      const sent = await service.sendToUser({ callerSessionId: 'group-lane', message: 'Explicit private reply', idempotencyKey: 'visible-private-fixture' });
+      if (!sent.ok) throw new Error(sent.message);
+      const row = h.sqlite!.prepare('SELECT created_at AS createdAt, agent_meta AS meta FROM messages WHERE id=?').get(sent.messageId) as { createdAt: number; meta: string };
+      expect(JSON.parse(row.meta).turnCompleted).toBeUndefined();
+      await createMessage(sent.targetSessionId, { clientId: 'later-progress', role: 'assistant', content: 'Private turn still working', createdAt: row.createdAt + 1 });
+      await createMessage(sent.targetSessionId, { clientId: 'later-tool', role: 'tool_use', content: { name: 'Read' }, createdAt: row.createdAt + 2 });
+      const list = async (lastReadAt: number) => (await invoke('local-db:bots:list', { lastReadAtByBotId: { 'bot-a': lastReadAt } }) as Array<{ id: string; unreadCount: number; lastMessagePreview: string }>).find(bot => bot.id === 'bot-a')!;
+      expect(await list(row.createdAt - 1)).toMatchObject({ unreadCount: 1, lastMessagePreview: 'Explicit private reply' });
+      expect(await getBotRemoteResourceSource('bot-a')).toMatchObject({ lastReplyAt: row.createdAt, lastMessagePreview: 'Explicit private reply' });
+      expect(await list(row.createdAt)).toMatchObject({ unreadCount: 0 });
+      h.sqlite!.prepare('UPDATE messages SET rewind_at=? WHERE id=?').run(row.createdAt + 3, sent.messageId);
+      expect(await list(row.createdAt - 1)).toMatchObject({ unreadCount: 0 });
+      expect((await getBotRemoteResourceSource('bot-a')).lastReplyAt).toBe(0);
+      h.sqlite!.prepare('UPDATE messages SET rewind_at=NULL WHERE id=?').run(sent.messageId);
+      h.sqlite!.prepare('UPDATE sessions SET cleared_at=? WHERE id=?').run(row.createdAt + 3, sent.targetSessionId);
+      expect(await list(row.createdAt - 1)).toMatchObject({ unreadCount: 0 });
+      expect((await getBotRemoteResourceSource('bot-a')).lastReplyAt).toBe(0);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
   it.each(['Private reply', '"Private reply"', '123', '{"reply":"ok"}', 'line one\nline two'])('compares exact persisted private text on retries: %s', async message => {
     await seedPair(); seedGroupLane();
     const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
@@ -4599,6 +4628,41 @@ describe('Bot Session task end-to-end runtime', () => {
       h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_control');
       release(); runtime.dispose(); vi.useRealTimers();
     }
+  });
+
+  it.each(['caller-read', 'profile-read', 'model-invalid', 'model-error', 'model-workspace', 'model-directory'] as const)
+  ('rejects revoked group start preflight at %s without private results or workspace writes', async boundary => {
+    await seedPair({ taskModelOverride: { harness: 'pi', model: 'grok-4.5', providerId: PROVIDER, effort: 'high', fastMode: false } }); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const model = { harness: 'pi' as const, model: 'grok-4.5', providerId: PROVIDER, effort: 'high', fastMode: false };
+    const runtime = createDelegationRuntime({
+      validateTaskModel: async () => { if (boundary === 'model-invalid') { revoked = true; return false; } return true; },
+      resolveTaskModelSelection: async () => { revoked = true; if (boundary === 'model-error') throw new Error('Private model unavailable'); return model; },
+    });
+    const before = h.sqlite!.prepare('SELECT count(*) FROM sessions').pluck().get();
+    const mkdir = vi.spyOn(fsPromises, 'mkdir');
+    const select = h.db!.select.bind(h.db!);
+    const read = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+      const query = select(fields);
+      if ((boundary === 'caller-read' && fields && Object.keys(fields).includes('fastMode') && Object.keys(fields).includes('model'))
+        || (boundary === 'profile-read' && fields && Object.keys(fields).length === 1 && Object.keys(fields)[0] === 'config')) {
+        queueMicrotask(() => { revoked = true; });
+      }
+      return query;
+    });
+    try {
+      expect(await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Preflight fixture',
+        ...(boundary.startsWith('model-') && boundary !== 'model-invalid' ? { modelSelection: { id: 'fixture' } } : {}),
+        ...(boundary === 'model-directory' ? { workingDir: 'not-an-absolute-directory' } : {}),
+      })).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(revoked).toBe(true);
+      expect(mkdir).not.toHaveBeenCalled();
+      expect(runtime.dispatch).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare('SELECT count(*) FROM sessions').pluck().get()).toBe(before);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM bot_delegations').pluck().get()).toBe(0);
+    } finally { read.mockRestore(); mkdir.mockRestore(); release(); runtime.dispose(); }
   });
 
   it.each(['valid', 'revoked', 'ended'] as const)('cancels group delegation input at the actual host accepted adapter: %s', async condition => {
