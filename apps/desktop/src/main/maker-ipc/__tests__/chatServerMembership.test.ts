@@ -86,6 +86,15 @@ describe('Chat Server membership notices', () => {
     })]);
     expect(result.ok && result.group.lastMessage).toMatchObject({ authorKind: 'system', authorName: 'Taylor', noticeCode: 'member-joined' });
     expect(result.ok && result.group.round.canContinue).toBe(false);
+    expect(result.ok && result.group.lastReplyAt).toBe(0);
+  });
+
+  it('preserves an incoming reply timestamp behind a later admission event', async () => {
+    const replyAt = '2026-10-07T23:59:00Z';
+    messages = [joined(), { ...joined(), id: '40000000-0000-4000-8000-000000000002',
+      seq: '11', origin: 'user', createdAt: replyAt }];
+    const result = await service.getGroup(roomId);
+    expect(result.ok && result.group.lastReplyAt).toBe(Date.parse(replyAt));
   });
 
   it('keeps separate admissions for the same member after leaving and rejoining', async () => {

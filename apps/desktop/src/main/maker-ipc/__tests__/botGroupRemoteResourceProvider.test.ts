@@ -193,14 +193,14 @@ describe('bot group remote resources', () => {
     expect(plain.blocks?.[0]?.fallbackMarkdown).toContain('**阿布**: 写好了');
   });
 
-  it('keeps join notices visible to old phones through the plain fallback', async () => {
+  it.each(['member-joined', null] as const)('keeps system notices (%s) visible to old phones through the plain fallback', async noticeCode => {
     const joined = { ...detail().messages[0]!, kind: 'notice' as const, authorKind: 'system' as const,
-      noticeCode: 'member-joined' as const, authorName: 'Taylor', content: 'Taylor joined the group' };
+      noticeCode, authorName: 'Taylor', content: 'Taylor joined the group' };
     service.getGroup.mockResolvedValue({ ok: true, group: detail({ messages: [joined] }) });
     const plain = await remoteResourceRegistry.get(context, { client: client(), ref: ref('g1') });
     expect(plain.blocks?.[0]?.fallbackMarkdown).toBe('Taylor joined the group');
     const rich = botGroupRemoteChatData(detail({ messages: [joined] }));
-    expect(rich.messages[0]).toMatchObject({ authorKind: 'system', noticeCode: 'member-joined', authorName: 'Taylor' });
+    expect(rich.messages[0]).toMatchObject({ authorKind: 'system', noticeCode, authorName: 'Taylor' });
   });
 
   it('forwards actions to the group service and reports its error code when refused', async () => {

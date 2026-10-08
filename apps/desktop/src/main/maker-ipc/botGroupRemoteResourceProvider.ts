@@ -192,7 +192,8 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
 
 function fallbackMarkdown(detail: BotGroupDetail): string {
   const lines = detail.messages
-    .filter((message) => (message.kind === 'message' || message.noticeCode === 'member-joined') &&
+    .filter((message) => (message.kind === 'message' || (message.kind === 'notice' && message.authorKind === 'system' &&
+      (message.noticeCode === 'member-joined' || message.noticeCode === null))) &&
       (message.content.trim() || message.attachments.length > 0))
     .slice(-FALLBACK_MESSAGES)
     .map((message) => {
