@@ -122,25 +122,28 @@ export interface BotDirectMessageServiceDeps {
   createId?: () => string;
 }
 
-async function activeRoster(): Promise<BotRosterEntry[]> {
+async function activeRoster(beforeReturn?: () => Promise<void>): Promise<BotRosterEntry[]> {
   const db = getDbClient().drizzle;
-  return db
+  const roster = await db
     .select({ id: botProfiles.id, name: botProfiles.displayName })
     .from(botProfiles)
     .where(eq(botProfiles.status, 'active'))
     .orderBy(desc(botProfiles.updatedAt));
+  await beforeReturn?.();
+  return roster;
 }
 
 async function failed(
   errorCode: string,
   message: string,
   includeRoster = false,
+  beforeRosterReturn?: () => Promise<void>,
 ): Promise<BotDirectMessageResult> {
   return {
     ok: false,
     errorCode,
     message,
-    ...(includeRoster ? { availableBots: await activeRoster() } : {}),
+    ...(includeRoster ? { availableBots: await activeRoster(beforeRosterReturn) } : {}),
   };
 }
 
@@ -469,11 +472,11 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     } else targetProfile = await loadTargetProfile(input.targetBotId);
     if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
     if (!targetProfile) {
-      return failed('TARGET_BOT_NOT_FOUND', '找不到目标 Bot', true);
+      return failed('TARGET_BOT_NOT_FOUND', '找不到目标 Bot', true, groupAuthority?.refresh);
     }
     if (remoteSender && targetProfile.hiddenAt) return failed('NOT_FOUND', 'Remote teammate is unavailable');
     if (targetProfile.status !== 'active') {
-      return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true);
+      return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true, groupAuthority?.refresh);
     }
 
     // Resolve on every use so a missing/deleted canonical task can be repaired
@@ -483,14 +486,14 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const ensured = await deps.ensureCanonicalSession(input.targetBotId);
       if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
       if (ensured.ok) targetSessionId = ensured.sessionId;
-      else return failed(ensured.errorCode, ensured.message, true);
+      else return failed(ensured.errorCode, ensured.message, true, groupAuthority?.refresh);
     }
     if (!remoteTarget && !targetSessionId) {
       const target = await loadTargetCanonicalSession(input.targetBotId);
       targetSessionId = target?.sessionId ?? null;
     }
     if (!remoteTarget && !targetSessionId) {
-      return failed('TARGET_CANONICAL_UNAVAILABLE', '目标 Bot 没有可用的主任务', true);
+      return failed('TARGET_CANONICAL_UNAVAILABLE', '目标 Bot 没有可用的主任务', true, groupAuthority?.refresh);
     }
 
     const [botAId, botBId] = pairOf(caller.botId, input.targetBotId);
@@ -508,7 +511,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const currentTarget = remoteTarget ? targetProfile : await loadTargetProfile(input.targetBotId);
       await groupAuthority?.refresh();
       if (!currentTarget || currentTarget.status !== 'active' || (remoteSender && currentTarget.hiddenAt)) {
-        return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true);
+        return failed('TARGET_BOT_INACTIVE', '目标 Bot 已暂停或归档', true, groupAuthority?.refresh);
       }
       if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
       const db = getDbClient().drizzle;
@@ -809,11 +812,11 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           });
         } catch (error) {
           await rollbackReservation().catch(() => undefined);
-          return failed('DELIVERY_NOT_ACCEPTED', error instanceof Error ? error.message : String(error), true);
+          return failed('DELIVERY_NOT_ACCEPTED', error instanceof Error ? error.message : String(error), true, groupAuthority?.refresh);
         }
         if (!dispatched.ok) {
           await rollbackReservation().catch(() => undefined);
-          return failed(dispatched.errorCode, dispatched.message, true);
+          return failed(dispatched.errorCode, dispatched.message, true, groupAuthority?.refresh);
         }
       }
 
@@ -875,9 +878,8 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       || caller.sessionSource !== 'bot' || caller.sessionStatus !== 'active' || caller.botStatus !== 'active') {
       return { ok: false as const, errorCode: 'NOT_A_BOT_SESSION', message: 'An active canonical teammate is required' };
     }
-    const local = (await activeRoster()).filter(row => row.id !== caller.botId);
+    const local = (await activeRoster(groupAuthority?.refresh)).filter(row => row.id !== caller.botId);
     if (groupAuthority) {
-      groupAuthority.assertCurrent();
       if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
         return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
       return { ok: true as const, agents: local.map(row => ({ ...row, local: true })), unavailableDevices: [] };

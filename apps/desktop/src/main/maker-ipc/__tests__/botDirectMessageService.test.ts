@@ -19,7 +19,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
 import { createBotMessageTransport } from '../botMessageTransport.js';
-import { registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
+import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -153,6 +153,46 @@ describe('botDirectMessageService', () => {
       expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Bounded peer question' })).toMatchObject({ ok: true, targetSessionId: 'b-main' });
       expect(sqlite.prepare('SELECT sender_session_id FROM bot_direct_messages').get()).toEqual({ sender_session_id: 'a-group' });
     } finally { release(); }
+  });
+
+  it.each(['list', 'failed-send'] as const)('revalidates group authority after the private roster read for %s', async operation => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    let serverAuthorized = true;
+    let revokeDuringRead = false;
+    const validate = vi.fn(async () => { if (!serverAuthorized) throw new GroupToolAuthorizationError(); });
+    const release = registerGroupToolAuthority('a-group', {
+      botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate,
+    });
+    const rosterRead = vi.fn(() => { if (revokeDuringRead) serverAuthorized = false; });
+    const prepare = sqlite.prepare.bind(sqlite);
+    const spy = vi.spyOn(sqlite, 'prepare').mockImplementation(sql => {
+      const statement = prepare(sql);
+      if (sql.includes('from "bot_profiles"') && sql.includes('order by')) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, 'all').mockImplementation((...args: unknown[]) => {
+          const result = all(...args);
+          rosterRead();
+          return result;
+        });
+      }
+      return statement;
+    });
+    const service = createBotDirectMessageService({ dispatch });
+    const read = () => operation === 'list' ? service.listAgents('a-group')
+      : service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'missing-bot', message: 'Fixture only' });
+    try {
+      expect(await read()).toMatchObject(operation === 'list'
+        ? { ok: true, agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) }
+        : { ok: false, errorCode: 'TARGET_BOT_NOT_FOUND', availableBots: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot' }]) });
+      expect(rosterRead).toHaveBeenCalledOnce();
+      expect(validate).toHaveBeenCalledTimes(2);
+      revokeDuringRead = true;
+      rosterRead.mockClear(); validate.mockClear();
+      expect(await read()).toEqual({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED', message: expect.any(String) });
+      expect(rosterRead).toHaveBeenCalledOnce();
+      expect(validate).toHaveBeenCalledTimes(2);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { release(); spy.mockRestore(); }
   });
 
   beforeEach(() => {
