@@ -220,6 +220,20 @@ describe('shared task guests never see the owner private message sources', () =>
     expect(sent.get('own-task')).toEqual(projection);
   });
 
+  it('keeps group private delivery visible in guest pushes without its source identity', () => {
+    const transport = client();
+    __testing.setActiveClient(transport as never);
+    subscriptions.subscribe(guestA, ['session:task-a']);
+    subscriptions.subscribe('own-task', ['session:task-a']);
+    const message = { clientId: 'private-delivery', sessionId: 'task-a', role: 'assistant', content: 'Private reply',
+      agentMeta: { sourceGroup: { groupId: 'secret-group', name: 'Secret group' } } };
+    __testing.forwardPush('local-db:messages:created', { sessionId: 'task-a', message });
+    const sent = new Map(transport.sendPush.mock.calls.map(call => [call[0], call[2]]));
+    expect(sent.get(guestA).message.agentMeta).toEqual({ explicitDelivery: true });
+    expect(JSON.stringify(sent.get(guestA))).not.toMatch(/secret-group|Secret group|sourceGroup/);
+    expect(sent.get('own-task').message).toEqual(message);
+  });
+
   it('hides owner devices, plugins and automation identities from the guest only', async () => {
     const transport = client();
     __testing.setActiveClient(transport as never);

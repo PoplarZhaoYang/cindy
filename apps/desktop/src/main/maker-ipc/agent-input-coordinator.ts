@@ -64,7 +64,7 @@ import type {
   RecoveryCheckpoint,
 } from '../../shared/agentInputQueue.js';
 import {
-  HOST_ONLY_AGENT_MESSAGE,
+  HOST_ONLY_AGENT_PREFIX,
   buildMakerUserMessage,
   getAgentInputAttachmentBlockType,
   getAgentFacingText,
@@ -4295,7 +4295,7 @@ export class AgentInputCoordinator {
   /** Renderer projection may carry routing hints, but never quoted history bodies. */
   private toProjectedItem(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
     const projected = { ...item };
-    delete projected[HOST_ONLY_AGENT_MESSAGE];
+    delete projected[HOST_ONLY_AGENT_PREFIX];
     delete projected.hostAcceptedAtMs;
     delete projected.autoReviewUserText;
     delete projected.fromDeviceLinkClient;

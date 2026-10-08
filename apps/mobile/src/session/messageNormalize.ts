@@ -164,6 +164,8 @@ export interface NormalizedRemoteMessage {
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
   sourceGroup?: MessageSourceGroup;
+  /** Host-stamped delivery remains visible after source identity is redacted. */
+  explicitDelivery?: boolean;
   /** user 专用:共享任务成员发送的消息作者名(agentMeta.sharedTaskAuthor);气泡上方标签。 */
   sharedAuthorName?: string;
   /** 共享任务成员 id(作者标签长按显示,与模型 `[消息来源]` 的 member_id 同源)。 */
@@ -575,6 +577,7 @@ export function normalizeRemoteMessages(
       ...turnCost,
       ...readModelMismatch(message),
       ...(message.role === 'assistant' ? { sourceGroup: readMessageSourceGroup(message.agentMeta) } : {}),
+      ...(message.role === 'assistant' && message.agentMeta?.explicitDelivery === true ? { explicitDelivery: true } : {}),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
       ...(message.role === 'user' ? readSessionOrigin(message) : {}),
       ...(message.role === 'user' ? readMessageSourceFields(message) : {}),

@@ -195,6 +195,8 @@ export interface CcMeta {
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
   sourceGroup?: MessageSourceGroup;
+  /** Guest-safe independent assistant delivery; does not seal a model turn. */
+  explicitDelivery?: boolean;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;

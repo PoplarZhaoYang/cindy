@@ -26,7 +26,7 @@ import { createBotMessageTransport } from '../botMessageTransport.js';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
 import { redactMessageRowForSharedGuest, redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
-import { HOST_ONLY_AGENT_MESSAGE, buildMakerUserMessage, getAgentFacingText, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_PREFIX, buildMakerUserMessage, getAgentFacingText, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback, runAcceptedRollback } from '../acceptedCallbackRunner.js';
 
@@ -177,15 +177,15 @@ describe('botDirectMessageService', () => {
       const js = ts.transpileModule(`${source.slice(begin, end)}\nreturn buildSessionControlInputItem;`, {
         compilerOptions: { target: ts.ScriptTarget.ES2022 },
       }).outputText;
-      const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_MESSAGE', js)(
+      const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_PREFIX', js)(
         async () => ({ model: 'fixture', workingDir: '/fixture', permissionMode: 'ask' }), (mode: string) => mode,
-        UI_ACTION_TRIGGER_PREFIX, HOST_ONLY_AGENT_MESSAGE);
+        UI_ACTION_TRIGGER_PREFIX, HOST_ONLY_AGENT_PREFIX);
       const queued = await build({ ...sent, meta: {}, origin });
       expect(queued.text).toBe(sent.persistedContent);
       expect(getAgentFacingText(queued)).not.toContain('Group source');
       expect(buildMakerUserMessage(queued)).toEqual({ type: 'user', content: sent.message });
       const snapshot = sanitizeQueuedMessageForPersistence(queued);
-      expect(snapshot[HOST_ONLY_AGENT_MESSAGE]).toBeUndefined();
+      expect(snapshot[HOST_ONLY_AGENT_PREFIX]).toBeUndefined();
       expect(snapshot.text).toBe(sent.persistedContent);
       expect(JSON.stringify(snapshot)).not.toMatch(/Design|group-1|Group source/);
       expect(JSON.stringify(buildMakerUserMessage(JSON.parse(JSON.stringify(snapshot))))).not.toContain('Group source');
@@ -198,7 +198,7 @@ describe('botDirectMessageService', () => {
       expect(JSON.stringify([guestRow, guestProjection])).not.toMatch(/Design|group-1|a-group|Group source/);
       expect(JSON.stringify(guestProjection)).toContain('Bounded peer question');
       expect(row.agentMeta.agentFacingWireContent.content).toContain('[Group source: Design (group-1); lane: a-group]');
-      expect(queued[HOST_ONLY_AGENT_MESSAGE]).toBe(sent.message);
+      expect(queued[HOST_ONLY_AGENT_PREFIX]).toBe(sent.message.slice(0, -'Bounded peer question'.length));
       release();
       dispatch.mockImplementationOnce(async params => {
         await params.onAccepted?.();
