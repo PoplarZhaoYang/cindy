@@ -26,6 +26,7 @@ import { createBotMessageTransport } from '../botMessageTransport.js';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
 import { redactMessageRowForSharedGuest, redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
+import { HOST_ONLY_AGENT_MESSAGE, buildMakerUserMessage, getAgentFacingText, sanitizeQueuedMessageForPersistence } from '../../../shared/agentInputQueue.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
 import { AcceptedCallbackDispatchCancelled, runAcceptedCallback, runAcceptedRollback } from '../acceptedCallbackRunner.js';
 
@@ -170,8 +171,24 @@ describe('botDirectMessageService', () => {
       const origin = sessionQueueOriginForDispatcher(sent);
       const row = { sessionId: sent.targetSessionId, content: sent.persistedContent,
         agentMeta: { origin, agentFacingWireContent: { type: 'user', content: sent.message } } };
-      const queued = { clientId: sent.clientId, text: sent.message, persistedContent: sent.persistedContent,
-        origin, chatMessage: { content: sent.persistedContent } };
+      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+      const begin = source.indexOf('  async function buildSessionControlInputItem(');
+      const end = source.indexOf('  const orcaInterAgentDispatcher:', begin);
+      const js = ts.transpileModule(`${source.slice(begin, end)}\nreturn buildSessionControlInputItem;`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText;
+      const build = new Function('buildCreateOptsForQueuedSession', 'permissionModeOrAsk', 'UI_ACTION_TRIGGER_PREFIX', 'HOST_ONLY_AGENT_MESSAGE', js)(
+        async () => ({ model: 'fixture', workingDir: '/fixture', permissionMode: 'ask' }), (mode: string) => mode,
+        UI_ACTION_TRIGGER_PREFIX, HOST_ONLY_AGENT_MESSAGE);
+      const queued = await build({ ...sent, meta: {}, origin });
+      expect(queued.text).toBe(sent.persistedContent);
+      expect(getAgentFacingText(queued)).not.toContain('Group source');
+      expect(buildMakerUserMessage(queued)).toEqual({ type: 'user', content: sent.message });
+      const snapshot = sanitizeQueuedMessageForPersistence(queued);
+      expect(snapshot[HOST_ONLY_AGENT_MESSAGE]).toBeUndefined();
+      expect(snapshot.text).toBe(sent.persistedContent);
+      expect(JSON.stringify(snapshot)).not.toMatch(/Design|group-1|Group source/);
+      expect(JSON.stringify(buildMakerUserMessage(JSON.parse(JSON.stringify(snapshot))))).not.toContain('Group source');
       const projection = { pendingQueue: [queued], recovery: { kind: 'active-turn', item: queued } };
       // These are the actual history/message-push and queue/read-recovery
       // redactors. The host's model input retains the full group source.
@@ -181,7 +198,7 @@ describe('botDirectMessageService', () => {
       expect(JSON.stringify([guestRow, guestProjection])).not.toMatch(/Design|group-1|a-group|Group source/);
       expect(JSON.stringify(guestProjection)).toContain('Bounded peer question');
       expect(row.agentMeta.agentFacingWireContent.content).toContain('[Group source: Design (group-1); lane: a-group]');
-      expect(queued.text).toBe(sent.message);
+      expect(queued[HOST_ONLY_AGENT_MESSAGE]).toBe(sent.message);
       release();
       dispatch.mockImplementationOnce(async params => {
         await params.onAccepted?.();

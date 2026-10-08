@@ -148,6 +148,7 @@ import {
   normalizeAgentInputClearBoundaryMs,
   serializeSessionReferencePayload,
   USAGE_LIMIT_RESET_AUTO_RESUME_REASON,
+  HOST_ONLY_AGENT_MESSAGE,
   type AgentInputClearBoundaryOpts,
   type AgentInputCreateOpts,
   type AgentInputQueuedMessage,
@@ -11933,9 +11934,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // (agentOmitsTriggerPrefix → buildMakerUserMessage)。
     const hiddenTriggerForAgent = !params.message.startsWith(UI_ACTION_TRIGGER_PREFIX)
       && params.persistedContent.startsWith(UI_ACTION_TRIGGER_PREFIX);
+    // Group peer envelopes belong only to the current model dispatch. Keep the
+    // safe authored body in queue text/history; the symbol never crosses JSON.
+    const modelOnlyEnvelope = params.clientId.startsWith('bot-dm:') && hiddenTriggerForAgent
+      && params.persistedContent !== `${UI_ACTION_TRIGGER_PREFIX}${params.message}`;
     return {
       clientId: params.clientId,
-      text: hiddenTriggerForAgent ? `${UI_ACTION_TRIGGER_PREFIX}${params.message}` : params.message,
+      text: modelOnlyEnvelope ? params.persistedContent
+        : hiddenTriggerForAgent ? `${UI_ACTION_TRIGGER_PREFIX}${params.message}` : params.message,
+      ...(modelOnlyEnvelope ? { [HOST_ONLY_AGENT_MESSAGE]: params.message } : {}),
       ...(hiddenTriggerForAgent ? { agentOmitsTriggerPrefix: true as const } : {}),
       ...(params.autoReviewUserText !== undefined ? { autoReviewUserText: params.autoReviewUserText } : {}),
       ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
@@ -11955,7 +11962,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(fileAttachments?.length ? { files: fileAttachments } : {}),
       },
       createOpts,
-      ...(params.origin ? { origin: params.origin } : {}),
+      ...(params.origin ? { origin: modelOnlyEnvelope && (params.origin.kind === 'session' || params.origin.kind === 'orca')
+        ? { ...params.origin, displayText: params.persistedContent } : params.origin } : {}),
       ...(params.sourcePlugin ? { sourcePlugin: params.sourcePlugin } : {}),
     };
   }

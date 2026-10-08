@@ -37,7 +37,7 @@ import type {
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
-import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
+import { HOST_ONLY_AGENT_MESSAGE, USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../shared/agentInputQueue.js';
 import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
@@ -11645,6 +11645,34 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
       });
     },
   );
+
+  it('keeps a peer group envelope only in memory across busy queue persistence and live dispatch', async () => {
+    const h = createHarness();
+    const sid = 'group-envelope-fixture';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    const body = '[UI_ACTION_TRIGGER]Bounded peer question';
+    const envelope = '[Group source: Fixture Design (fixture-group); lane: fixture-lane]\nBounded peer question';
+    h.coordinator.enqueue(sid, { ...makeItem('bot-dm:fixture:message', body),
+      [HOST_ONLY_AGENT_MESSAGE]: envelope, agentOmitsTriggerPrefix: true,
+      origin: { kind: 'session', senderSessionId: 'fixture-lane', displayText: body } });
+    await flush();
+    const snapshot = h.persistQueueSnapshot.mock.calls.at(-1)?.[1] ?? [];
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0][HOST_ONLY_AGENT_MESSAGE]).toBeUndefined();
+    expect(snapshot[0].text).toBe(body);
+    expect(JSON.stringify(snapshot)).not.toMatch(/Group source|Fixture Design|fixture-group/);
+    const projection = h.coordinator.getProjection(sid).pendingQueue[0];
+    expect(projection[HOST_ONLY_AGENT_MESSAGE]).toBeUndefined();
+    expect(projection.text).toBe(body);
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: envelope });
+    const message = mocks.createMessage.mock.calls.find(call => (call[1] as { clientId?: string }).clientId === 'bot-dm:fixture:message')?.[1];
+    expect(message).toMatchObject({ content: body });
+  });
 
   it('preserves typed plugin receipts from queue snapshot through durable persistence and review', async () => {
     const h = createHarness();

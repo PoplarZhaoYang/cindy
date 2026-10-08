@@ -244,7 +244,11 @@ export interface RecoveryCheckpoint {
   }>;
 }
 
+/** Same-process model envelope; cannot be supplied by JSON or survive queue persistence. */
+export const HOST_ONLY_AGENT_MESSAGE = Symbol('host-only-agent-message');
+
 export interface AgentInputQueuedMessage {
+  [HOST_ONLY_AGENT_MESSAGE]?: string;
   /** Host-stamped attribution, retained in durable queue snapshots and messages. */
   sharedTaskAuthor?: SharedTaskAuthor;
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
@@ -593,7 +597,7 @@ export function sanitizeQueuedMessageForPersistence(
     // Historical plain-text queue payloads have no embedded reference bodies.
   }
 
-  if (!changed && !item.trustedSessionReferenceContexts) return item;
+  if (!changed && !item.trustedSessionReferenceContexts && item[HOST_ONLY_AGENT_MESSAGE] === undefined) return item;
   const sanitized: AgentInputQueuedMessage = {
     ...item,
     persistedContent,
@@ -603,6 +607,7 @@ export function sanitizeQueuedMessageForPersistence(
       ? { sessionReferencesRequireTrustedSnapshot: true }
       : {}),
   };
+  delete sanitized[HOST_ONLY_AGENT_MESSAGE];
   if (!item.agentReferences) delete sanitized.agentReferences;
   if (item.trustedSessionReferenceContexts) delete sanitized.trustedSessionReferenceContexts;
   return sanitized;
@@ -1098,7 +1103,7 @@ export function buildMakerUserMessage(
   sessionReferenceContexts: AgentInputSessionReferenceContext[] = [],
 ): AgentInputMakerMessage {
   const blocks: Array<{ type: string; [k: string]: unknown }> = [];
-  const facingText = getAgentFacingText(queued);
+  const facingText = queued[HOST_ONLY_AGENT_MESSAGE] ?? getAgentFacingText(queued);
   // 主机内部消息只在排队行 / 历史里需要隐藏前缀;发给模型的正文不带它。
   const agentFacingText = queued.agentOmitsTriggerPrefix === true && facingText.startsWith(UI_ACTION_TRIGGER_PREFIX)
     ? facingText.slice(UI_ACTION_TRIGGER_PREFIX.length)
