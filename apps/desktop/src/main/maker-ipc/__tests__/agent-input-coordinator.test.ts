@@ -11677,7 +11677,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     expect(screen.mock.calls[0]?.[1]).not.toContain('Group source');
     expect(h.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: prefix + (rewrite ? 'Rewritten question' : 'Bounded peer question') });
     const message = mocks.createMessage.mock.calls.find(call => (call[1] as { clientId?: string }).clientId === 'bot-dm:fixture:message')?.[1];
-    expect(message).toMatchObject({ content: rewrite ? 'Rewritten question' : body });
+    expect(message).toMatchObject({ content: rewrite ? '[UI_ACTION_TRIGGER]Rewritten question' : body });
   });
 
   it('preserves typed plugin receipts from queue snapshot through durable persistence and review', async () => {

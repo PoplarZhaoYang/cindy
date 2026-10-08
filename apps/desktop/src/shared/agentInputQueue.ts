@@ -634,8 +634,9 @@ export function updateQueuedMessageText(
   newText: string,
   sessionRefs: AgentInputSessionRef[] = reconcileSessionRefsForText(newText, entry.sessionRefs),
 ): AgentInputQueuedMessage {
-  // A plugin rewrite must not turn a hidden host welcome into an editable user draft.
-  if (entry.toolsDisabled === true && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
+  // A plugin rewrite must not turn a hidden host message into an editable user draft.
+  if ((entry.toolsDisabled === true || entry.agentOmitsTriggerPrefix === true)
+    && entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX)
     && !newText.startsWith(UI_ACTION_TRIGGER_PREFIX)) {
     newText = `${UI_ACTION_TRIGGER_PREFIX}${newText}`;
   }
