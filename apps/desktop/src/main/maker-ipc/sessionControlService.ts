@@ -92,6 +92,7 @@ export interface SessionControlServiceDeps {
   setSessionRuntime(params: {
     targetSessionId: string;
     expectedGeneration?: number;
+    beforeMutation?: () => Promise<void>;
     patch: {
       harness?: AgentKind;
       model?: string;
@@ -334,6 +335,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
     async setSessionRuntime(params: {
       targetSessionId: string;
       expectedGeneration?: number;
+      beforeMutation?: () => Promise<void>;
       patch: {
         harness?: AgentKind;
         model?: string;
@@ -343,6 +345,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       };
     }): Promise<SessionRuntimeSetResult> {
       const missing = await ensureTarget(params.targetSessionId);
+      if (params.beforeMutation) await params.beforeMutation();
       if (missing) return missing;
       return deps.setSessionRuntime(params);
     },

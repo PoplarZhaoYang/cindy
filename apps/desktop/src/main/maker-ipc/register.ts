@@ -9155,7 +9155,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     withCloseSuppressed: withRehydrateCloseSuppressed,
     pendingSwitches: agentSwitchPending,
-    selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent) => {
+    selectSameAgentModel: async (sessionId, intent, applyNow, assertSelectionCurrent, beforeMutation) => {
       const result = await applySessionRuntimeSelection(sessionId, intent.model, intent.providerId, {
         effort: (intent.effort ?? null) as SessionRuntimeProfile['effort'],
         fastMode: intent.fastMode ?? false,
@@ -9163,7 +9163,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
       }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
         runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
-        assertSelectionCurrent });
+        assertSelectionCurrent, beforeMutation });
       return result;
     },
     onPendingSwitchChanged: (sessionId, intent) => {
@@ -13053,6 +13053,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     /** 系统配置对齐(IM 渠道默认跟随 / 伙伴模型对齐)登记: 落地时不打「脱离跟随」标记。 */
     configStaged?: boolean;
     assertSelectionCurrent?: () => void;
+    beforeMutation?: () => Promise<void>;
     /** Internal calls from the send / switch transaction already own the route lock. */
     sessionLockHeld?: boolean;
     applyingUserSelectionOnSend?: boolean;
@@ -13826,7 +13827,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           : readSessionRuntimeFallbackSettings().enabled,
       };
     },
-    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch }) => {
+    setSessionRuntime: async ({ targetSessionId, expectedGeneration, patch, beforeMutation }) => {
       if (patch.harness !== undefined) {
         return setSessionRuntimeHarness({
           withSessionLock: withSendToSessionLock,
@@ -13855,16 +13856,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             if (!axes.ok) throwIpcError('INVALID_PARAMS', `target model runtime axes unavailable: ${axes.reason}`);
             return { ...profile, providerId: providerId ?? null, effort: axes.effort, fastMode: axes.fastMode };
           },
-          stage: async (id, profile, assertSelectionCurrent) => {
+          stage: async (id, profile, assertSelectionCurrent, beforeMutation) => {
             return performSessionAgentSwitch(agentSwitchDeps, {
               sessionId: id, targetAgentKind: profile.agentKind, model: profile.model,
               providerId: profile.providerId, effort: profile.effort, fastMode: profile.fastMode,
-              runtimeSource: 'agent', assertSelectionCurrent,
+              runtimeSource: 'agent', assertSelectionCurrent, beforeMutation,
             });
           },
-        }, { targetSessionId, expectedGeneration, patch: { ...patch, harness: patch.harness } });
+        }, { targetSessionId, expectedGeneration, beforeMutation, patch: { ...patch, harness: patch.harness } });
       }
       const profiles = await readSessionRuntimeProfiles(targetSessionId);
+      if (beforeMutation) await beforeMutation();
       if (!profiles) {
         return {
           ok: false,
@@ -13886,6 +13888,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           { effort: next.effort, fastMode: next.fastMode },
           {
             source: 'agent',
+            beforeMutation,
             expectedGeneration,
             deferWhileRunning: true,
             effectiveProfile: profiles.effective,
@@ -18362,6 +18365,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 那台的 Agent 认为需要换进程(跨来源等)时关掉本次连接，下一次发送按新路由重新启动
       // 并接上原来的对话；否则直接在那台的会话里切换。
       const rebuild = await live.requiresModelSwitchRebuild?.(model, { providerId: targetProviderId }) ?? false;
+      if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
+      assertRuntimeOwnerCurrent();
       if (rebuild) {
         await withRehydrateCloseSuppressed(sessionId, () => maker.closeSession(sessionId, 'runtime-refresh'));
       } else {
@@ -18723,6 +18728,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // authoritative until a real send holds this same lock and consumes the final choice.
       if (internalOptions.source === 'user' && !internalOptions.applyingUserSelectionOnSend &&
           !runtimeStatus.remoteHostId && !runtimeStatus.orcaRole) {
+        if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
         clearPendingCredentialSwitchForSession(sessionId, { wake: false });
@@ -18757,6 +18763,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         : await resolvePendingRuntimeAxisPatch(sessionId, axisPatch);
       const deferLockedSelection = async () => {
         const meta = await maker.getSessionMeta(sessionId);
+        if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
         if (!meta) return { deferred: false, superseded: true };
         if (supersededByOwnerBoundary()) {
           return { deferred: false, superseded: true };
@@ -18898,6 +18905,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: targetRouteProviderId,
           })
         : undefined;
+      if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
       if (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange) {
         if (!piPreview || piPreview.action === 'unavailable') {
           throwIpcError(
@@ -19416,6 +19424,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result: Awaited<ReturnType<typeof applyRuntimeSetModelChange>> = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
+              beforeMutation: internalOptions.beforeMutation,
               admit: () => { assertRuntimeOwnerCurrent(); assertSharedTaskCurrent.admit(); },
               sessionId,
               model,
