@@ -123,6 +123,27 @@ describe('Chat Server result delivery and refresh', () => {
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
 
+  it.each([undefined, '60000000-0000-4000-8000-000000000001'])('does not replace execution requester %s with the source author', async requesterId => {
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') {
+        const next = claimed ? null : { ...execution, requester_id: requesterId, access_mode: 'owner' };
+        claimed = true; return { body: { execution: next } };
+      }
+      if (route.endsWith('/members')) return { body: [
+        { id: botId, kind: 'bot', ownerActorId: selfId, state: 'joined', accessRevision: 1, guestAccess: 'tools' },
+        { id: selfId, kind: 'human', ownerActorId: selfId, state: 'joined', role: 'owner' },
+      ] };
+      if (route.endsWith(`/messages/${execution.source_message_id}`) || route.includes('/messages?')) {
+        const source = { id: execution.source_message_id, seq: '1', authorId: selfId, author: { kind: 'human', name: 'Me' },
+          content: [{ type: 'text', text: 'Original owner request' }], deleted: false, threadRootId: null };
+        return { body: route.includes('/messages?') ? [source] : source };
+      }
+      return response(route);
+    });
+    await start();
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+  });
+
   it.each(['revision', 'requester', 'companion-owner', 'left', 'lease', 'account', 'restart', 'temporary-members', 'temporary-heartbeat'])(
     'checks the server execution at the tool boundary and rejects %s changes', async change => {
       let changed = false;

@@ -1149,8 +1149,14 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         const current = await loadCaller(input.callerSessionId);
         const target = await loadTargetCanonicalSession(caller.botId);
         const clientId = `bot-group-private:${input.callerSessionId}:${input.idempotencyKey}`;
-        const [existing] = target ? await getDbClient().drizzle.select({ id: messages.id, content: messages.content })
-          .from(messages).where(and(eq(messages.sessionId, target.sessionId), eq(messages.clientId, clientId))).limit(1) : [];
+        // Recovery replaces the canonical Session but preserves its historical
+        // link. A lane's retry key still identifies the original delivery.
+        const [existing] = target ? await getDbClient().drizzle.select({ id: messages.id, content: messages.content, sessionId: messages.sessionId })
+          .from(messages)
+          .innerJoin(botSessionLinks, eq(botSessionLinks.sessionId, messages.sessionId))
+          .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+          .where(and(eq(botSessionLinks.botId, caller.botId), inArray(botSessionLinks.role, ['canonical', 'history']),
+            eq(sessions.source, 'bot'), eq(messages.clientId, clientId))).limit(1) : [];
         await authority.refresh();
         if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
           return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
@@ -1158,7 +1164,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           || current.linkArchivedAt !== null || current.botStatus !== 'active' || current.sessionStatus !== 'active')
           return { ok: false as const, errorCode: 'TARGET_CANONICAL_UNAVAILABLE', message: t('groupTools.privateUnavailable') };
         if (existing) return existing.content === message
-          ? { ok: true as const, messageId: existing.id, targetSessionId: target.sessionId, delivered: true }
+          ? { ok: true as const, messageId: existing.id, targetSessionId: existing.sessionId, delivered: true }
           : { ok: false as const, errorCode: 'IDEMPOTENCY_CONFLICT', message: t('groupTools.idempotencyConflict') };
         // An assistant message for the owner, never synthetic user input to the Bot.
         // Host-derived target prevents another account or a namesake from receiving it.

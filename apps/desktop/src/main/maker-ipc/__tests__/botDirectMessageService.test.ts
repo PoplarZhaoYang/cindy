@@ -138,6 +138,45 @@ describe('botDirectMessageService', () => {
     } finally { release(); }
   });
 
+  it.each(['deleted', 'archived'])('keeps the original private receipt after canonical recovery from %s', async status => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', sourceGroup: { groupId: 'group-1' },
+      mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const input = { callerSessionId: 'a-group', message: 'Private reply', idempotencyKey: 'stable-recovery-key' };
+    const clientId = `bot-group-private:a-group:${input.idempotencyKey}`;
+    // A matching key in another teammate's private history cannot claim this receipt.
+    sqlite.prepare('INSERT INTO messages(id,session_id,client_id,content) VALUES(?,?,?,?)')
+      .run('other-receipt', 'b-main', clientId, 'Different private content');
+    h.createMessage.mockImplementationOnce(async (sessionId, body) => {
+      sqlite.prepare('INSERT INTO messages(id,session_id,client_id,content) VALUES(?,?,?,?)')
+        .run('original-receipt', sessionId, body.clientId, body.content);
+      return { id: 'original-receipt' };
+    });
+    let recover = false;
+    const ensureCanonicalSession = vi.fn(async (_botId: string, beforeRecovery?: () => Promise<void>) => {
+      if (recover) {
+        await beforeRecovery?.();
+        sqlite.exec("UPDATE bot_session_links SET role='history', archived_at=1 WHERE session_id='a-main'; INSERT INTO sessions VALUES('a-restored','bot','active'); INSERT INTO bot_session_links VALUES('a-restored-link','bot-a','a-restored','canonical',NULL)");
+        recover = false;
+      }
+      const target = sqlite.prepare("SELECT session_id AS sessionId FROM bot_session_links WHERE bot_id='bot-a' AND role='canonical'").get() as { sessionId: string };
+      return { ok: true as const, sessionId: target.sessionId };
+    });
+    const service = createBotDirectMessageService({ dispatch, ensureCanonicalSession });
+    try {
+      const receipt = { ok: true, messageId: 'original-receipt', targetSessionId: 'a-main', delivered: true };
+      expect(await service.sendToUser(input)).toEqual(receipt);
+      sqlite.prepare('UPDATE sessions SET status=? WHERE id=?').run(status, 'a-main');
+      recover = true;
+      expect(await service.sendToUser(input)).toEqual(receipt);
+      expect(await service.sendToUser({ ...input, message: 'Changed body' }))
+        .toMatchObject({ ok: false, errorCode: 'IDEMPOTENCY_CONFLICT' });
+      expect(h.createMessage).toHaveBeenCalledOnce();
+      expect(sqlite.prepare("SELECT count(*) AS n FROM messages WHERE session_id='a-restored'").get()).toEqual({ n: 0 });
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
   it.each(['unregistered', 'tools', 'chat', 'revoked', 'other-bot', 'account'])(
     'refuses a group private send with %s authority without changing messages', async condition => {
       sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
