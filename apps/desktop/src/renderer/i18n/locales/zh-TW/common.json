@@ -4374,7 +4374,7 @@
             "riskPublicBody": "我們的回覆是一條公開推文，任何人都能看到。這個功能適合公開地找答案、解決問題，不適合處理私事 —— 那會有隱私暴露的風險。",
             "riskWorkdirBody": "X 任務都落在 X 連線設定裡的預設工作目錄，Agent 能讀寫其中檔案，而結論會公開回帖 —— 預設目錄指到私密倉庫時，檔案內容可能隨之公開。",
             "withdrawLabel": "想撤回",
-            "withdrawBody": "提問者對著那條回答回覆「/delete」（或「/刪除」）就能刪掉它。只刪公開那條，本地任務記錄照舊保留。",
+            "withdrawBody": "提問者在要刪除的回答下回覆「@askmycindy /delete」（或「@askmycindy /删除」），正文中必須手動帶上 @askmycindy。只刪公開回帖，本地任務記錄保留。",
             "ackTitle": "X 已關聯，先看一下用法與風險",
             "ackConfirm": "我已瞭解風險"
           },
@@ -9706,8 +9706,10 @@
       "retryTitle": "重新傳送最後一條訊息",
       "cancelTitle": "關閉錯誤提示",
       "retry": "重試",
-      "continueAfterReset": "恢復後繼續",
-      "continueAfterResetTitle": "建立一次性自動化，在用量恢復後繼續當前任務",
+      "usageLimitAutoContinueAt": "將於 {{time}} 自動繼續",
+      "usageLimitAutoContinueTitle": "用量上限重置後，如果你還沒處理，這個任務會自動繼續",
+      "usageLimitAutoContinueCancel": "取消",
+      "usageLimitAutoContinueCancelTitle": "取消自動繼續，錯誤與重試仍保留",
       "codexOrganizationUsageLimitWithReset": "目前連線的是企業 Codex 帳號，已達到用量上限，預計於 {{resetAt}} 恢復。",
       "codexOrganizationUsageLimit": "目前連線的是企業 Codex 帳號，已達到用量上限。請等待用量上限重置，或切換其他可用帳號後再重試。",
       "codexUsageLimitWithReset": "目前連線的 Codex 帳號已達到用量上限，預計於 {{resetAt}} 恢復。",
@@ -10138,6 +10140,7 @@
         "label": "已重新連線",
         "labelFailed": "重新連線未成功",
         "labelNeutral": "重新連線",
+        "labelUsageReset": "用量已恢復，已自動繼續",
         "detail": {
           "reason": "中斷原因",
           "attempt": "本次重試 {{attempt}}/{{total}}",
@@ -11485,10 +11488,6 @@
     "empty": {
       "promptHeading": "暫無自動化",
       "promptDescription": "建立一個 cron 自動化，按計劃執行你的 Prompt。"
-    },
-    "usageLimitRecovery": {
-      "name": "用量恢復後繼續任務",
-      "prompt": "從中斷的位置繼續完成當前任務。"
     },
     "template": {
       "useTemplate": "新手幫助",

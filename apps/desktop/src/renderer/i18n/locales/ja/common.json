@@ -4374,7 +4374,7 @@
             "riskPublicBody": "Cindy の返信は公開ポストで、誰でも閲覧できます。公開の場で答えを探したり問題を解決するのに向いていますが、プライベートな用件には向きません —— プライバシーが露出するおそれがあります。",
             "riskWorkdirBody": "X のタスクはすべて X 連携設定で指定した既定の作業ディレクトリで実行されます。Agent はその中のファイルを読み書きでき、結論は公開で返信されます —— 非公開リポジトリを指している場合、ファイルの内容も公開される可能性があります。",
             "withdrawLabel": "返信を取り消す",
-            "withdrawBody": "質問した本人がその返信に「/delete」と返信すると削除できます。公開された返信だけが削除され、ローカルのタスク記録は残ります。",
+            "withdrawBody": "質問した本人が削除したい回答に「@askmycindy /delete」と返信してください。本文に @askmycindy を入力する必要があります。公開された返信だけが削除され、ローカルのタスク記録は残ります。",
             "ackTitle": "X を連携しました —— 使い方と注意点",
             "ackConfirm": "リスクを理解しました"
           },
@@ -9707,8 +9707,10 @@
       "retryTitle": "最後のメッセージを再送信",
       "cancelTitle": "エラーを閉じる",
       "retry": "再試行",
-      "continueAfterReset": "リセット後に続行",
-      "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
+      "usageLimitAutoContinueAt": "{{time}} に自動で続行",
+      "usageLimitAutoContinueTitle": "使用量の上限がリセットされるまでに操作がなければ、このタスクを自動で続行します",
+      "usageLimitAutoContinueCancel": "キャンセル",
+      "usageLimitAutoContinueCancelTitle": "自動続行をキャンセル（エラーと再試行は残ります）",
       "codexOrganizationUsageLimitWithReset": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
       "codexOrganizationUsageLimit": "接続中の Codex アカウントは組織によって管理されており、利用上限に達しました。上限のリセットを待つか、別の利用可能なアカウントに切り替えてから再試行してください。",
       "codexUsageLimitWithReset": "接続中の Codex アカウントは利用上限に達しました。{{resetAt}} にリセットされる見込みです。",
@@ -10139,6 +10141,7 @@
         "label": "再接続しました",
         "labelFailed": "再接続できませんでした",
         "labelNeutral": "再接続",
+        "labelUsageReset": "使用量が回復したため自動で続行しました",
         "detail": {
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
@@ -11485,10 +11488,6 @@
     "empty": {
       "promptHeading": "自動化がまだありません",
       "promptDescription": "cron 自動化を作成して、プロンプトをスケジュール実行させましょう。"
-    },
-    "usageLimitRecovery": {
-      "name": "利用上限リセット後にタスクを続行",
-      "prompt": "中断したところから現在のタスクを続行してください。"
     },
     "template": {
       "useTemplate": "初心者ヘルプ",
