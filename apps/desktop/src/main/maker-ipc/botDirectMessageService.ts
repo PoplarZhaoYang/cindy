@@ -103,6 +103,7 @@ export interface BotDirectMessageServiceDeps {
   transport?: BotMessageTransport;
   dispatch: (params: {
     targetSessionId: string;
+    dispatcherSessionId?: string;
     message: string;
     persistedContent?: string;
     clientId?: string;
@@ -647,6 +648,10 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const senderId = trustedHeaderLabel(caller.botId, MAX_SENDER_ID_CHARS);
       const envelope = [
         `[Direct message from Cindy Bot "${senderName}" (${senderId})]`,
+        ...(groupAuthority ? [
+          `[Group source: ${trustedHeaderLabel(groupAuthority.sourceGroup?.name ?? '', MAX_SENDER_NAME_CHARS)} (${trustedHeaderLabel(groupAuthority.sourceGroup?.groupId ?? '', MAX_SENDER_ID_CHARS)}); lane: ${trustedHeaderLabel(input.callerSessionId, MAX_SENDER_ID_CHARS)}]`,
+          'Replies go to the sender teammate\'s private chat with its owner. They are not delivered to the group lane. Retain this group source when replying.',
+        ] : []),
         `Handle this in your current canonical task. If a useful answer, result, or clarification should go back, call send_to_agent with target_id="${senderId}". Do not send acknowledgement-only replies.`,
         message,
       ].join('\n\n');
@@ -807,6 +812,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         try {
           dispatched = await deps.dispatch({
             targetSessionId: targetSessionId!, message: envelope,
+            ...(groupAuthority ? { dispatcherSessionId: input.callerSessionId } : {}),
             persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${envelope}`,
             clientId: `bot-dm:${thread.id}:${deliveryId}`,
             onAccepted, onAcceptedRollback: rollbackReservation,

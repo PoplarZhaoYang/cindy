@@ -2328,7 +2328,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       };
     }
     scheduleTimeout(delegationId, plan.limits.deadlineAt);
-    const dispatchResult = await withTaskOperation(delegationId, () => attemptDispatch(delegationId, 0, isCreationPermissionCurrent));
+    // A group task is independently authorized by the post-commit check above.
+    // Its persisted permission snapshot also governs retries/restoration; do not
+    // retain the short-lived originating execution in its delivery retry closure.
+    const dispatchResult = await withTaskOperation(delegationId, () => attemptDispatch(
+      delegationId, 0, input.caller.role === 'group' ? undefined : isCreationPermissionCurrent,
+    ));
     return {
       ok: true,
       delegationId,

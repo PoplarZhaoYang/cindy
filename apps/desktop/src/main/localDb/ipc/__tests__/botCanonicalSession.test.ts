@@ -4116,6 +4116,56 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); runtime.dispose(); }
   });
 
+  it.each(['retry', 'replay', 'restart'] as const)('continues admitted group work after the originating execution ends during %s', async recovery => {
+    await seedPair(); seedGroupLane();
+    vi.useFakeTimers();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    let unavailable = true;
+    let permission: string | null = 'auto';
+    let runtime = createDelegationRuntime({ transientUnavailable: () => unavailable, readCallerPermission: () => permission });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture queued independent work' });
+      expect(task).toMatchObject({ ok: true, status: 'queued', completionDestination: 'teammate-private-chat' });
+      if (!task.ok) throw new Error(task.message);
+      if (recovery === 'replay') {
+        h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run('unaccepted-start', `bot-delegation-start:${task.delegationId}`, task.childSessionId, 'user', 'Fixture queued independent work', 1);
+      }
+      release(); permission = null; unavailable = false;
+      if (recovery === 'restart') {
+        runtime.dispose();
+        runtime = createDelegationRuntime({ readCallerPermission: () => permission });
+        await runtime.delegation.restore();
+      } else await vi.advanceTimersByTimeAsync(2_000);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'running' } });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(1);
+      expect(h.sqlite!.prepare('SELECT permission_mode FROM sessions WHERE id=?').pluck().get(task.childSessionId)).toBe('auto');
+      expect(await runtime.delegation.getSessionTask('group-lane', task.delegationId)).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      await runtime.runPendingTurns();
+      expect(runtime.dispatch.mock.calls.some(([params]) => params.targetSessionId === 'session-1')).toBe(true);
+    } finally { release(); runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('rejects group work revoked after persistence but before independent admission', async () => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const originalTx = h.tx!;
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'bots.createDelegation') revoked = true;
+      return result;
+    };
+    const runtime = createDelegationRuntime();
+    try {
+      expect(await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Must not be admitted' }))
+        .toMatchObject({ ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE' });
+      expect(runtime.started).toEqual([]);
+      expect(h.sqlite!.prepare('SELECT status FROM bot_delegations').pluck().get()).toBe('failed');
+    } finally { h.tx = originalTx; release(); runtime.dispose(); }
+  });
+
   it.each(['none', 'chat', 'tools', 'revoked', 'wrong-bot'])(
     'does not create an independent task for a group with %s authority', async mode => {
       await seedPair(); seedGroupLane();

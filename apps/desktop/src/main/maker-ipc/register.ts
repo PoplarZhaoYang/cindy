@@ -10431,6 +10431,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     dispatch: ({
       targetSessionId,
+      dispatcherSessionId,
       message,
       persistedContent,
       clientId,
@@ -10439,6 +10440,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }) =>
       dispatchBotSessionMessage({
         targetSessionId,
+        dispatcherSessionId,
         message,
         persistedContent,
         clientId,

@@ -152,6 +152,20 @@ describe('botDirectMessageService', () => {
       expect(await service.listAgents('a-group')).toMatchObject({ ok: true, agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) });
       expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Bounded peer question' })).toMatchObject({ ok: true, targetSessionId: 'b-main' });
       expect(sqlite.prepare('SELECT sender_session_id FROM bot_direct_messages').get()).toEqual({ sender_session_id: 'a-group' });
+      expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({
+        dispatcherSessionId: 'a-group',
+        message: expect.stringContaining('[Group source: Design (group-1); lane: a-group]'),
+        persistedContent: expect.stringContaining('Replies go to the sender teammate'),
+      }));
+      release();
+      dispatch.mockImplementationOnce(async params => {
+        await params.onAccepted?.();
+        return { ok: true, targetSessionId: params.targetSessionId, wakeKind: 'resumed' };
+      });
+      expect(await service.messageAgent({ callerSessionId: 'b-main', targetBotId: 'bot-a', message: 'Reply about Design (group-1)' }))
+        .toMatchObject({ ok: true, targetSessionId: 'a-main' });
+      expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ targetSessionId: 'a-main' }));
+      expect(dispatch.mock.calls.at(-1)?.[0]).not.toHaveProperty('dispatcherSessionId');
     } finally { release(); }
   });
 
