@@ -519,7 +519,8 @@ export interface TurnEndPayload {
   attachments?: TaskAttachment[];
   /**
    * 客户端终稿发布结果(HOOK_FEATURE_TELEGRAM_FINAL_OPS)。缺席 = 客户端没发布过终稿,
-   * 服务端照旧渲染。complete=true 时本帧可省略 attachments(已由 msg.op media 发布)。
+   * 服务端照旧渲染。只适用于不带附件的轮次: 带附件时 desktop 不发布终稿、不带本字段,
+   * 附件照常放在 attachments 里由服务端发送(服务端对带附件的 turn.end 也不认本字段)。
    */
   clientFinal?: TurnEndClientFinal;
 }

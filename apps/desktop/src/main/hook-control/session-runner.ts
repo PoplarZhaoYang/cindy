@@ -810,7 +810,9 @@ export function createMakerHookSessionRunner(deps: {
       // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
       // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
       if (req.isNew) {
-        if (sessionProviderId) setSessionProvider(session.id, sessionProviderId);
+        if (sessionProviderId && accountStillCurrent()) {
+          setSessionProvider(session.id, sessionProviderId);
+        }
       } else {
         hydrateSessionProvider(session.id, rowProviderId);
       }
@@ -939,13 +941,14 @@ export function createMakerHookSessionRunner(deps: {
         // 来源落库也在广播前: DesktopSessionStorage.create 不写 provider_id,
         // 不补的话 renderer 重拉 / 冷 resume 的 hydrate funnel 读到的来源恒空
         // (issue #854)。失败仅 warn(helper 内部吞错), 运行时路由不受影响。
-        if (sessionProviderId) {
+        // 每个 await 之后都可能换了账号: 每次补写与广播前就地复核, 账号变了就停下。
+        if (sessionProviderId && accountStillCurrent()) {
           await setSessionProviderIdInDb(session.id, sessionProviderId);
         }
-        if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+        if ((req.source?.im === 'telegram' || req.source?.im === 'x') && accountStillCurrent()) {
           await setSessionSourceInDb(session.id, req.source.im);
         }
-        broadcastSessionCreated(session.id);
+        if (accountStillCurrent()) broadcastSessionCreated(session.id);
       }
       // worktree 场景补写 sessions.worktree_path(同 send_to_session 做法):
       // prepareHandoffWorktree 时 session 行不存在, worktreeStore.set 的 DB
