@@ -1244,10 +1244,13 @@ export function createMakerHookSessionRunner(deps: {
         // 派发(下面的 catch 统一收尾并回失败), 不让迟到的 send 在 teardown 之后重新启动
         // 旧账号的请求。
         assertAccount?.();
-        // Same projection as personal IM: the server-stamped reply/thread entry and
-        // the attachments actually delivered, never fields parsed from the prompt.
+        // Same projection as personal IM: the server-stamped reply target (captured before
+        // display bounding) and the attachments actually delivered, never parsed from the prompt.
         const autoReviewReferences = trustedChannelOrigin
-          ? hookAutoReviewReferences(req.source, { images: imageRefs.length, files: fileRefs.length })
+          ? hookAutoReviewReferences(req.autoReviewReplyTarget, {
+              images: imageRefs.length,
+              files: fileRefs.length,
+            })
           : undefined;
         const sendResult = await session.send(outgoingMessage, {
           origin,

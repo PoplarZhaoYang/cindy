@@ -178,12 +178,18 @@ export function createAutoReviewIntentProjection() {
   function normalizeAutoReviewUserIntent(
     intent: AutoReviewUserIntent,
   ): AutoReviewUserIntent {
-    return typeof intent === "string"
-      ? compactCurrentUserIntent(intent)
-      : withAutoReviewUserReferences(
-          normalizeAuthoredUserIntent(intent),
-          intent.currentUserReferences,
-        );
+    if (typeof intent === "string") return compactCurrentUserIntent(intent);
+    const { currentUserReferences, ...authored } = intent;
+    if (currentUserReferences === undefined) return normalizeAuthoredUserIntent(authored);
+    // A wrapper that only carries references must not count against the authored budget.
+    const base =
+      authored.earlierUserMessages.length === 0 && !authored.historyOmitted
+        ? authored.currentUserMessage
+        : authored;
+    return withAutoReviewUserReferences(
+      normalizeAuthoredUserIntent(base),
+      currentUserReferences,
+    );
   }
 
   function normalizeAuthoredUserIntent(

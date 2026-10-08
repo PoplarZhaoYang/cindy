@@ -817,6 +817,18 @@ describe('Host-stamped references the current message points at', () => {
     expect(normalizeAutoReviewUserIntent(intent)).toEqual(intent);
   });
 
+  it('does not let the reference wrapper push a near-budget message over its limit', () => {
+    for (const latest of ['x'.repeat(2_000), '"'.repeat(1_999)]) {
+      const intent = appendAutoReviewUserIntent('', latest, withRefs(latest, references));
+      expect(intent).toEqual({ earlierUserMessages: [], currentUserMessage: latest, currentUserReferences: references });
+      expect(normalizeAutoReviewUserIntent(intent)).toEqual(intent);
+    }
+    // Over budget is still omitted exactly as without references.
+    const over = appendAutoReviewUserIntent('', 'y'.repeat(2_001), withRefs('y'.repeat(2_001), references));
+    expect(over).toMatchObject({ currentUserMessage: expect.stringContaining('cannot establish authorization') });
+    expect(over).not.toHaveProperty('historyOmitted');
+  });
+
   it('keeps the projection self-contained for the database worker', () => {
     // WorkerThreadTransport evaluates the factory's source text in a worker.
     const source = createAutoReviewIntentProjection.toString();

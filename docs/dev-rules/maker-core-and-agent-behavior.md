@@ -376,7 +376,8 @@ sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计�
 同一身份用户补充的指代线索；动作参数与助手解释都不是用户授权。相关行为回归见
 `agents/shared/auto-review-decision.test.ts` 与 `scripts/eval-auto-approval.mts`。
 IM 与官方 Hook 消息另带「用户本条明确指向的内容」：被回复／引用的那条消息与本条附件数。
-它由宿主从渠道 adapter 的 reply 数据或 Hook `source.threadContext` 盖章，随 Main 的
+它由宿主从渠道 adapter 的 reply 数据，或 Hook dispatcher 在展示截短前从原始 `source.threadContext`
+取出的回复目标（排除当前请求）盖章，随 Main 的
 `MAIN_OWNED_SEND_CONTEXT.autoReviewReferences` 进入 `appendAutoReviewUserIntent`，只挂在当前消息上
 （下一条消息即丢弃），经 `projectAutoReviewUserReferences` 独立限长，不占用户原话预算；wire 同名字段一律不收。
 审阅器把它放在 `<review_input>` 之后的独立 `<referenced_content>` 低信任块中，只用于判断指代与只读查询的

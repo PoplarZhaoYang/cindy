@@ -978,6 +978,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
         userText: '这啥情况',
         threadContext: [{ author: '群友', text: '看这个新闻' }],
       },
+      autoReviewReplyTarget: { author: '群友', text: '看这个新闻' },
       attachments: [{ name: 'news.png', mimeType: 'image/png', dataBase64: Buffer.from('png').toString('base64') }],
     } as Partial<Parameters<ReturnType<typeof createMakerHookSessionRunner>['run']>[0]>));
     expect(outcome.status).toBe('ok');
@@ -992,7 +993,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     });
   });
 
-  it('Slack 线程只取最近一条作为被回复消息，不把整段话题历史当成用户指向的内容', async () => {
+  it('审阅引用只用 dispatcher 给的回复目标，不从展示用的话题历史推断', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(baseReq({
       source: {
@@ -1006,9 +1007,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     }));
     expect(outcome.status).toBe('ok');
     const session = await fakeMaker.createSession.mock.results[0].value;
-    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences).toEqual({
-      quotedMessages: [{ author: 'alice', text: 'please check this link' }],
-    });
+    expect(session.send.mock.calls[0][1]?.[MAIN_OWNED_SEND_CONTEXT]).not.toHaveProperty('autoReviewReferences');
   });
 
   it('旧服务端缺少 source.userText 时才回退 prompt', async () => {

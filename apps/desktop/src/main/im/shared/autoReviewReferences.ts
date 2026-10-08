@@ -1,10 +1,10 @@
 import type { IMMessageEvent } from '@cindy/im';
 import {
   projectAutoReviewUserReferences,
+  type AutoReviewQuotedMessage,
   type AutoReviewUserReferences,
 } from '@cindy/maker-shared/auto-review-intent';
-
-import type { ImMessageSource } from '../../../shared/imMessageSource';
+import type { TaskSource } from '@cindy/slack-hook-protocol';
 
 /**
  * Auto-review references for a personal IM message: only what the user pointed at
@@ -32,22 +32,37 @@ export function imAutoReviewReferences(
 }
 
 /**
- * Auto-review references for an official Hook task, from the normalized server
- * TaskSource and the attachments actually delivered. Telegram sends exactly the
- * replied-to message as threadContext; X and Slack send a chain whose last entry is
- * the message being answered, so only that nearest entry counts as pointed at.
- * Servers merge quoted media into the task attachments without a split count.
+ * The message an official Hook task answers, read from the server's raw TaskSource
+ * before display bounding (`normalizeTaskSource` keeps only the oldest entries).
+ * Telegram sends exactly the replied-to message; X and Slack send a chain whose last
+ * entry other than the current request is the message being answered.
+ */
+export function hookReplyTarget(
+  source: Pick<TaskSource, 'threadContext' | 'triggerMessageId'> | undefined,
+): AutoReviewQuotedMessage | undefined {
+  const trigger = source?.triggerMessageId;
+  const nearest = source?.threadContext
+    ?.filter((entry) => !trigger || entry.messageId !== trigger)
+    .at(-1);
+  return nearest
+    ? projectAutoReviewUserReferences({
+        quotedMessages: [{ author: nearest.author, text: nearest.text, isBot: nearest.isBot }],
+      })?.quotedMessages?.[0]
+    : undefined;
+}
+
+/**
+ * Auto-review references for an official Hook task: the reply target captured by the
+ * dispatcher and the attachments actually delivered. Servers merge quoted media into
+ * the task attachments without a split count.
  */
 export function hookAutoReviewReferences(
-  source: Pick<ImMessageSource, 'threadContext'> | undefined,
+  replyTarget: AutoReviewQuotedMessage | undefined,
   delivered: { images: number; files: number },
 ): AutoReviewUserReferences | undefined {
-  const nearest = source?.threadContext?.at(-1);
   return projectAutoReviewUserReferences({
     attachments: delivered,
-    quotedMessages: nearest
-      ? [{ author: nearest.author, text: nearest.text, isBot: nearest.isBot }]
-      : [],
+    quotedMessages: replyTarget ? [replyTarget] : [],
   });
 }
 
