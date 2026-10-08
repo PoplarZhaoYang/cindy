@@ -25,6 +25,7 @@ import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteR
 import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind } from '@cindy/maker-core';
 import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import { registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
 import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
 import type { McpProvider } from '@cindy/maker-core';
@@ -4076,6 +4077,89 @@ describe('Bot Session task end-to-end runtime', () => {
       expectedProfileVersion: 1,
     });
   }
+
+  function seedGroupLane(id = 'group-lane', route = 'group:fixture:access:owner:2') {
+    h.sqlite!.prepare(`INSERT INTO sessions (id, source, status, working_dir, model, agent_kind, provider_id, permission_mode, created_at, updated_at)
+      SELECT ?, source, status, working_dir, model, agent_kind, provider_id, permission_mode, created_at, updated_at FROM sessions WHERE id='session-1'`).run(id);
+    h.sqlite!.prepare(`INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, route_key, created_at)
+      VALUES (?, 'bot-a', ?, 1, 'group', ?, 1)`).run(`${id}-link`, id, route);
+  }
+
+  it('starts owner-authorized group work without impersonation and returns cards/results to the owner private chat', async () => {
+    await seedPair(); seedGroupLane();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const readCallerPermission = vi.fn(() => ({ mode: 'auto' as const, generation: 2 }));
+    const runtime = createDelegationRuntime({ readCallerPermission });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture-only development task' });
+      expect(result).toMatchObject({ ok: true, completionDestination: 'teammate-private-chat' });
+      if (!result.ok) throw new Error(result.message);
+      expect(readCallerPermission).toHaveBeenCalledWith('group-lane');
+      const row = h.sqlite!.prepare('SELECT parent_session_id, permission_snapshot_json FROM bot_delegations WHERE id=?').get(result.delegationId) as { parent_session_id: string; permission_snapshot_json: string };
+      expect(row.parent_session_id).toBe('session-1');
+      expect(JSON.parse(row.permission_snapshot_json)).toMatchObject({ groupOriginRoute: 'group:fixture:access:owner:2', groupOriginSessionId: 'group-lane', permission: { mode: 'auto' } });
+      expect(runtime.dispatch).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: result.childSessionId, dispatcherSessionId: 'group-lane' }));
+      expect(h.sqlite!.prepare('SELECT role FROM bot_session_links WHERE session_id=?').get('group-lane')).toEqual({ role: 'group' });
+      expect(h.sqlite!.prepare('SELECT session_id FROM messages WHERE client_id=?').get(`bot-delegation-request:${result.delegationId}`)).toEqual({ session_id: 'session-1' });
+      await runtime.runPendingTurns();
+      expect(runtime.dispatch.mock.calls.some(([params]) => params.targetSessionId === 'session-1')).toBe(true);
+      expect(await runtime.delegation.getSessionTask('group-lane', result.delegationId)).toMatchObject({ ok: true });
+      seedGroupLane('other-group', 'group:other:access:owner:2');
+      const releaseOther = registerGroupToolAuthority('other-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+      try {
+        expect(await runtime.delegation.getSessionTask('other-group', result.delegationId)).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+      } finally { releaseOther(); }
+      release();
+      expect(await runtime.delegation.getSessionTask('group-lane', result.delegationId)).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      // The owner retains control of work already started in their private chat.
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId)).toMatchObject({ ok: true });
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each(['none', 'chat', 'tools', 'revoked', 'wrong-bot'])(
+    'does not create an independent task for a group with %s authority', async mode => {
+      await seedPair(); seedGroupLane();
+      const release = mode === 'none' ? () => {} : registerGroupToolAuthority('group-lane', {
+        botId: mode === 'wrong-bot' ? 'another-bot' : 'bot-a', mode: mode === 'chat' || mode === 'tools' ? mode : 'owner',
+        isCurrent: () => mode !== 'revoked', validate: async () => {},
+      });
+      const runtime = createDelegationRuntime();
+      try {
+        expect(await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Must not start' })).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+        expect(runtime.started).toEqual([]);
+        expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM bot_delegations').get()).toEqual({ count: 0 });
+      } finally { release(); runtime.dispose(); }
+    });
+
+  it('rejects revoked group authority after asynchronous worktree preparation, before any task exists', async () => {
+    await seedPair(); seedGroupLane();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const discardUnusedWorktree = vi.fn(async () => {});
+    const runtime = createDelegationRuntime({ discardUnusedWorktree, prepareWorktree: async () => {
+      release();
+      return { ok: true, sessionId: 'prepared-fixture', workingDir: h.userDataDir };
+    } });
+    try {
+      expect(await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Must not start after revoke', workingDir: h.userDataDir, useWorktree: true }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(runtime.started).toEqual([]);
+      expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM bot_delegations').get()).toEqual({ count: 0 });
+      expect(discardUnusedWorktree).toHaveBeenCalledWith('prepared-fixture');
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it('lets a tools-authorized group inspect its own profile and skills without permitting profile mutation', async () => {
+    await seedPair(); seedGroupLane();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'tools', isCurrent: () => true, validate: async () => {} });
+    const service = createBotCapabilityService(capabilityDeps);
+    try {
+      expect(await service.inspect({ callerSessionId: 'group-lane' })).toMatchObject({ ok: true, state: { profile: { id: 'bot-a' }, session: { id: 'group-lane' } } });
+      expect(await listBotSkillsForSession({ callerSessionId: 'group-lane' })).toMatchObject({ ok: true });
+      expect(await service.updateProfile({ callerSessionId: 'group-lane', expectedVersion: 1, name: 'Unapproved rename' })).toMatchObject({ ok: false });
+      release();
+      expect(await service.inspect({ callerSessionId: 'group-lane' })).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+    } finally { release(); }
+  });
 
   it.each(['delete-first', 'message-first'])('serializes shared-history writes and deletion (%s)', async (order) => {
     await seedPair();

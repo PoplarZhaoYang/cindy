@@ -41,6 +41,7 @@ vi.mock('ws', async () => {
   } };
 });
 import { withChatServer } from '../chatServer.js';
+import { authorizeGroupTool } from '../botGroupToolAuthorization.js';
 import type { BotGroupChatService, BotGroupChatServiceDeps } from '../botGroupChatService.js';
 
 describe('Chat Server production connection', () => {
@@ -121,6 +122,36 @@ describe('Chat Server result delivery and refresh', () => {
   }
   const terminal = { sessionId: 'lane', activeInputClientId: null, outcome: 'done' as const, resultText: 'Finished reply' };
   const deliveries = () => fixture.handle.mock.calls.filter(([, , body]) => body?.action === 'complete');
+
+  it.each(['revision', 'requester', 'companion-owner', 'left', 'lease', 'account', 'restart'])(
+    'checks the server execution at the tool boundary and rejects %s changes', async change => {
+      let changed = false;
+      let accountCurrent = true;
+      deps.captureOwnerScope = () => ({}) as ReturnType<NonNullable<typeof deps.captureOwnerScope>>;
+      deps.isOwnerScopeCurrent = () => accountCurrent;
+      service.dispose();
+      service = withChatServer({ listGroups: async () => ({ ok: true, groups: [] }), dispose: vi.fn() } as unknown as BotGroupChatService, deps);
+      fixture.handle.mockImplementation((route, method, body) => {
+        if (route === '/executions/claim') {
+          const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' };
+          claimed = true; return { body: { execution: next } };
+        }
+        if (route.endsWith('/members')) return { body: [
+          { id: botId, kind: 'bot', ownerActorId: changed && change === 'companion-owner' ? 'other-owner' : selfId,
+            state: changed && change === 'left' ? 'left' : 'joined', accessRevision: changed && change === 'revision' ? 2 : 1, guestAccess: 'tools' },
+          { id: selfId, kind: 'human', state: 'joined', role: 'owner', ownerActorId: changed && change === 'requester' ? 'other-owner' : selfId },
+        ] };
+        if (changed && change === 'lease' && body?.action === 'heartbeat') return { status: 409, body: { error: { code: 'STALE_EXECUTION' } } };
+        return response(route);
+      });
+      await start();
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).resolves.toBeDefined();
+      expect(fixture.handle.mock.calls.some(([, , body]) => body?.action === 'heartbeat')).toBe(true);
+      changed = true;
+      if (change === 'account') accountCurrent = false;
+      if (change === 'restart') service.dispose();
+      await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).rejects.toMatchObject({ code: 'GROUP_AUTHORIZATION_REQUIRED' });
+    });
 
   it('keeps server plan steps in a grant-specific chat-only lane without opening a project', async () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];

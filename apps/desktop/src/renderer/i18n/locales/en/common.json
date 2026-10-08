@@ -14794,5 +14794,14 @@
     "detail": "This sets the plugin’s AI permission to Allow edits for future tasks too. A separate working directory is not a system sandbox; commands still follow Cindy permission checks. You can switch back to read-only in the plugin’s AI settings.",
     "allow": "Allow and continue",
     "cancel": "Not now"
+  },
+  "groupTools": {
+    "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",
+    "localPeersOnly": "Group messages can only target teammates on this device and account.",
+    "ownerChanged": "The account changed. Please try again.",
+    "invalidMessage": "The message or retry identifier is invalid.",
+    "privateUnavailable": "This teammate’s private chat is unavailable. Please try again later.",
+    "idempotencyConflict": "This retry identifier was already used for a different message.",
+    "privateUnconfirmed": "Private message delivery is unconfirmed. Retry with the same identifier."
   }
 }
