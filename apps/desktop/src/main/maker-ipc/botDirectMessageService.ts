@@ -3,8 +3,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { withBotProfileLocks } from './botProfileLock.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { t } from '../i18n.js';
+import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 
-import { and, asc, desc, eq, inArray, isNull, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current.js';
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -117,6 +118,7 @@ export interface BotDirectMessageServiceDeps {
   ) => Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
   /** True only when the durable input queue already owns this delivery. */
   hasQueuedDelivery?: (sessionId: string, clientId: string) => Promise<boolean>;
+  discardQueuedDelivery?: (sessionId: string, clientId: string, assertOwner: () => void) => Promise<void>;
   captureOwnerScope?: () => DataOwnerBroadcastScope;
   isOwnerScopeCurrent?: (scope: DataOwnerBroadcastScope) => boolean;
   onChanged?: (payload: BotDirectMessageChangedPayload, ownerScope?: DataOwnerBroadcastScope) => void;
@@ -302,6 +304,29 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     if (rejected?.status === 'rejected') throw rejected.reason;
   };
 
+  // senderSessionId and the durable Bot link retain the source identity across
+  // restarts. A missing local link cannot prove canonical authority either.
+  const canRestoreDelivery = async (db: ReturnType<typeof getDbClient>['drizzle'], row: typeof botDirectMessages.$inferSelect): Promise<boolean> => {
+    if (row.deliveryStatus === 'failed') return false;
+    if (!row.senderSessionId) return !!parseBotPeerAddress(row.senderBotId); // Remote peer, not a deleted local source.
+    const [link] = await db.select({ role: botSessionLinks.role }).from(botSessionLinks)
+      .where(and(eq(botSessionLinks.sessionId, row.senderSessionId), eq(botSessionLinks.botId, row.senderBotId))).limit(1);
+    return link?.role === 'canonical';
+  };
+
+  const assertRestoredQueuedDelivery = async (sessionId: string, clientId: string): Promise<void> => {
+    if (!clientId.startsWith('bot-dm:')) return;
+    const owner = deps.captureOwnerScope?.();
+    const db = getDbClient().drizzle;
+    const [row] = await db.select().from(botDirectMessages)
+      .where(and(eq(botDirectMessages.recipientSessionId, sessionId),
+        eq(sql`'bot-dm:' || ${botDirectMessages.threadId} || ':' || ${botDirectMessages.id}`, clientId))).limit(1);
+    const restorable = row && await canRestoreDelivery(db, row);
+    if (!restorable || (owner !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(owner))) {
+      throw new AcceptedCallbackDispatchCancelled(new GroupToolAuthorizationError().message);
+    }
+  };
+
   /** Reconcile receipts after restart without replaying uncertain model/tool work. */
   const restore = async (): Promise<void> => {
     const owner = deps.captureOwnerScope?.();
@@ -326,10 +351,15 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         // it based on the absence of a receipt in this device's local database.
         if (parseBotPeerAddress(row.recipientBotId)) return;
         const clientId = `bot-dm:${row.threadId}:${row.id}`;
-        const [receipt] = row.recipientSessionId ? await db.select({ id: messages.id }).from(messages)
+        const restorable = await canRestoreDelivery(db, row);
+        if (!restorable && row.recipientSessionId) {
+          assertOwner();
+          await deps.discardQueuedDelivery?.(row.recipientSessionId, clientId, assertOwner);
+        }
+        const [receipt] = restorable && row.recipientSessionId ? await db.select({ id: messages.id }).from(messages)
           .where(and(eq(messages.sessionId, row.recipientSessionId), eq(messages.clientId, clientId), isNull(messages.rewindAt)))
           .limit(1) : [];
-        const queued = !receipt && row.recipientSessionId && deps.hasQueuedDelivery
+        const queued = restorable && !receipt && row.recipientSessionId && deps.hasQueuedDelivery
           ? await deps.hasQueuedDelivery(row.recipientSessionId, clientId) : false;
         assertOwner();
         if (receipt || queued) {
@@ -344,7 +374,8 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           // row, remove partial projections, and return its budget to the pair.
           await db.delete(messages).where(inArray(messages.clientId,
             [row.senderSessionId, row.recipientSessionId].filter((id): id is string => !!id)
-              .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id))));
+              .map((id) => BOT_DIRECT_MESSAGE_CLIENT_ID.timelineAnchor(row.threadId, row.id, id))
+              .concat(restorable ? [] : [clientId])));
         }
         const [thread] = await db.select().from(botDirectMessageThreads)
           .where(eq(botDirectMessageThreads.id, row.threadId)).limit(1);
@@ -507,6 +538,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       // Admission above may precede a queued delete/pause. Re-read after obtaining
       // both lifecycle locks, before creating any shared thread or message row.
       const currentCaller = remoteSender ? caller : await loadCaller(input.callerSessionId);
+      await groupAuthority?.refresh();
       if (!currentCaller || currentCaller.botId !== caller.botId || currentCaller.sessionSource !== 'bot'
         || currentCaller.sessionStatus !== 'active' || currentCaller.botStatus !== 'active'
         || currentCaller.role !== caller.role || currentCaller.linkArchivedAt !== null) {
@@ -549,6 +581,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           ),
         )
         .limit(1);
+      await groupAuthority?.refresh();
       let thread: typeof botDirectMessageThreads.$inferSelect | undefined = activeThreads[0];
 
       if (thread && thread.expiresAt <= sentAt) {
@@ -576,6 +609,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           )
           .orderBy(desc(botDirectMessageThreads.updatedAt))
           .limit(1);
+        await groupAuthority?.refresh();
         if (
           latest?.closeReason === 'message-limit' &&
           latest.blockedUntil !== null &&
@@ -607,6 +641,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           .where(eq(botDirectMessageThreads.id, threadId))
           .limit(1);
       }
+      await groupAuthority?.refresh();
       if (!thread) return failed('INTERNAL', '伙伴对话未能建立');
 
       // A previous process may have stopped between reserving a delivery and
@@ -619,6 +654,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         })
         .from(botDirectMessages)
         .where(eq(botDirectMessages.threadId, thread.id));
+      await groupAuthority?.refresh();
       const reservedCount = reservations.filter((row) => row.deliveryStatus !== 'failed').length;
       if (reservedCount !== thread.messageCount) {
         await db
@@ -627,6 +663,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
           .where(eq(botDirectMessageThreads.id, thread.id));
         thread = { ...thread, messageCount: reservedCount };
       }
+      await groupAuthority?.refresh();
       if (thread.messageCount >= thread.maxMessages - (bridgeSessionId ? 1 : 0)) {
         return failed('CONVERSATION_LIMIT_REACHED', '这轮伙伴对话已达到往来上限，请先回到各自主任务整理结果。');
       }
@@ -642,6 +679,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         )
         .orderBy(desc(botDirectMessages.sequence))
         .limit(2);
+      await groupAuthority?.refresh();
       if (recent.length === 2 && recent.every((row) => row.senderBotId === caller.botId)) {
         return failed('WAIT_FOR_PEER', '已连续发出 2 条消息，请等待对方回应后再继续。');
       }
@@ -680,6 +718,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         createdAt: sentAt,
       });
       try {
+        await groupAuthority?.refresh();
         await db
           .update(botDirectMessageThreads)
           .set({
@@ -1145,7 +1184,7 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
         if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
         throw error;
       }
-    }, checkMessage, getThread, restore };
+    }, checkMessage, getThread, restore, assertRestoredQueuedDelivery };
 }
 
 export type BotDirectMessageService = ReturnType<typeof createBotDirectMessageService>;

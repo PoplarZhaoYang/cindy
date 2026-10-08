@@ -10431,6 +10431,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   botDirectMessageServiceHolder = createBotDirectMessageService({
     transport: createBotMessageTransport({ selfDeviceId: getSelfDeviceId,
       listDevices: () => handleListDevices(deviceDirectoryDeps()), invoke: invokeBotPeer }),
+    discardQueuedDelivery: async (sessionId, clientId, assertOwner) => {
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      assertOwner();
+      inputCoordinator.remove(sessionId, clientId);
+    },
     hasQueuedDelivery: async (sessionId, clientId) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
       return inputCoordinator.hasKnownClientId(sessionId, clientId);
@@ -16101,6 +16106,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
     onAcceptedQueuedMessage: async (sessionId, item, restoredFromSnapshot): Promise<void> => {
+      if (restoredFromSnapshot && item.clientId.startsWith('bot-dm:')) {
+        if (!botDirectMessageServiceHolder) throw new AcceptedCallbackDispatchCancelled('Bot message recovery unavailable');
+        await botDirectMessageServiceHolder.assertRestoredQueuedDelivery(sessionId, item.clientId);
+      }
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
       schedulerQueuedPromptDiscardWatchers.delete(item.clientId);
       schedulerQueuedPromptPreparations.delete(item.clientId);

@@ -21,6 +21,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 }));
 
 import { createBotDirectMessageService } from '../botDirectMessageService.js';
+import { botDirectMessages, botDirectMessageThreads } from '../../localDb/schema.js';
 import { createBotMessageTransport } from '../botMessageTransport.js';
 import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botGroupToolAuthorization.js';
 import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
@@ -244,6 +245,94 @@ describe('botDirectMessageService', () => {
         expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').pluck().get()).toBe(0);
       }
     } finally { release(); }
+  });
+
+  it.each(['group', 'group-receipt', 'missing-link', 'deleted-source', 'canonical'] as const)('checks durable sender provenance before restored DM dispatch: %s', async identity => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const enqueue = vi.fn(async (_params: Parameters<Parameters<typeof createBotDirectMessageService>[0]['dispatch']>[0]) =>
+      ({ ok: true as const, targetSessionId: 'b-main', wakeKind: 'queued' as const }));
+    const before = createBotDirectMessageService({ dispatch: enqueue });
+    try {
+      await before.messageAgent({ callerSessionId: identity === 'canonical' ? 'a-main' : 'a-group', targetBotId: 'bot-b', message: 'Persisted queue fixture' });
+      release();
+      if (identity === 'missing-link') sqlite.exec("DELETE FROM bot_session_links WHERE session_id='a-group'");
+      if (identity === 'deleted-source') sqlite.exec("UPDATE bot_direct_messages SET sender_session_id=NULL; DELETE FROM bot_session_links WHERE session_id='a-group'");
+      // Only the durable queue item survives, not its accepted/rollback closures.
+      const item = JSON.parse(JSON.stringify({ clientId: enqueue.mock.calls[0][0].clientId }));
+      if (identity === 'group-receipt') sqlite.prepare('INSERT INTO messages (id, session_id, client_id) VALUES (?, ?, ?)')
+        .run('unaccepted-group-receipt', 'b-main', item.clientId);
+      const discard = vi.fn(async () => {});
+      const after = createBotDirectMessageService({ dispatch, hasQueuedDelivery: async () => true, discardQueuedDelivery: discard });
+      const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+      const start = source.indexOf('    onAcceptedQueuedMessage: async (');
+      const end = source.indexOf('    onUserMessagePersisting:', start);
+      const hookSource = ts.transpileModule(`return ({${source.slice(start, end)}}).onAcceptedQueuedMessage;`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+      }).outputText;
+      const acceptedHook = new Function('botDirectMessageServiceHolder', 'AcceptedCallbackDispatchCancelled',
+        'schedulerQueuedPromptDiscardWatchers', 'schedulerQueuedPromptPreparations', 'orcaInterAgentDispatcher',
+        'botDelegationServiceHolder', 'maker', 'pluginTaskServiceForCurrentOwner', hookSource)(after,
+        AcceptedCallbackDispatchCancelled, new Map(), new Map(), { runQueuedOrcaInterAgentAcceptedCallback: async () => {} },
+        null, { getSession: () => null }, null);
+      const vendor = vi.fn(async () => {});
+      const drain = async () => { await acceptedHook('b-main', item, true); await vendor(); };
+      if (identity === 'canonical') {
+        await after.restore(); await drain();
+        expect(vendor).toHaveBeenCalledOnce(); expect(discard).not.toHaveBeenCalled();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('delivered');
+      } else {
+        // Fence works even if queue drain wins the startup race with DM restore.
+        await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        await after.restore(); await after.restore();
+        await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(vendor).not.toHaveBeenCalled(); expect(h.createMessage).not.toHaveBeenCalled();
+        expect(discard).toHaveBeenCalledWith('b-main', item.clientId, expect.any(Function));
+        expect(sqlite.prepare('SELECT id FROM messages WHERE client_id=?').get(item.clientId)).toBeUndefined();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('failed');
+        expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').pluck().get()).toBe(0);
+      }
+    } finally { release(); }
+  });
+
+  it.each(['expiry', 'new-thread', 'cooldown', 'reservations', 'recent'] as const)('rejects group peer thread changes/state after revocation during %s read', async boundary => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    let revoked = false;
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    let id = 0;
+    const service = createBotDirectMessageService({ dispatch, now: () => 1000, createId: () => `read-${++id}` });
+    if (boundary !== 'new-thread') {
+      await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Earlier message' });
+      if (boundary === 'recent') await service.messageAgent({ callerSessionId: 'a-main', targetBotId: 'bot-b', message: 'Second message' });
+      if (boundary === 'expiry') sqlite.exec('UPDATE bot_direct_message_threads SET expires_at=1');
+      if (boundary === 'cooldown') sqlite.exec("UPDATE bot_direct_message_threads SET status='closed', close_reason='message-limit', blocked_until=99999");
+      if (boundary === 'reservations') sqlite.exec('UPDATE bot_direct_message_threads SET message_count=9');
+    }
+    const threads = sqlite.prepare('SELECT * FROM bot_direct_message_threads').all();
+    const deliveries = sqlite.prepare('SELECT * FROM bot_direct_messages').all();
+    dispatch.mockClear();
+    let threadReads = 0;
+    const select = h.db!.select.bind(h.db!);
+    const spy = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+      const query = select(fields); const from = query.from.bind(query);
+      vi.spyOn(query, 'from').mockImplementation(table => {
+        const result = from(table);
+        if (table === botDirectMessageThreads) threadReads++;
+        const hit = table === botDirectMessageThreads && threadReads === (boundary === 'expiry' ? 1 : 2)
+          && ['expiry', 'new-thread', 'cooldown'].includes(boundary)
+          || table === botDirectMessages && (boundary === 'reservations' ? !!fields?.deliveryStatus : boundary === 'recent' && !!fields?.senderBotId);
+        if (hit) queueMicrotask(() => { revoked = true; });
+        return result;
+      }); return query;
+    });
+    try {
+      expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Must not reserve' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(revoked).toBe(true); expect(dispatch).not.toHaveBeenCalled();
+      expect(sqlite.prepare('SELECT * FROM bot_direct_message_threads').all()).toEqual(threads);
+      expect(sqlite.prepare('SELECT * FROM bot_direct_messages').all()).toEqual(deliveries);
+    } finally { spy.mockRestore(); release(); }
   });
 
   it.each(['list', 'failed-send'] as const)('revalidates group authority after the private roster read for %s', async operation => {
