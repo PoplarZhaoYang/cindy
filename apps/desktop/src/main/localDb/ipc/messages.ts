@@ -1578,8 +1578,8 @@ export async function createMessage(
      * final "is this still current?" check is actually meaningful.
      */
     shouldBroadcast?: () => boolean;
-    /** Host-only admission guard, after connection-local staging and before publication.
-     * Failed guards remove only this call's hidden row, before any side effects. */
+    /** Host-only admission guard, checked before and after the publication transaction.
+     * Must be repeatable. A failed final check rolls back this exact row before delivery hooks. */
     beforePublish?: () => Promise<void>;
     /**
      * Optional clear-boundary compare-and-set for optimistic user sends.  The
@@ -1661,6 +1661,14 @@ export async function createMessage(
           || committed.toolUseId !== insertArgs.toolUseId || committed.agentMeta !== insertArgs.agentMeta
           || committed.agentKind !== insertArgs.agentKind || committed.createdAt !== insertArgs.createdAt
           || committed.rewindAt !== null) throw error;
+      }
+      // Keep this outside the lost-receipt recovery: a failed authorization
+      // check must never be mistaken for a successful committed publication.
+      try {
+        await opts.beforePublish();
+      } catch (error) {
+        await dbClient.tx('message.insert', { ...insertArgs, publication: 'rollback' });
+        throw error;
       }
     }
     if (guarded && inserted.changes === 0) {

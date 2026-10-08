@@ -129,8 +129,9 @@ describe('message write paths avoid large-content readback', () => {
     vi.mocked(onMessageCreated).mockClear();
     vi.mocked(recordPrRefsForMessage).mockClear();
     const beforePublish = vi.fn(async () => {
-      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
-      expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(1);
+      const published = beforePublish.mock.calls.length === 2;
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(published ? 1 : 0);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(published ? 0 : 1);
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
@@ -151,10 +152,46 @@ describe('message write paths avoid large-content readback', () => {
       expect(tapWindowBroadcast).toHaveBeenCalledWith('local-db:messages:created', expect.anything());
       expect(h.mediaRefCalls).toHaveLength(1);
       await createMessage('s1', { clientId: 'private-message', role: 'assistant', content: 'Private result' }, { beforePublish });
-      expect(beforePublish).toHaveBeenCalledTimes(1);
+      expect(beforePublish).toHaveBeenCalledTimes(2);
       expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
     }
     expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+  });
+
+  it.each([false, true])('rolls back a publication revoked during commit before delivery hooks (lostReceipt=%s)', async lostReceipt => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    let revoked = false;
+    h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
+      const result = runInprocTx(h.sqlite!, { name, args });
+      if (args.publication === 'publish') {
+        revoked = true;
+        if (lostReceipt) throw new Error('Publication receipt lost');
+      }
+      return result;
+    });
+    const beforePublish = vi.fn(async () => {
+      if (revoked) throw new Error('revoked during commit');
+    });
+    const body = { clientId: 'revoked-publication', role: 'assistant' as const, content: 'Private result' };
+    await expect(createMessage('s1', body, { beforePublish })).rejects.toThrow('revoked during commit');
+    expect(beforePublish).toHaveBeenCalledTimes(2);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+    expect(tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.mediaRefCalls).toEqual([]);
+    expect(onMessageCreated).not.toHaveBeenCalled();
+    expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    // The same client receipt can be retried once permission is available again.
+    h.client.tx.mockImplementation(async (name: string, args: unknown) => runInprocTx(h.sqlite!, { name, args }));
+    revoked = false;
+    await expect(createMessage('s1', body, { beforePublish })).resolves.toMatchObject(body);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
+    expect(onMessageCreated).toHaveBeenCalledOnce();
   });
 
   it.each(['committed', 'not-committed', 'mismatched'] as const)('recovers only an exact committed publication after a lost receipt: %s', async outcome => {
@@ -179,7 +216,7 @@ describe('message write paths avoid large-content readback', () => {
       const receipt = await sending;
       expect(receipt).toMatchObject(body);
       expect(await createMessage('s1', body, { beforePublish })).toEqual(receipt);
-      expect(beforePublish).toHaveBeenCalledOnce();
+      expect(beforePublish).toHaveBeenCalledTimes(2);
       expect(vi.mocked(tapWindowBroadcast).mock.calls.filter(([channel]) => channel === 'local-db:messages:created')).toHaveLength(1);
       expect(h.mediaRefCalls).toHaveLength(1);
       expect(onMessageCreated).toHaveBeenCalledOnce();

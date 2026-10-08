@@ -981,6 +981,34 @@ describe('db worker tx handlers', () => {
     }, { useInlineWorker });
   });
 
+  it.each([false, true])('rolls back only the exact published row and invalidates cached projections (inline=%s)', async useInlineWorker => {
+    await withClient(async client => {
+      await seedSession(client, 's1');
+      const args = { id: 'published', clientId: 'private', sessionId: 's1', role: 'assistant', content: 'private result',
+        toolUseId: null, agentMeta: null, agentKind: null, createdAt: 100, guarded: false };
+      await client.tx('message.insert', { ...args, publication: 'stage' });
+      await client.tx('message.insert', { ...args, publication: 'publish' });
+      // An unrelated row and a changed payload are outside this rollback's authority.
+      await client.tx('message.insert', { ...args, id: 'other', clientId: 'other' });
+      for (const mismatch of [{ id: 'old-id' }, { sessionId: 'other-session' }, { clientId: 'old-key' },
+        { role: 'user' }, { content: 'old body' }, { toolUseId: 'old-tool' }, { agentMeta: '{}' },
+        { agentKind: 'pi' }, { createdAt: 99 }]) {
+        await expect(client.tx('message.insert', { ...args, ...mismatch, publication: 'rollback' }))
+          .resolves.toEqual({ changes: 0 });
+      }
+      await client.exec("UPDATE sessions SET list_preview='private result', list_message_count=2 WHERE id='s1'");
+      await expect(client.tx('message.insert', { ...args, publication: 'rollback' })).resolves.toEqual({ changes: 1 });
+      await expect(client.query('SELECT id FROM messages')).resolves.toEqual([{ id: 'other' }]);
+      await expect(client.queryOne("SELECT list_preview, list_message_count FROM sessions WHERE id='s1'"))
+        .resolves.toEqual({ list_preview: null, list_message_count: null });
+      await expect(client.tx('message.insert', { ...args, publication: 'rollback' })).resolves.toEqual({ changes: 0 });
+      await client.tx('message.insert', { ...args, id: 'replacement' });
+      await expect(client.tx('message.insert', { ...args, publication: 'rollback' })).resolves.toEqual({ changes: 0 });
+      await expect(client.queryOne("SELECT id FROM messages WHERE client_id='private'"))
+        .resolves.toEqual({ id: 'replacement' });
+    }, { useInlineWorker });
+  });
+
   it.each([false, true])('drops abandoned publication stages on worker restart without phantom history (inline=%s)', async useInlineWorker => {
     await withClient(async (client, reopen) => {
       await seedSession(client, 's1');
