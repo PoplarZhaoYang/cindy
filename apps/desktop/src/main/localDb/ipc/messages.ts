@@ -1648,8 +1648,20 @@ export async function createMessage(
     });
     if (opts?.beforePublish) {
       await opts.beforePublish();
-      const published = await dbClient.tx('message.insert', { ...insertArgs, publication: 'publish' });
-      if (published.changes !== 1) throw new Error('Message publication lost its pending row');
+      try {
+        const published = await dbClient.tx('message.insert', { ...insertArgs, publication: 'publish' });
+        if (published.changes !== 1) throw new Error('Message publication lost its pending row');
+      } catch (error) {
+        // The worker can commit before its receipt is lost. Recover only this
+        // exact publication, then run the same delivery/indexing hooks below.
+        const [committed] = await db.select().from(messages)
+          .where(and(eq(messages.id, id), eq(messages.sessionId, sessionId), eq(messages.clientId, body.clientId)))
+          .limit(1);
+        if (!committed || committed.role !== insertArgs.role || committed.content !== insertArgs.content
+          || committed.toolUseId !== insertArgs.toolUseId || committed.agentMeta !== insertArgs.agentMeta
+          || committed.agentKind !== insertArgs.agentKind || committed.createdAt !== insertArgs.createdAt
+          || committed.rewindAt !== null) throw error;
+      }
     }
     if (guarded && inserted.changes === 0) {
       const [existingAfterGuard] = await db

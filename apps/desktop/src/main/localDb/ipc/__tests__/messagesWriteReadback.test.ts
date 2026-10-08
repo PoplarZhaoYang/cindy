@@ -157,6 +157,44 @@ describe('message write paths avoid large-content readback', () => {
     expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
   });
 
+  it.each(['committed', 'not-committed', 'mismatched'] as const)('recovers only an exact committed publication after a lost receipt: %s', async outcome => {
+    const { tapWindowBroadcast } = await import('../../../device-link/broadcast-tap');
+    const { onMessageCreated } = await import('../../../embedders/chat-history-embedder');
+    const { recordPrRefsForMessage } = await import('../../../git-context/prRefsStore');
+    vi.mocked(tapWindowBroadcast).mockClear();
+    vi.mocked(onMessageCreated).mockClear();
+    vi.mocked(recordPrRefsForMessage).mockClear();
+    h.client.tx.mockImplementation(async (name: string, args: { publication?: string }) => {
+      if (args.publication !== 'publish') return runInprocTx(h.sqlite!, { name, args });
+      if (outcome !== 'not-committed') {
+        runInprocTx(h.sqlite!, { name, args });
+        if (outcome === 'mismatched') h.sqlite!.prepare("UPDATE messages SET content='Different result'").run();
+      }
+      throw new Error('Publication receipt lost');
+    });
+    const beforePublish = vi.fn(async () => {});
+    const body = { clientId: 'lost-receipt', role: 'assistant' as const, content: 'Private result' };
+    const sending = createMessage('s1', body, { beforePublish });
+    if (outcome === 'committed') {
+      const receipt = await sending;
+      expect(receipt).toMatchObject(body);
+      expect(await createMessage('s1', body, { beforePublish })).toEqual(receipt);
+      expect(beforePublish).toHaveBeenCalledOnce();
+      expect(vi.mocked(tapWindowBroadcast).mock.calls.filter(([channel]) => channel === 'local-db:messages:created')).toHaveLength(1);
+      expect(h.mediaRefCalls).toHaveLength(1);
+      expect(onMessageCreated).toHaveBeenCalledOnce();
+      expect(recordPrRefsForMessage).toHaveBeenCalledOnce();
+    } else {
+      await expect(sending).rejects.toThrow('Publication receipt lost');
+      expect(tapWindowBroadcast).not.toHaveBeenCalled();
+      expect(h.mediaRefCalls).toEqual([]);
+      expect(onMessageCreated).not.toHaveBeenCalled();
+      expect(recordPrRefsForMessage).not.toHaveBeenCalled();
+    }
+    expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(outcome === 'not-committed' ? 0 : 1);
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
+  });
+
   describe('createMessage happy path', () => {
     it('issues no SELECT after the INSERT and returns the inserted row', async () => {
       const msg = await createMessage('s1', {

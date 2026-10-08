@@ -3211,6 +3211,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ),
       )
       .limit(1);
+    await caller.groupAuthority?.refresh();
     return row
       ? { ok: true as const, row, groupAuthority: caller.groupAuthority }
       : { ok: false as const, errorCode: 'NOT_FOUND', message: '后台任务不存在' };
@@ -3300,6 +3301,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       const [child] = await getDbClient().drizzle.select({ status: sessions.status })
         .from(sessions).where(eq(sessions.id, found.row.childSessionId)).limit(1);
+      await found.groupAuthority?.refresh();
       if (child?.status !== 'active') {
         return { ok: false as const, errorCode: 'CHILD_SESSION_INVALID', message: 'Task Session is no longer active' };
       }
@@ -3328,6 +3330,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       }
       const [child] = await getDbClient().drizzle.select({ status: sessions.status })
         .from(sessions).where(eq(sessions.id, row.childSessionId)).limit(1);
+      await found.groupAuthority?.refresh();
       if (child?.status !== 'active') {
         return { ok: false as const, errorCode: 'CHILD_SESSION_INVALID', message: 'Task Session is no longer active' };
       }
@@ -3335,6 +3338,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return { ok: false as const, errorCode: 'TASK_ACTIVE', message: 'Finish or stop the current execution before changing its model' };
       }
       const inspected = await deps.taskRoute.inspect(callerSessionId, row.childSessionId);
+      await found.groupAuthority?.refresh();
       if (!inspected.ok) return inspected;
       if (inspected.generation !== expectedGeneration) {
         return { ok: false as const, errorCode: 'CONFLICT', message: 'Task model changed; inspect it again before retrying' };

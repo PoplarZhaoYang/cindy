@@ -4424,6 +4424,55 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); runtime.dispose(); }
   });
 
+  it.each((['inspect', 'advance'] as const).flatMap(operation =>
+    (['NOT_FOUND', 'UNSUPPORTED_CAPABILITY', 'CHILD_SESSION_INVALID', 'TASK_ACTIVE', 'route-result'] as const)
+      .map(branch => ({ operation, branch }))))('revalidates group authority before $operation returns $branch', async ({ operation, branch }) => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    let revokeDuringRead = false;
+    let crossed = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const inspect = vi.fn(async () => {
+      if (branch === 'route-result' && revokeDuringRead) { crossed = true; revoked = true; }
+      return { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Fixture route result' };
+    });
+    const advance = vi.fn(async () => ({ ok: true as const, status: 'applied' as const, generation: 8 }));
+    const runtime = createDelegationRuntime({ taskRoute: branch === 'UNSUPPORTED_CAPABILITY' ? undefined : { inspect, advance } });
+    let restore = () => {};
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture-only route reads' });
+      if (!task.ok) throw new Error(task.message);
+      if (branch === 'route-result') await runtime.delegation.settleSession({ childSessionId: task.childSessionId, outcome: 'error', error: 'Fixture stop' });
+      if (branch === 'CHILD_SESSION_INVALID') h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run(task.childSessionId);
+      const taskId = branch === 'NOT_FOUND' ? 'absent-fixture-task' : task.delegationId;
+      const call = () => operation === 'inspect'
+        ? runtime.delegation.inspectSessionTaskRoute('group-lane', taskId)
+        : runtime.delegation.advanceSessionTaskRoute('group-lane', taskId, 7, 'fixture-token');
+      expect(await call()).toMatchObject({ ok: false, errorCode: branch === 'route-result' ? 'UNSUPPORTED_CAPABILITY' : branch });
+      const select = h.db!.select.bind(h.db!);
+      const spy = vi.spyOn(h.db!, 'select').mockImplementation(fields => {
+        const query = select(fields);
+        const from = query.from.bind(query);
+        vi.spyOn(query, 'from').mockImplementation(table => {
+          const result = from(table);
+          const atTaskRead = branch === 'NOT_FOUND' || branch === 'UNSUPPORTED_CAPABILITY';
+          if (branch !== 'route-result' && (atTaskRead ? table === botDelegations : fields?.status === sessions.status && Object.keys(fields).length === 1)) {
+            crossed = true;
+            queueMicrotask(() => { revoked = true; });
+          }
+          return result;
+        });
+        return query;
+      });
+      restore = () => spy.mockRestore();
+      revokeDuringRead = true;
+      expect(await call()).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(crossed).toBe(true);
+      expect(advance).not.toHaveBeenCalled();
+    } finally { restore(); release(); runtime.dispose(); }
+  });
+
   it('rejects changing a task model when the originating group execution is replaced during route inspection', async () => {
     await seedPair(); seedGroupLane();
     const grant = { botId: 'bot-a', mode: 'owner' as const, isCurrent: () => true, validate: async () => {} };
