@@ -4146,6 +4146,76 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); runtime.dispose(); vi.useRealTimers(); }
   });
 
+  it.each(['retry', 'restart'] as const)('continues admitted reopened group work after the group ends during %s', async recovery => {
+    await seedPair(); seedGroupLane();
+    vi.useFakeTimers();
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const originalTx = h.tx!;
+    let reopened = false;
+    let transferPending = true;
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'bots.reopenDelegation') reopened = true;
+      return result;
+    };
+    let runtime = createDelegationRuntime({ reconcileWorktree: async () => {
+      if (reopened && transferPending) throw new Error('Fixture worktree reconciliation pending');
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Finish initial work.' });
+      if (!task.ok) throw new Error(task.message);
+      await runtime.settleChild(task.childSessionId, 'Initial work done.');
+      runtime.started.length = 0;
+      expect(await runtime.delegation.messageSessionTask('group-lane', task.delegationId,
+        { kind: 'message', text: 'Continue with new independent work.' }))
+        .toMatchObject({ ok: true, resumed: true, queued: true });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(0);
+      release(); transferPending = false;
+      if (recovery === 'restart') {
+        runtime.dispose(); runtime = createDelegationRuntime();
+        await runtime.delegation.restore();
+      } else await vi.advanceTimersByTimeAsync(2_000);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'running' } });
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(1);
+      expect(h.sqlite!.prepare('SELECT run_sequence FROM bot_delegations WHERE id=?').pluck().get(task.delegationId)).toBe(2);
+      expect(await runtime.delegation.getSessionTask('group-lane', task.delegationId)).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      await runtime.runPendingTurns();
+      expect(runtime.dispatch.mock.calls.some(([params]) => params.targetSessionId === 'session-1')).toBe(true);
+    } finally { h.tx = originalTx; release(); runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(['before-commit', 'after-commit'] as const)('rejects group task reopening revoked %s before independent admission', async boundary => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    let reopening = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const originalTx = h.tx!;
+    h.tx = async (name, args) => {
+      const result = await originalTx(name, args);
+      if (name === 'bots.reopenDelegation' && boundary === 'after-commit') revoked = true;
+      return result;
+    };
+    const runtime = createDelegationRuntime({ reconcileWorktree: async () => {
+      if (reopening && boundary === 'before-commit') revoked = true;
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Finish initial work.' });
+      if (!task.ok) throw new Error(task.message);
+      await runtime.settleChild(task.childSessionId, 'Done.');
+      runtime.started.length = 0;
+      reopening = true;
+      expect(await runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'message', text: 'Must not be admitted.' }))
+        .toMatchObject({ ok: false, errorCode: boundary === 'before-commit' ? 'GROUP_AUTHORIZATION_REQUIRED' : 'CALLER_PERMISSION_UNAVAILABLE' });
+      expect(runtime.started).toHaveLength(0);
+      expect(h.sqlite!.prepare('SELECT status, run_sequence FROM bot_delegations WHERE id=?').get(task.delegationId))
+        .toEqual({ status: boundary === 'before-commit' ? 'completed' : 'failed', run_sequence: boundary === 'before-commit' ? 1 : 2 });
+      await runtime.delegation.restore();
+      // The owner can receive the failure receipt; the child must never start.
+      expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(0);
+    } finally { h.tx = originalTx; release(); runtime.dispose(); }
+  });
+
   it('rejects group work revoked after persistence but before independent admission', async () => {
     await seedPair(); seedGroupLane();
     let revoked = false;

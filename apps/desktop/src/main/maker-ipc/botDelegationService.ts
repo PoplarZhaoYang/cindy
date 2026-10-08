@@ -3042,6 +3042,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           message: '后台任务状态刚刚发生变化，请重新查看后再继续',
         };
       }
+      // Reopening commits a new independent run. Validate that admission once
+      // after the transaction, then let durable retries outlive the group turn.
+      const groupPermissionCurrent = await groupAuthority?.refresh().then(() => true, () => false) ?? true;
+      if (!groupPermissionCurrent) {
+        await updateTerminal({ delegationId: row.id, status: 'failed',
+          lastError: 'CALLER_PERMISSION_UNAVAILABLE', expectedRunSequence: row.runSequence + 1 });
+        return { ok: false, errorCode: 'CALLER_PERMISSION_UNAVAILABLE',
+          message: '伙伴权限正在切换或任务正在关闭，请稍后重试' };
+      }
       clearCleanupRetryTimer(row.id);
       emitChanged({
         delegationId: row.id,
@@ -3067,9 +3076,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         });
       }
       scheduleTimeout(row.id, deadlineAt);
-      const dispatched = await attemptDispatch(row.id, 0, () => {
-        try { groupAuthority?.assertCurrent(); return true; } catch { return false; }
-      });
+      const dispatched = await attemptDispatch(row.id);
       return {
         ok: true,
         delegationId: row.id,
