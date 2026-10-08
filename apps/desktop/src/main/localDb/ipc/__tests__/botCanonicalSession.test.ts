@@ -4331,6 +4331,54 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { release(); }
   });
 
+  it.each([
+    { label: 'null override', config: { modelChainOverride: null } },
+    { label: 'legacy default marker', config: { modelOverride: null, model: 'stale-profile-model' } },
+    { label: 'no explicit route', config: {} },
+    { label: 'empty chains', config: { modelChainOverride: [], modelChain: [] } },
+    { label: 'invalid override', config: { modelChainOverride: [{ harness: 'pi' }] } },
+  ])('keeps inherited application models private for group self-read: $label', async ({ config }) => {
+    await seedPair(); seedGroupLane();
+    h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json=? WHERE bot_id='bot-a'").run(JSON.stringify(config));
+    const settings = await import('../../../maker-host/bot-model-chain-settings-store.js');
+    const resolve = vi.spyOn(settings, 'readEffectiveBotModelChain');
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'tools', isCurrent: () => true, validate: async () => {} });
+    let releaseOwner = () => {};
+    const service = createBotCapabilityService(capabilityDeps);
+    try {
+      expect(await service.inspect({ callerSessionId: 'group-lane' })).toMatchObject({
+        ok: true, state: { profile: { id: 'bot-a' }, model: { source: 'default', candidates: [] }, memory: { scope: 'self' } },
+      });
+      expect(resolve).not.toHaveBeenCalled();
+      release();
+      releaseOwner = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+      const owner = await service.inspect({ callerSessionId: 'group-lane' });
+      expect(owner).toMatchObject({ ok: true });
+      expect(resolve).toHaveBeenCalledOnce();
+      const canonical = await service.inspect({ callerSessionId: 'session-1' });
+      if (!owner.ok || !canonical.ok) throw new Error('Owner state unavailable');
+      expect(owner.state.model.candidates.length).toBeGreaterThan(0);
+      expect(owner.state.model).toEqual(canonical.state.model);
+    } finally { release(); releaseOwner(); resolve.mockRestore(); }
+  });
+
+  it.each([
+    { modelChainOverride: [{ harness: 'pi', model: 'own-model', providerId: 'own-provider' }] },
+    { modelChain: [{ harness: 'pi', model: 'own-model', providerId: 'own-provider' }] },
+    { harness: 'pi', model: 'own-model', providerId: 'own-provider' },
+  ])('preserves explicit Profile model selection in authorized group self-reads: %j', async config => {
+    await seedPair(); seedGroupLane();
+    h.sqlite!.prepare("UPDATE bot_profile_versions SET capabilities_json=? WHERE bot_id='bot-a'").run(JSON.stringify(config));
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'tools', isCurrent: () => true, validate: async () => {} });
+    h.listProviders.mockClear();
+    try {
+      expect(await createBotCapabilityService(capabilityDeps).inspect({ callerSessionId: 'group-lane' })).toMatchObject({
+        ok: true, state: { model: { source: 'override', candidates: [expect.objectContaining({ harness: 'pi', model: 'own-model', providerId: 'own-provider' })] } },
+      });
+      expect(h.listProviders).not.toHaveBeenCalled();
+    } finally { release(); }
+  });
+
   it.each(['skill', 'mcp', 'toolset', 'models', 'profile', 'own-skills'] as const)(
     'revalidates server authority after reading %s even while the local execution remains current', async surface => {
       await seedPair(); seedGroupLane();

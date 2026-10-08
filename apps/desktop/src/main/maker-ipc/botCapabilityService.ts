@@ -13,7 +13,7 @@ import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import type { BotModelRoute } from '../../shared/botModelChain.js';
-import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
+import { readEffectiveBotModelChain, readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 
@@ -101,7 +101,7 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
     parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : {};
-  return { ...row, config: normalizeBotToolCapabilities(config), assertOwner: () => {
+  return { ...row, config: normalizeBotToolCapabilities(config), canReadOwnerModels: !groupAuthority || groupAuthority.mode === 'owner', assertOwner: () => {
     assertOwner(); groupAuthority?.assertCurrent();
   }, refresh: async () => {
     assertOwner();
@@ -271,15 +271,16 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     async inspect(input: { callerSessionId: string }) {
       try {
         const ctx = await context(input.callerSessionId, { readScope: 'self' });
-        const candidates = await readEffectiveBotModelChain(ctx.config);
+        const explicit = readExplicitBotModelChain(ctx.config);
+        // A self-read may report inherited selection without exposing owner route IDs.
+        const candidates = explicit === null && !ctx.canReadOwnerModels
+          ? [] : await readEffectiveBotModelChain(ctx.config);
         await ctx.refresh();
         const state: BotControlState = {
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
             identitySource: ctx.identitySource, version: ctx.version },
           session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
-          model: { source: Array.isArray(ctx.config.modelChainOverride) && ctx.config.modelChainOverride.length > 0 ? 'override'
-            : ctx.config.modelChainOverride === null || ctx.config.modelOverride === null
-            || (!Array.isArray(ctx.config.modelChainOverride) && !Array.isArray(ctx.config.modelChain) && typeof ctx.config.model !== 'string') ? 'default' : 'override', candidates },
+          model: { source: explicit === null ? 'default' : 'override', candidates },
           memory: { enabled: ctx.config.memory !== false, scope: 'self' },
           references: { skills: strings(ctx.config.skills), mcpServers: strings(ctx.config.mcpServers),
             toolsets: strings(ctx.config.toolsets) },

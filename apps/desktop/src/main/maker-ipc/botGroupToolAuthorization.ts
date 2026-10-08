@@ -42,7 +42,7 @@ export async function authorizeGroupTool(sessionId: string, botId: string, opera
     throw new GroupToolAuthorizationError(!revoked);
   }
   assertCurrent();
-  return { assertCurrent, sourceGroup: authority!.sourceGroup, refresh: async (): Promise<void> => {
+  return { assertCurrent, mode: authority!.mode, sourceGroup: authority!.sourceGroup, refresh: async (): Promise<void> => {
     assertCurrent();
     await authorizeGroupTool(sessionId, botId, operation);
     assertCurrent();
