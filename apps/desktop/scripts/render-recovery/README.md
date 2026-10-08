@@ -69,6 +69,9 @@ node apps/desktop/scripts/render-recovery/run.mjs
 用 `RENDER_PROBE_SCENARIO=hide` 或 `RENDER_PROBE_SURFACE=view` 切换场景。
 设置 `RENDER_PROBE_ELECTRON_DIR` 可使用另一个临时 npm 安装目录中的 Electron；
 先执行该包的 `install.js` 准备二进制。每次创建独立临时 userData，并在进程结束后清理。
+未指定输出目录时，在系统临时目录创建独立结果目录，并打印其路径。复用指定输出目录会
+清除本脚本上轮生成的报告、事件和两张截图；其他文件保留。截图采集、转换或写入异常
+归为 `inconclusive`，不能据此认定色块不匹配。
 短流程不覆盖延迟回收时间，不作为长时回归通过的证据。
 
 watchdog 生产侧复用 `onWindowHiddenChange`，网页隐藏或原生隐藏时均停止探针。

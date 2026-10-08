@@ -5,7 +5,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const outputDir = path.resolve(process.env.RENDER_PROBE_OUTPUT ?? 'render-probe-results');
+const outputDir = process.env.RENDER_PROBE_OUTPUT
+  ? path.resolve(process.env.RENDER_PROBE_OUTPUT)
+  : await mkdtemp(path.join(os.tmpdir(), 'cindy-render-results-'));
 const installDir = process.env.RENDER_PROBE_ELECTRON_DIR;
 const require = createRequire(
   installDir ? path.join(path.resolve(installDir), 'package.json') : import.meta.url,
@@ -36,8 +38,11 @@ if (
 const profile = await mkdtemp(path.join(os.tmpdir(), 'cindy-render-probe-'));
 env.RENDER_PROBE_PROFILE = profile;
 await mkdir(outputDir, { recursive: true });
-// A reused local output directory must not supply an earlier successful report.
-await rm(path.join(outputDir, 'report.json'), { force: true });
+// A reused local output directory must not supply evidence from an earlier run.
+for (const file of ['report.json', 'events.jsonl', 'baseline.png', 'after-idle.png']) {
+  await rm(path.join(outputDir, file), { force: true });
+}
+process.stdout.write(`Render probe output: ${outputDir}\n`);
 const child = spawn(electron, [fileURLToPath(new URL('./main.cjs', import.meta.url))], {
   env,
   stdio: 'inherit',
@@ -67,7 +72,10 @@ try {
         'Synthetic Electron fixture only. A pass does not prove Cindy #5627 is fixed.',
         '',
       ].join('\n'),
-    );
+    ).catch((error) => {
+      // A CI summary failure must not overwrite the original diagnostic report.
+      process.stderr.write(`Could not write step summary: ${error.message}\n`);
+    });
   }
 } catch {
   resultExitCode = 2;
