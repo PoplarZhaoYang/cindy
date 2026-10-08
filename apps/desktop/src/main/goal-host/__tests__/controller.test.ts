@@ -2877,7 +2877,14 @@ describe('GoalController', () => {
     expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
   });
 
-  it('waits for an old completion clear before creating a replacement Goal', async () => {
+  it.each([
+    { previousStop: false, intervention: 'none' },
+    { previousStop: true, intervention: 'none' },
+    { previousStop: false, intervention: 'same-turn steer' },
+    { previousStop: false, intervention: 'new turn' },
+    { previousStop: false, intervention: 'pause' },
+    { previousStop: false, intervention: 'clear' },
+  ] as const)('waits for an old completion clear before creating a replacement Goal ($previousStop, $intervention)', async ({ previousStop, intervention }) => {
     const local = makeController();
     const originalClear = local.storage.clear.bind(local.storage);
     let clearCalls = 0;
@@ -2897,7 +2904,7 @@ describe('GoalController', () => {
       verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
     });
     await vi.waitFor(() => expect(clearCalls).toBe(1));
-    await local.controller.pauseGoal('s1');
+    if (previousStop) await local.controller.pauseGoal('s1');
     local.session.generation = 7;
     local.session.running = true;
 
@@ -2909,9 +2916,24 @@ describe('GoalController', () => {
     void replacement.then(() => { replacementSettled = true; });
     await tick();
     expect(replacementSettled).toBe(false);
-    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect((await local.storage.get('s1'))?.status).toBe(previousStop ? 'paused' : 'active');
 
+    if (intervention === 'same-turn steer') publishUiSessionIntervention('s1');
+    if (intervention === 'new turn') local.session.generation = 8;
+    const stopping = intervention === 'pause' ? local.controller.pauseGoal('s1')
+      : intervention === 'clear' ? local.controller.clearGoal('s1') : Promise.resolve();
     releaseClear();
+    await stopping;
+    if (intervention === 'pause' || intervention === 'clear') {
+      await expect(replacement).resolves.toBeNull();
+      local.session.running = false;
+      local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+      await tick();
+      expect(local.session.sends).toHaveLength(1);
+      expect(await local.storage.get('s1')).toBeNull();
+      await local.controller.dispose();
+      return;
+    }
     await expect(replacement).resolves.toMatchObject({
       status: 'active',
       objective: 'replacement objective',
@@ -2926,9 +2948,15 @@ describe('GoalController', () => {
     });
     expect(local.session.sends).toHaveLength(1);
     local.session.running = false;
-    local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
-    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
-    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: local.session.generation });
+    if (intervention === 'none') {
+      await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+      expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    } else {
+      await vi.waitFor(async () => expect((await local.storage.get('s1'))?.status).toBe('paused'));
+      expect(local.session.sends).toHaveLength(1);
+      expect((await local.storage.get('s1'))?.lastReason).toBe('paused: user sent a message during the goal');
+    }
     await local.controller.dispose();
   });
 
