@@ -143,8 +143,8 @@ export interface BotDelegationServiceDeps {
   prepareWorktree?: (workingDir: string) => Promise<{ ok: true; sessionId: string; workingDir: string } | { ok: false; message: string }>;
   taskQueue?: {
     inspect(sessionId: string, callerSessionId: string): Promise<Array<{ queuedMessageId: string; consuming: boolean; message: string }>>;
-    update(params: { callerSessionId: string; targetSessionId: string; queuedMessageId: string; message: string }): Promise<SessionQueuedMessageControlResult>;
-    cancel(params: { callerSessionId: string; targetSessionId: string; queuedMessageId: string }): Promise<SessionQueuedMessageControlResult>;
+    update(params: { callerSessionId: string; targetSessionId: string; queuedMessageId: string; message: string; beforeMutation?: () => Promise<void> }): Promise<SessionQueuedMessageControlResult>;
+    cancel(params: { callerSessionId: string; targetSessionId: string; queuedMessageId: string; beforeMutation?: () => Promise<void> }): Promise<SessionQueuedMessageControlResult>;
   };
   closeSession?: (sessionId: string) => Promise<void>;
   broadcastSessionCreated?: (sessionId: string) => void;
@@ -3567,7 +3567,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       if (input.kind === 'edit' || input.kind === 'withdraw') {
         if (!row.childSessionId || !deps.taskQueue) return { ok: false as const,
           errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task queue control is unavailable' };
-        const params = { callerSessionId, targetSessionId: row.childSessionId, queuedMessageId: input.queuedMessageId };
+        const params = { callerSessionId, targetSessionId: row.childSessionId, queuedMessageId: input.queuedMessageId,
+          beforeMutation: found.groupAuthority?.refresh };
         await found.groupAuthority?.refresh();
         const result = input.kind === 'edit'
           ? await deps.taskQueue.update({ ...params, message: input.text })

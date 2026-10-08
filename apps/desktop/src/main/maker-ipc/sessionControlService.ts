@@ -145,6 +145,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       callerSessionId: string;
       targetSessionId: string;
       queuedMessageId: string;
+      /** Host-only authorization check after async reads, immediately before mutation. */
+      beforeMutation?: () => Promise<void>;
       message: string;
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
@@ -154,6 +156,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         queuedMessageId: params.queuedMessageId,
         message: params.message,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: params.beforeMutation,
         rebuild: rebuildSessionQueueItem,
       });
     },
@@ -162,6 +165,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       callerSessionId: string;
       targetSessionId: string;
       queuedMessageId: string;
+      /** Host-only authorization check after async reads, immediately before mutation. */
+      beforeMutation?: () => Promise<void>;
     }): Promise<SessionQueuedMessageControlResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
@@ -169,6 +174,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         sessionId: params.targetSessionId,
         queuedMessageId: params.queuedMessageId,
         authorize: (item) => authorizeSessionQueueItem(item, params.callerSessionId),
+        beforeMutation: params.beforeMutation,
       });
     },
 

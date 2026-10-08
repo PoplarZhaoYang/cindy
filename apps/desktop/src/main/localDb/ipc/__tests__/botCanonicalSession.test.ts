@@ -10,7 +10,7 @@ import Database from 'better-sqlite3';
 import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
 import { createMessage } from '../messages';
-import { authorizeSessionQueueItem, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
+import { authorizeSessionQueueItem, createSessionControlService, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
 import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
@@ -4595,6 +4595,58 @@ describe('Bot Session task end-to-end runtime', () => {
       h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_control');
       release(); runtime.dispose(); vi.useRealTimers();
     }
+  });
+
+  it.each((['edit', 'withdraw'] as const).flatMap(operation =>
+    (['target-read', 'queue-read', 'valid'] as const).map(boundary => ({ operation, boundary }))))
+  ('checks group authority at the $operation queue mutation after $boundary', async ({ operation, boundary }) => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const original: AgentInputQueuedMessage = {
+      clientId: 'fixture-queued', text: 'Original input', persistedContent: 'Original input',
+      model: 'grok-4.5', effort: 'high', permissionMode: 'auto', workingDir: h.userDataDir,
+      chatMessage: { clientId: 'fixture-queued', role: 'user', content: 'Original input' },
+      createOpts: { agentKind: 'pi', model: 'grok-4.5', effort: 'high', permissionMode: 'auto', workingDir: h.userDataDir },
+      origin: { kind: 'session', senderSessionId: 'group-lane', displayText: 'Original input' },
+    };
+    let queue = [original];
+    const replace = vi.fn((_session: string, _id: string, next: AgentInputQueuedMessage) => { queue = [next]; return true; });
+    const remove = vi.fn(() => { queue = []; return true; });
+    const queueControl = createSessionControlService({
+      getLiveSession: () => null,
+      sessionExists: async () => { if (boundary === 'target-read') revoked = true; return true; },
+      getQueueSnapshot: async () => { if (boundary === 'queue-read') revoked = true; return { pendingQueue: queue, consumingClientIds: [] }; },
+      replaceQueuedMessage: replace, removeQueuedMessage: remove,
+      getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
+      assertExternalInputAllowed: vi.fn(), createQueuedMessage: vi.fn(), steerQueuedMessage: vi.fn(),
+      steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(), createId: () => 'unused',
+    });
+    const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
+      inspect: vi.fn(), update: params => queueControl.updateQueuedMessage(params),
+      cancel: params => queueControl.cancelQueuedMessage(params),
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Queue controls fixture.' });
+      if (!task.ok) throw new Error(task.message);
+      const result = await runtime.delegation.messageSessionTask('group-lane', task.delegationId,
+        operation === 'edit' ? { kind: 'edit', queuedMessageId: 'fixture-queued', text: 'Updated input' }
+          : { kind: 'withdraw', queuedMessageId: 'fixture-queued' });
+      if (boundary === 'valid') {
+        expect(result).toMatchObject({ ok: true });
+        expect(operation === 'edit' ? replace : remove).toHaveBeenCalledOnce();
+        if (operation === 'edit') expect(queue[0].persistedContent).toBe('Updated input');
+        else expect(queue).toEqual([]);
+        expect(runtime.flushInput).toHaveBeenCalledOnce();
+      } else {
+        expect(revoked).toBe(true);
+        expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+        expect(queue).toEqual([original]);
+        expect(replace).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled();
+        expect(runtime.flushInput).not.toHaveBeenCalled();
+      }
+    } finally { release(); runtime.dispose(); }
   });
 
   it.each((['inspect', 'advance'] as const).flatMap(operation =>
