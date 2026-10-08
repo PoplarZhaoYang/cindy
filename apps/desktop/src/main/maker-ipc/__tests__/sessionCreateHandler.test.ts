@@ -24,6 +24,7 @@ function createDeps(overrides: Record<string, unknown> = {}) {
     }),
     markOrcaRoleIfNeeded: vi.fn(),
     markKnownNonOrcaIfApplicable: vi.fn(),
+    persistPlanMode: vi.fn().mockResolvedValue(undefined),
     sendWorkerReadyMessage: vi.fn(),
     broadcastSessionCreated: vi.fn(),
     logCreateSession: vi.fn(),
@@ -33,6 +34,34 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('maker session CREATE_SESSION IPC handler', () => {
+  it.each([true, false])('persists initial plan mode %s before publishing the created session', async (planMode) => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerMakerSessionCreateHandler(harness, deps);
+    await harness.invoke(MAKER_INVOKE.CREATE_SESSION, {
+      agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4', planMode,
+    });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ planMode }));
+    expect(deps.persistPlanMode).toHaveBeenCalledWith('session-1', planMode);
+    expect(deps.persistPlanMode.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.broadcastSessionCreated.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('rejects invalid plan flags before creation and propagates persistence failures', async () => {
+    const harness = new IpcHarness();
+    const deps = createDeps();
+    registerMakerSessionCreateHandler(harness, deps);
+    const args = { agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4' };
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, { ...args, planMode: 'true' }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    deps.persistPlanMode.mockRejectedValue(new Error('storage unavailable'));
+    await expect(harness.invoke(MAKER_INVOKE.CREATE_SESSION, { ...args, planMode: true }))
+      .rejects.toThrow('storage unavailable');
+    expect(deps.broadcastSessionCreated).not.toHaveBeenCalled();
+  });
+
   it('bootstraps a session and returns the public create-session payload', async () => {
     const harness = new IpcHarness();
     const deps = createDeps();
@@ -72,6 +101,7 @@ describe('maker session CREATE_SESSION IPC handler', () => {
     );
     expect(deps.markKnownNonOrcaIfApplicable).toHaveBeenCalled();
     expect(deps.broadcastSessionCreated).toHaveBeenCalledWith('session-1');
+    expect(deps.persistPlanMode).not.toHaveBeenCalled();
   });
 
   it('allocates a controlled dialogue workspace before bootstrapping folderless dialogue sessions', async () => {

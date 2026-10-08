@@ -62,6 +62,7 @@ export interface MakerSessionCreateHandlerDeps<
     orcaRole: MakerSessionCreateOpts['orcaRole'],
   ): Promise<void>;
   markKnownNonOrcaIfApplicable(sessionId: string, opts: MakerSessionCreateOpts): void;
+  persistPlanMode(sessionId: string, enabled: boolean): Promise<void>;
   allocateDialogueWorkspace?: (sessionId: string, nowMs: number) => string;
   createSessionId?: () => string;
   now?: () => number;
@@ -111,6 +112,10 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
         throw err;
       }
       const { session, didInjectOrcaInstructions, didInjectProjectContext } = bootstrapped;
+      // Initial plan selection must survive the first queue read and later resumes.
+      if (typeof o.planMode === 'boolean') {
+        await deps.persistPlanMode(session.id, o.planMode);
+      }
 
       deps.logCreateSession({
         agentKind: o.agentKind,
