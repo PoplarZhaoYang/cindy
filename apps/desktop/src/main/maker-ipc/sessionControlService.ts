@@ -81,6 +81,7 @@ export interface SessionControlLiveSession {
 export interface SessionSteerTurnIdentity {
   session: SessionControlLiveSession;
   turnGeneration: number;
+  beforeMutation?: () => Promise<void>;
 }
 
 export interface SessionControlServiceDeps {
@@ -216,12 +217,15 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       message: string;
       /** Host-owned stable ID; the input coordinator owns acceptance deduplication. */
       queuedMessageId?: string;
+      beforeMutation?: () => Promise<void>;
     }): Promise<SessionSteerResult> {
       const missing = await ensureTarget(params.targetSessionId);
+      await params.beforeMutation?.();
       if (missing) return missing;
       try {
         await deps.assertExternalInputAllowed(params.targetSessionId);
       } catch (error) {
+        await params.beforeMutation?.();
         if ((error as { code?: unknown }).code === 'UNSUPPORTED_CAPABILITY') {
           return {
             ok: false,
@@ -231,6 +235,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         }
         throw error;
       }
+      await params.beforeMutation?.();
       const live = deps.getLiveSession(params.targetSessionId);
       if (!live?.isTurnRunning()) {
         return {
@@ -252,6 +257,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         ...params,
         queuedMessageId,
       });
+      await params.beforeMutation?.();
       const current = deps.getLiveSession(params.targetSessionId);
       if (
         current !== live ||
@@ -264,7 +270,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
           message: `session ${params.targetSessionId} changed turns before steer was accepted`,
         };
       }
-      const expectedTurn = { session: live, turnGeneration };
+      const expectedTurn = { session: live, turnGeneration, ...(params.beforeMutation ? { beforeMutation: params.beforeMutation } : {}) };
       const accepted = await deps.steerQueuedMessage(params.targetSessionId, item, expectedTurn);
       if (!accepted) {
         const latest = deps.getLiveSession(params.targetSessionId);

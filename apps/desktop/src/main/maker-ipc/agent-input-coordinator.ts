@@ -959,6 +959,8 @@ interface SteerObservation {
 }
 
 interface SteerOptions {
+  /** Host-only authority check after async preparation and before native injection. */
+  beforeMutation?: () => Promise<void>;
   removeFromQueue?: boolean;
   touchUserSend?: boolean;
   /** 控制面插话不允许在 turn 结束竞态下退化成下一轮普通输入。 */
@@ -2396,8 +2398,15 @@ export class AgentInputCoordinator {
       }
     }
 
+    let authorizationFailed = false;
     try {
       const referenceContexts = await this.resolveReferenceContexts(item);
+      try {
+        await opts?.beforeMutation?.();
+      } catch (error) {
+        authorizationFailed = true;
+        throw error;
+      }
       // A pause/Stop can arrive while references are being prepared. Recheck
       // before crossing the provider boundary, including direct UI/IM callers.
       const current = this.getState(sessionId);
@@ -2470,6 +2479,13 @@ export class AgentInputCoordinator {
         token: steerRequestToken,
       });
       this.clearSteerAbortController(sessionId, item.clientId, steerAbort);
+
+      if (authorizationFailed) {
+        if (markerStillPresent) this.clearDirectSteeringItem(latest, item.clientId);
+        this.emit(sessionId);
+        finishSteerRequest(false);
+        throw err;
+      }
 
       if (isStaleTurnError(err)) {
         if (markerStillPresent) {

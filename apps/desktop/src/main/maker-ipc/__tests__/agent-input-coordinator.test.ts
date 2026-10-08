@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { ScriptTarget, transpileModule } from 'typescript';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
 import { createPluginTaskReviewResolver, type PluginReviewSnapshot } from '../pluginTaskReviewContext.js';
@@ -6176,6 +6179,37 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
 });
 
 describe('AgentInputCoordinator steer transaction', () => {
+  it.each(['restore', 'screening', 'references', 'valid'] as const)('runs the host steer authority guard after %s', async boundary => {
+    const h = createHarness();
+    const sid = 'group-steer-guard';
+    h.setRunning(true);
+    let revoked = false;
+    const failure = new Error('Fixture authority revoked');
+    const beforeMutation = vi.fn(async () => { if (revoked) throw failure; });
+    h.setScreenUserMessage(async () => { if (boundary === 'screening') revoked = true; return { action: 'allow' }; });
+    h.resolveSessionReferences.mockImplementationOnce(async () => { if (boundary === 'references') revoked = true; return []; });
+    const source = readFileSync(resolve(__dirname, '../register.ts'), 'utf8');
+    const start = source.indexOf('    steerQueuedMessage: async (sessionId, item, expectedTurn) =>');
+    const end = source.indexOf('    getQueueSnapshot:', start);
+    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+    const adapter = transpileModule(`return ({${source.slice(start, end)}}).steerQueuedMessage;`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+    const host = new Function('inputCoordinator', adapter)({
+      ensureQueueRestored: async () => { if (boundary === 'restore') revoked = true; },
+      steer: h.coordinator.steer.bind(h.coordinator),
+    });
+    const result = host(sid, makeItem('guarded-input', 'Private task input', { sessionRefs: [{ sessionId: 'reference' }] }),
+      { session: h.getTurnSessionIdentity(), turnGeneration: 0, beforeMutation });
+    if (boundary === 'valid') { await expect(result).resolves.toBe(true); expect(h.steerToAgent).toHaveBeenCalledOnce(); }
+    else {
+      await expect(result).rejects.toBe(failure);
+      expect(h.steerToAgent).not.toHaveBeenCalled();
+      expect(h.onSteerAccepted).not.toHaveBeenCalled();
+      expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue).toEqual([]);
+      expect(h.coordinator.getQueueControlSnapshot(sid).steeringQueueClientIds).toEqual([]);
+    }
+    expect(beforeMutation).toHaveBeenCalledTimes(boundary === 'restore' ? 1 : 2);
+  });
+
   it('rejects a control steer when screening crosses into a new turn generation', async () => {
     const h = createHarness();
     const sid = 'control-steer-screening-turn-race';

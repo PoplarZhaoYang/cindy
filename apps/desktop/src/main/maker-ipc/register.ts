@@ -723,6 +723,7 @@ import {
   AcceptedCallbackDispatchCancelled,
   runAcceptedCallback,
 } from './acceptedCallbackRunner.js';
+import { GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 
@@ -10701,7 +10702,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         message,
         persistedContent,
         clientId,
-        onAccepted,
+        onAccepted: onAccepted ? async (replayed) => {
+          try {
+            await onAccepted(replayed);
+          } catch (error) {
+            if (error instanceof GroupToolAuthorizationError) {
+              throw new AcceptedCallbackDispatchCancelled(error.message);
+            }
+            throw error;
+          }
+        } : undefined,
         dispatcherSessionId,
       }),
     discardDelegationQueuedInputs: (sessionId, delegationId) =>
@@ -13944,11 +13954,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     steerQueuedMessage: async (sessionId, item, expectedTurn) => {
       await inputCoordinator.ensureQueueRestored(sessionId);
+      await expectedTurn.beforeMutation?.();
       return inputCoordinator.steer(sessionId, item, {
         touchUserSend: true,
         fallbackToTurn: false,
         expectedTurnSession: expectedTurn.session,
         expectedTurnGeneration: expectedTurn.turnGeneration,
+        beforeMutation: expectedTurn.beforeMutation,
       });
     },
     getQueueSnapshot: async (sessionId) => {

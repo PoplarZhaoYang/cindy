@@ -121,7 +121,7 @@ export interface BotDelegationServiceDeps {
   abortSession: (sessionId: string) => Promise<void>;
   discardDelegationQueuedInputs?: (sessionId: string, delegationId: string) => Promise<void>;
   taskControl?: {
-    steer(params: { callerSessionId: string; targetSessionId: string; message: string; queuedMessageId?: string }): Promise<SessionSteerResult>;
+    steer(params: { callerSessionId: string; targetSessionId: string; message: string; queuedMessageId?: string; beforeMutation?: () => Promise<void> }): Promise<SessionSteerResult>;
     stop(params: { targetSessionId: string }): Promise<SessionStopResult>;
     /** Includes native pending interactions and in-flight sends, not just visible streaming. */
     isActive(sessionId: string): boolean;
@@ -3598,6 +3598,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         if (queuedMessageId) {
           const [sent] = await getDbClient().drizzle.select({ agentMeta: messages.agentMeta }).from(messages)
             .where(and(eq(messages.sessionId, row.childSessionId), eq(messages.clientId, queuedMessageId), isNull(messages.rewindAt))).limit(1);
+          await found.groupAuthority?.refresh();
           const origin = parseRecord(sent?.agentMeta).origin as { kind?: string; senderSessionId?: string } | undefined;
           if (origin?.kind === 'session' && origin.senderSessionId === callerSessionId) {
             return { ok: true as const, childSessionId: row.childSessionId,
@@ -3608,7 +3609,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         // persistence failed after native acceptance. Persisted rows cover restore.
         await found.groupAuthority?.refresh();
         const result = await deps.taskControl.steer({ callerSessionId,
-          targetSessionId: row.childSessionId, message: input.text, queuedMessageId });
+          targetSessionId: row.childSessionId, message: input.text, queuedMessageId, beforeMutation: found.groupAuthority?.refresh });
         return result.ok ? { ok: true as const, childSessionId: row.childSessionId,
           resumed: false, queued: false, delivery: 'same-turn', queuedMessageId: result.queuedMessageId } : result;
       }

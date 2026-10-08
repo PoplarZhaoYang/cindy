@@ -1,3 +1,4 @@
+import { AcceptedCallbackDispatchCancelled, runAcceptedCallback } from '../../../maker-ipc/acceptedCallbackRunner';
 import { setSessionOpeningModelAdmission } from '../../sessionOpening';
 import { ScriptTarget, transpileModule } from 'typescript';
 import { canResumeAfterRuntimeFallback } from '../../../maker-ipc/botCandidateRecovery';
@@ -3697,6 +3698,7 @@ describe('Bot Session task end-to-end runtime', () => {
   }
 
   function createDelegationRuntime(options: {
+    decorateDispatch?: (dispatch: Parameters<typeof createBotDelegationService>[0]['dispatch']) => Parameters<typeof createBotDelegationService>[0]['dispatch'];
     discardDelegationQueuedInputs?: Parameters<typeof createBotDelegationService>[0]['discardDelegationQueuedInputs'];
     collectArtifacts?: Parameters<typeof createBotDelegationService>[0]['collectArtifacts'];
     readSessionExecution?: Parameters<typeof createBotDelegationService>[0]['readSessionExecution'];
@@ -3989,7 +3991,7 @@ describe('Bot Session task end-to-end runtime', () => {
           await options.onResultReceiptPersisted?.();
         }
       } : undefined,
-      dispatch,
+      dispatch: options.decorateDispatch?.(dispatch) ?? dispatch,
       abortSession,
       closeSession,
       broadcastSessionCreated: vi.fn(),
@@ -4597,6 +4599,68 @@ describe('Bot Session task end-to-end runtime', () => {
       h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_control');
       release(); runtime.dispose(); vi.useRealTimers();
     }
+  });
+
+  it.each(['valid', 'revoked', 'ended'] as const)('cancels group delegation input at the actual host accepted adapter: %s', async condition => {
+    await seedPair(); seedGroupLane();
+    let draining = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
+      isCurrent: () => !(draining && condition === 'ended'),
+      validate: async () => { if (draining && condition === 'revoked') throw new GroupToolAuthorizationError(); } });
+    const source = readFileSync(resolve(__dirname, '../../../maker-ipc/register.ts'), 'utf8');
+    const start = source.indexOf('    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>');
+    const end = source.indexOf('    discardDelegationQueuedInputs:', start);
+    expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
+    const adapter = transpileModule(`return ({${source.slice(start, end)}}).dispatch;`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+    type Dispatch = Parameters<typeof createBotDelegationService>[0]['dispatch'];
+    let input: Parameters<Dispatch>[0] | undefined;
+    let armed = false;
+    const runtime = createDelegationRuntime({ decorateDispatch: dispatch => {
+      const capture: Dispatch = async params => { input = params; return { ok: true, targetSessionId: params.targetSessionId, wakeKind: 'queued' }; };
+      const host = new Function('dispatchBotSessionMessage', 'AcceptedCallbackDispatchCancelled', 'GroupToolAuthorizationError', adapter)(capture, AcceptedCallbackDispatchCancelled, GroupToolAuthorizationError) as Dispatch;
+      return params => armed ? host(params) : dispatch(params);
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Accepted boundary fixture.' });
+      if (!task.ok) throw new Error(task.message);
+      armed = true;
+      await runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'message', text: 'Follow-up input.' });
+      expect(input?.onAccepted).toBeTypeOf('function');
+      const vendor = vi.fn();
+      draining = true;
+      const drain = async () => { await runAcceptedCallback(input!.onAccepted, input!.targetSessionId, input!.clientId!, { warn: vi.fn() }); vendor(); };
+      if (condition === 'valid') { await drain(); expect(vendor).toHaveBeenCalledOnce(); }
+      else { await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled); expect(vendor).not.toHaveBeenCalled(); }
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each(['target-read', 'input-check', 'item-build', 'valid'] as const)('revalidates group steer after %s', async boundary => {
+    await seedPair(); seedGroupLane();
+    let revoked = false;
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const inject = vi.fn(async () => true);
+    const live = { agentKind: 'pi' as const, capabilities: { sameTurnSteer: { supported: true } },
+      isTurnRunning: () => true, getTurnGeneration: () => 1, requestGracefulStop: vi.fn(), getTurnControlSnapshot: vi.fn() };
+    let targetChecked = false;
+    const controls = createSessionControlService({
+      getLiveSession: () => boundary === 'target-read' && !targetChecked ? null : live,
+      sessionExists: async () => { targetChecked = true; if (boundary === 'target-read') revoked = true; return true; },
+      assertExternalInputAllowed: async () => { if (boundary === 'input-check') revoked = true; },
+      createQueuedMessage: async () => { if (boundary === 'item-build') revoked = true; return {} as AgentInputQueuedMessage; },
+      steerQueuedMessage: inject, getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
+      steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(), createId: () => 'steer-fixture',
+    });
+    const runtime = createDelegationRuntime({ taskControl: true });
+    runtime.steer.mockImplementation(params => controls.steerSession(params));
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Steer boundary fixture.' });
+      if (!task.ok) throw new Error(task.message);
+      const result = await runtime.delegation.messageSessionTask('group-lane', task.delegationId, { kind: 'message', mode: 'steer', text: 'Same-turn input.' });
+      if (boundary === 'valid') { expect(result).toMatchObject({ ok: true }); expect(inject).toHaveBeenCalledOnce(); }
+      else { expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' }); expect(inject).not.toHaveBeenCalled(); }
+    } finally { release(); runtime.dispose(); }
   });
 
   it.each((['edit', 'withdraw'] as const).flatMap(operation =>
