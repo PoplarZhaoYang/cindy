@@ -743,7 +743,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           // The shared transaction still refuses to replace a healthy Session.
           expectedCanonicalSessionId,
           expectedProfileVersion: target.currentVersion,
-        });
+        }, beforeRecovery);
         if (replacement.created) deps.broadcastSessionCreated?.(replacement.canonicalSessionId);
         expectedCanonicalSessionId = replacement.canonicalSessionId;
         continue;
@@ -753,7 +753,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         botId: target.id,
         expectedCanonicalSessionId: null,
         expectedProfileVersion: target.currentVersion,
-      });
+      }, beforeRecovery);
       if (created.created) deps.broadcastSessionCreated?.(created.canonicalSessionId);
       expectedCanonicalSessionId = created.canonicalSessionId;
     }

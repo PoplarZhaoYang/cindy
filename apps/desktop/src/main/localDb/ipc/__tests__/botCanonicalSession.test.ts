@@ -4338,6 +4338,8 @@ describe('Bot Session task end-to-end runtime', () => {
     });
     const runtime = createDelegationRuntime();
     const direct = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    const before = h.sqlite!.prepare('SELECT id FROM sessions ORDER BY id').all();
+    const links = h.sqlite!.prepare('SELECT * FROM bot_session_links ORDER BY id').all();
     try {
       const result = operation === 'private-message'
         ? await direct.sendToUser({ callerSessionId: 'group-lane', message: 'Must not deliver', idempotencyKey: 'revoke-fixture' })
@@ -4345,9 +4347,58 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(revoked).toBe(true);
       expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
       expect(runtime.dispatch).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare('SELECT id FROM sessions ORDER BY id').all()).toEqual(before);
+      expect(h.sqlite!.prepare('SELECT * FROM bot_session_links ORDER BY id').all()).toEqual(links);
+      expect(h.sqlite!.prepare("SELECT canonical_session_id FROM bot_profiles WHERE id='bot-a'").pluck().get()).toBe('session-1');
       expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM bot_delegations').get()).toEqual({ count: 0 });
       expect(h.sqlite!.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_id LIKE 'bot-group-private:%'").get()).toEqual({ count: 0 });
     } finally { release(); runtime.dispose(); }
+  });
+
+  it.each((['private-message', 'peer-message', 'independent-task'] as const).flatMap(operation =>
+    (['deleted', 'unlinked'] as const).map(state => ({ operation, state }))))('does not commit $state canonical recovery for $operation after preparation revokes the grant', async ({ operation, state }) => {
+    await seedPair(); seedGroupLane();
+    const targetBotId = operation === 'peer-message' ? 'bot-b' : 'bot-a';
+    let canonicalSessionId = 'session-1';
+    if (operation === 'peer-message') {
+      await invoke('local-db:bots:create', { id: targetBotId, name: 'Peer', capabilities: { harness: 'pi', model: 'grok-4.5', providerId: PROVIDER } });
+      const peer = await invoke('local-db:bots:create-canonical-session', { botId: targetBotId, expectedCanonicalSessionId: null, expectedProfileVersion: 1 });
+      canonicalSessionId = peer.canonicalSessionId;
+    }
+    h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id=?").run(canonicalSessionId);
+    if (state === 'unlinked') {
+      h.sqlite!.prepare("DELETE FROM bot_session_links WHERE bot_id=? AND role='canonical'").run(targetBotId);
+      h.sqlite!.prepare('UPDATE bot_profiles SET canonical_session_id=NULL WHERE id=?').run(targetBotId);
+    }
+    const sessionsBefore = h.sqlite!.prepare('SELECT id,status FROM sessions ORDER BY id').all();
+    const linksBefore = h.sqlite!.prepare('SELECT * FROM bot_session_links ORDER BY id').all();
+    const profilesBefore = h.sqlite!.prepare('SELECT id,canonical_session_id FROM bot_profiles ORDER BY id').all();
+    let revoked = false;
+    h.ensureGit.mockImplementationOnce(async () => { revoked = true; });
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner',
+      sourceGroup: { groupId: 'fixture' }, isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const baseTx = h.tx!;
+    const tx = vi.fn(baseTx);
+    h.tx = tx;
+    const runtime = createDelegationRuntime();
+    const service = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    try {
+      const result = operation === 'private-message'
+        ? await service.sendToUser({ callerSessionId: 'group-lane', message: 'Fixture', idempotencyKey: 'no-recovery-commit' })
+        : operation === 'peer-message'
+          ? await service.messageAgent({ callerSessionId: 'group-lane', targetBotId, message: 'Fixture' })
+          : await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture' });
+      expect(revoked).toBe(true);
+      expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(tx.mock.calls.map(([name]) => name)).not.toContain('bots.replaceCanonicalSession');
+      expect(tx.mock.calls.map(([name]) => name)).not.toContain('bots.reparentDelegations');
+      expect(h.sqlite!.prepare('SELECT id,status FROM sessions ORDER BY id').all()).toEqual(sessionsBefore);
+      expect(h.sqlite!.prepare('SELECT * FROM bot_session_links ORDER BY id').all()).toEqual(linksBefore);
+      expect(h.sqlite!.prepare('SELECT id,canonical_session_id FROM bot_profiles ORDER BY id').all()).toEqual(profilesBefore);
+      expect(runtime.dispatch).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare('SELECT count(*) FROM bot_delegations').pluck().get()).toBe(0);
+    } finally { h.tx = baseTx; release(); runtime.dispose(); }
   });
 
   it('rejects revoked group authority after asynchronous worktree preparation, before any task exists', async () => {
