@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -23,6 +26,7 @@ import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../botG
 import { sessionQueueOriginForDispatcher } from '../sessionControlService.js';
 import { redactMessageRowForSharedGuest, redactInputProjectionForSharedGuest } from '../../device-link/sharedTaskMessageOrigin.js';
 import { UI_ACTION_TRIGGER_PREFIX } from '../../../shared/interruptedTurn.js';
+import { AcceptedCallbackDispatchCancelled, runAcceptedCallback, runAcceptedRollback } from '../acceptedCallbackRunner.js';
 
 function createDatabase(): Database.Database {
   const sqlite = new Database(':memory:');
@@ -186,6 +190,59 @@ describe('botDirectMessageService', () => {
         .toMatchObject({ ok: true, targetSessionId: 'a-main' });
       expect(dispatch).toHaveBeenLastCalledWith(expect.objectContaining({ targetSessionId: 'a-main' }));
       expect(dispatch.mock.calls.at(-1)?.[0]).not.toHaveProperty('dispatcherSessionId');
+    } finally { release(); }
+  });
+
+  it.each(['valid', 'server-revoked', 'execution-ended'] as const)('uses the host cancellation adapter when a queued group DM drains: %s', async condition => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    let draining = false;
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner',
+      isCurrent: () => !draining || condition !== 'execution-ended',
+      validate: async () => { if (draining && condition === 'server-revoked') throw new GroupToolAuthorizationError(); } });
+    // Compile the actual production adapter, including its error conversion;
+    // invoking the service callback directly would bypass the boundary under review.
+    const source = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8');
+    const holder = source.indexOf('botDirectMessageServiceHolder = createBotDirectMessageService({');
+    const start = source.indexOf('    dispatch: ({', holder);
+    const end = source.indexOf('    ensureCanonicalSession:', start);
+    expect(holder).toBeGreaterThan(0); expect(start).toBeGreaterThan(holder); expect(end).toBeGreaterThan(start);
+    const adapter = ts.transpileModule(`return ({${source.slice(start, end)}}).dispatch;`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const enqueue = vi.fn(async (params: {
+      targetSessionId: string; clientId: string; onAccepted: () => Promise<void>; onAcceptedRollback: () => Promise<void>;
+    }) => ({ ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const }));
+    const hostDispatch = new Function('dispatchBotSessionMessage', 'AcceptedCallbackDispatchCancelled', adapter)(enqueue, AcceptedCallbackDispatchCancelled);
+    const service = createBotDirectMessageService({ dispatch: hostDispatch });
+    const vendorDispatch = vi.fn(async () => {});
+    const log = { warn: vi.fn() };
+    try {
+      expect(await service.messageAgent({ callerSessionId: 'a-group', targetBotId: 'bot-b', message: 'Queued fixture' }))
+        .toMatchObject({ ok: true, delivered: false });
+      expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('pending');
+      expect(h.createMessage).not.toHaveBeenCalled();
+      draining = true;
+      const queued = enqueue.mock.calls[0][0];
+      const drain = async () => {
+        try {
+          await runAcceptedCallback(queued.onAccepted, queued.targetSessionId, queued.clientId, log);
+          await vendorDispatch();
+        } catch (error) {
+          await runAcceptedRollback(queued.onAcceptedRollback, queued.targetSessionId, queued.clientId, log);
+          throw error;
+        }
+      };
+      if (condition === 'valid') {
+        await drain();
+        expect(vendorDispatch).toHaveBeenCalledOnce();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('delivered');
+      } else {
+        await expect(drain()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(vendorDispatch).not.toHaveBeenCalled();
+        expect(h.createMessage).not.toHaveBeenCalled();
+        expect(sqlite.prepare('SELECT delivery_status FROM bot_direct_messages').pluck().get()).toBe('failed');
+        expect(sqlite.prepare('SELECT message_count FROM bot_direct_message_threads').pluck().get()).toBe(0);
+      }
     } finally { release(); }
   });
 
