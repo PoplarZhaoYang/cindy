@@ -2692,23 +2692,44 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     await caller.groupAuthority?.refresh();
     if (!matchesDelegatedExecution(row)) return finishCancelledDelegation(row);
     if (row.childSessionId) {
+      const wasHeld = !!readTaskPause(row) || heldSessionIds.has(row.childSessionId);
+      const snapshot = JSON.stringify({ ...parseRecord(row.permissionSnapshotJson), taskCancelRequested: true });
+      let admitted = false;
       if (deps.taskControl) {
         // Commit intent before changing the input/timer boundary. A failed write
         // must leave the running (or already paused) task exactly as it was.
-        await getDbClient().drizzle.update(botDelegations).set({
-          permissionSnapshotJson: JSON.stringify({ ...parseRecord(row.permissionSnapshotJson), taskCancelRequested: true }),
-        }).where(eq(botDelegations.id, row.id));
+        await db.update(botDelegations).set({ permissionSnapshotJson: snapshot })
+          .where(eq(botDelegations.id, row.id));
         holdTaskInput(row.childSessionId, true);
-        clearTimer(row.id);
-        clearRetryTimer(row.id);
-        await deps.taskControl.waitForInputBoundary(row.childSessionId);
+        if (!caller.groupAuthority) {
+          clearTimer(row.id);
+          clearRetryTimer(row.id);
+        }
       }
       try {
+        await deps.taskControl?.waitForInputBoundary(row.childSessionId);
         // A successful stop response means the active process has actually
         // accepted cancellation, not merely that the card changed color.
-        await controlDelegatedExecution(row, async () => { await caller.groupAuthority?.refresh(); await deps.abortSession(row.childSessionId!); });
+        await controlDelegatedExecution(row, async () => {
+          await caller.groupAuthority?.refresh();
+          admitted = true;
+          clearTimer(row.id);
+          clearRetryTimer(row.id);
+          await deps.abortSession(row.childSessionId!);
+        });
       } catch (error) {
-        if (error instanceof GroupToolAuthorizationError) throw error;
+        if (error instanceof GroupToolAuthorizationError) {
+          if (!admitted && deps.taskControl) {
+            // Rejected group control must not leave an independently running
+            // task cancelling. Undo only our intent, never a newer task state.
+            const [restored] = await db.update(botDelegations).set({ permissionSnapshotJson: row.permissionSnapshotJson })
+              .where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence),
+                eq(botDelegations.status, row.status), eq(botDelegations.permissionSnapshotJson, snapshot)))
+              .returning({ id: botDelegations.id });
+            if (restored) holdTaskInput(row.childSessionId, wasHeld);
+          }
+          throw error;
+        }
         log.warn('Session task stop was not accepted by the child runtime', {
           delegationId,
           childSessionId: row.childSessionId,
@@ -3625,8 +3646,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     holdTaskInput(row.childSessionId, true);
     const snapshot = JSON.stringify({ ...parseRecord(row.permissionSnapshotJson), taskPause: pause });
     let persisted = false;
+    let admitted = false;
+    const db = getDbClient().drizzle;
     try {
-      const [paused] = await getDbClient().drizzle.update(botDelegations).set({ permissionSnapshotJson: snapshot,
+      const [paused] = await db.update(botDelegations).set({ permissionSnapshotJson: snapshot,
         status: row.status === 'queued' ? 'queued' : 'waiting', updatedAt: now(),
       }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.permissionSnapshotJson, row.permissionSnapshotJson),
         inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])))
@@ -3642,6 +3665,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       let result: Awaited<ReturnType<typeof control.stop>> = { ok: true, status: 'no-active-turn' };
       const applied = await controlDelegatedExecution(row, async () => {
         await found.groupAuthority?.refresh();
+        admitted = true;
         result = (pending && pause.interactionOnly) || !control.isActive(row.childSessionId!)
           ? { ok: true, status: 'no-active-turn' }
           : await control.stop({ targetSessionId: row.childSessionId! });
@@ -3670,6 +3694,16 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     } catch (error) {
       if (error instanceof GroupToolAuthorizationError) {
         if (!persisted) holdTaskInput(row.childSessionId, wasHeld);
+        else if (!admitted) {
+          // No native stop was admitted. Restore the previous pause/hold rather
+          // than retaining a new pause created by an expired group execution.
+          const [restored] = await db.update(botDelegations).set({ permissionSnapshotJson: row.permissionSnapshotJson,
+            status: row.status, updatedAt: row.updatedAt,
+          }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.runSequence, row.runSequence),
+            eq(botDelegations.status, row.status === 'queued' ? 'queued' : 'waiting'),
+            eq(botDelegations.permissionSnapshotJson, snapshot))).returning({ id: botDelegations.id });
+          if (restored) holdTaskInput(row.childSessionId, wasHeld);
+        }
         throw error;
       }
       // A failed retry cannot release an already durable pause or its permission timer.

@@ -4467,12 +4467,64 @@ describe('Bot Session task end-to-end runtime', () => {
     try {
       const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture-only control task' });
       if (!task.ok) throw new Error(task.message);
+      const before = h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId);
       revoke = true;
       expect(await runtime.delegation.stopSessionTask('group-lane', task.delegationId, mode))
         .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
       expect(runtime.stopTurn).not.toHaveBeenCalled();
       expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+      expect(h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId)).toEqual(before);
     } finally { release(); runtime.dispose(); }
+  });
+
+  it.each((['pause', 'cancel'] as const).flatMap(mode =>
+    (['running', 'queued', 'paused'] as const).flatMap(state =>
+      (['intent-write', 'input-boundary'] as const).map(boundary => ({ mode, state, boundary })))))
+  ('restores $state task state when group $mode loses authority during $boundary', async ({ mode, state, boundary }) => {
+    await seedPair(); seedGroupLane();
+    vi.useFakeTimers();
+    let revoked = false;
+    let unavailable = state === 'queued';
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); } });
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => unavailable });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Keep independent work running.', timeoutMs: 10_000 });
+      if (!task.ok) throw new Error(task.message);
+      if (state === 'paused') await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      runtime.stopTurn.mockClear();
+      const before = h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId);
+      const cardBefore = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      if (boundary === 'intent-write') {
+        h.sqlite!.function('revoke_group_control', () => { queueMicrotask(() => { revoked = true; }); return 1; });
+        h.sqlite!.exec("CREATE TEMP TRIGGER revoke_control AFTER UPDATE OF permission_snapshot_json ON bot_delegations BEGIN SELECT revoke_group_control(); END");
+      } else {
+        runtime.waitForInputBoundary.mockImplementationOnce(async () => { revoked = true; });
+      }
+      expect(await runtime.delegation.stopSessionTask('group-lane', task.delegationId, mode))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_control');
+      expect(revoked).toBe(true);
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(state === 'paused');
+      expect(h.sqlite!.prepare('SELECT * FROM bot_delegations WHERE id=?').get(task.delegationId)).toEqual(before);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toEqual(cardBefore);
+      if (state === 'queued') {
+        unavailable = false;
+        runtime.advance(1_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(runtime.started.map(turn => turn.sessionId)).toContain(task.childSessionId);
+      }
+      runtime.advance(10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: state === 'paused' ? 'waiting' : 'timed-out' } });
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS revoke_control');
+      release(); runtime.dispose(); vi.useRealTimers();
+    }
   });
 
   it.each((['inspect', 'advance'] as const).flatMap(operation =>
