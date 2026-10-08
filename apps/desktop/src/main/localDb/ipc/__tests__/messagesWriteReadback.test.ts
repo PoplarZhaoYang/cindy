@@ -129,8 +129,8 @@ describe('message write paths avoid large-content readback', () => {
     vi.mocked(onMessageCreated).mockClear();
     vi.mocked(recordPrRefsForMessage).mockClear();
     const beforePublish = vi.fn(async () => {
-      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
-      expect(h.sqlite!.prepare('SELECT count(*) FROM messages WHERE rewind_at IS NULL').pluck().get()).toBe(0);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(0);
+      expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(1);
       expect(tapWindowBroadcast).not.toHaveBeenCalled();
       expect(h.mediaRefCalls).toEqual([]);
       expect(onMessageCreated).not.toHaveBeenCalled();
@@ -154,6 +154,7 @@ describe('message write paths avoid large-content readback', () => {
       expect(beforePublish).toHaveBeenCalledTimes(1);
       expect(h.sqlite!.prepare('SELECT count(*) FROM messages').pluck().get()).toBe(1);
     }
+    expect(h.sqlite!.prepare('SELECT count(*) FROM temp.cindy_pending_message_publications').pluck().get()).toBe(0);
   });
 
   describe('createMessage happy path', () => {

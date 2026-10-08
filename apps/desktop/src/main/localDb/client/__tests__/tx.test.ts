@@ -969,7 +969,7 @@ describe('db worker tx handlers', () => {
       const args = { id: 'staged', clientId: 'private', sessionId: 's1', role: 'assistant', content: 'private result',
         toolUseId: null, agentMeta: null, agentKind: null, createdAt: 100, guarded: false };
       await expect(client.tx('message.insert', { ...args, publication: 'stage' })).resolves.toEqual({ changes: 1 });
-      await expect(client.queryOne('SELECT COUNT(*) AS count FROM messages WHERE rewind_at IS NULL')).resolves.toEqual({ count: 0 });
+      await expect(client.queryOne('SELECT COUNT(*) AS count FROM messages')).resolves.toEqual({ count: 0 });
       await expect(client.queryOne("SELECT list_preview, list_message_count FROM sessions WHERE id='s1'"))
         .resolves.toEqual({ list_preview: 'keep', list_message_count: 7 });
       await expect(client.tx('message.insert', { ...args, publication: 'publish' })).resolves.toEqual({ changes: 1 });
@@ -978,6 +978,27 @@ describe('db worker tx handlers', () => {
       await expect(client.queryOne("SELECT list_preview, list_message_count FROM sessions WHERE id='s1'"))
         .resolves.toEqual({ list_preview: null, list_message_count: null });
       await expect(client.tx('message.insert', { ...args, publication: 'publish' })).resolves.toEqual({ changes: 0 });
+    }, { useInlineWorker });
+  });
+
+  it.each([false, true])('drops abandoned publication stages on worker restart without phantom history (inline=%s)', async useInlineWorker => {
+    await withClient(async (client, reopen) => {
+      await seedSession(client, 's1');
+      const args = { id: 'abandoned', clientId: 'private', sessionId: 's1', role: 'assistant', content: 'never published',
+        toolUseId: null, agentMeta: null, agentKind: null, createdAt: 100, guarded: false };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await client.tx('message.insert', { ...args, id: 'abandoned-' + attempt, publication: 'stage' });
+      }
+      await expect(client.queryOne('SELECT COUNT(*) AS count FROM messages')).resolves.toEqual({ count: 0 });
+      const restarted = await reopen();
+      await expect(restarted.queryOne('SELECT COUNT(*) AS count FROM messages')).resolves.toEqual({ count: 0 });
+      await expect(restarted.queryOne("SELECT COUNT(*) AS count FROM sqlite_temp_master WHERE name='cindy_pending_message_publications'"))
+        .resolves.toEqual({ count: 0 });
+      await expect(restarted.tx('message.insert', { ...args, id: 'abandoned-0', publication: 'publish' })).resolves.toEqual({ changes: 0 });
+      await restarted.tx('message.insert', { ...args, publication: 'stage' });
+      await expect(restarted.tx('message.insert', { ...args, publication: 'publish' })).resolves.toEqual({ changes: 1 });
+      await expect(restarted.queryOne('SELECT COUNT(*) AS count FROM messages')).resolves.toEqual({ count: 1 });
+      await expect(restarted.queryOne('SELECT COUNT(*) AS count FROM temp.cindy_pending_message_publications')).resolves.toEqual({ count: 0 });
     }, { useInlineWorker });
   });
 
@@ -3623,7 +3644,7 @@ describe('db worker tx handlers', () => {
 });
 
 async function withClient(
-  fn: (client: DbClient) => Promise<void>,
+  fn: (client: DbClient, reopen: () => Promise<DbClient>) => Promise<void>,
   opts: { useInlineWorker?: boolean; authorityProjection?: boolean } = {},
 ): Promise<void> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-tx-'));
@@ -3650,7 +3671,15 @@ async function withClient(
       betterSqliteModulePath: require.resolve('better-sqlite3'),
       ...(opts.useInlineWorker ? { useInlineWorker: true } : { workerScriptPath }),
     });
-    await fn(client);
+    await fn(client, async () => {
+      await client!.dispose();
+      client = await createDbClient({
+        userId: 'test-user', dbPath, drizzleDir,
+        betterSqliteModulePath: require.resolve('better-sqlite3'),
+        ...(opts.useInlineWorker ? { useInlineWorker: true } : { workerScriptPath }),
+      });
+      return client;
+    });
   } finally {
     if (client) {
       await client.dispose();

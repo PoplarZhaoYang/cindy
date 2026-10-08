@@ -1578,7 +1578,7 @@ export async function createMessage(
      * final "is this still current?" check is actually meaningful.
      */
     shouldBroadcast?: () => boolean;
-    /** Host-only admission guard, after hidden persistence and before publication.
+    /** Host-only admission guard, after connection-local staging and before publication.
      * Failed guards remove only this call's hidden row, before any side effects. */
     beforePublish?: () => Promise<void>;
     /**
@@ -1629,20 +1629,20 @@ export async function createMessage(
       ? Math.max(body.createdAt ?? now, expected + 1)
       : (body.createdAt ?? now);
   const insertRow = messageCreateToRow(id, sessionId, body, visibleCreatedAt);
+  const insertArgs = {
+    id: insertRow.id,
+    clientId: insertRow.clientId,
+    sessionId,
+    role: insertRow.role,
+    content: insertRow.content,
+    toolUseId: insertRow.toolUseId ?? null,
+    agentMeta: insertRow.agentMeta ?? null,
+    agentKind: insertRow.agentKind ?? null,
+    createdAt: insertRow.createdAt,
+    guarded,
+    expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
+  };
   try {
-    const insertArgs = {
-      id: insertRow.id,
-      clientId: insertRow.clientId,
-      sessionId,
-      role: insertRow.role,
-      content: insertRow.content,
-      toolUseId: insertRow.toolUseId ?? null,
-      agentMeta: insertRow.agentMeta ?? null,
-      agentKind: insertRow.agentKind ?? null,
-      createdAt: insertRow.createdAt,
-      guarded,
-      expectedClearBoundaryMs: guarded ? (expected ?? null) : undefined,
-    };
     const inserted = await dbClient.tx('message.insert', { ...insertArgs,
       ...(opts?.beforePublish ? { publication: 'stage' as const } : {}),
     });
@@ -1683,8 +1683,7 @@ export async function createMessage(
     }
   } catch (err) {
     if (opts?.beforePublish) {
-      await db.delete(messages).where(and(eq(messages.id, id), eq(messages.sessionId, sessionId),
-        eq(messages.clientId, `pending-publication:${id}`), eq(messages.rewindAt, visibleCreatedAt)));
+      await dbClient.tx('message.insert', { ...insertArgs, publication: 'discard' });
       throw err;
     }
     const after = await db
