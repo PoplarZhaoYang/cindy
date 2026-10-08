@@ -87,6 +87,13 @@ const h = vi.hoisted(() => {
   };
 });
 
+// 账号快照: 同一引用 = 账号没变(新任务从入口起按它复核账号代次)。测试可换引用模拟换账号。
+const dbAccount = vi.hoisted(() => ({ current: {} as object }));
+vi.mock('../../localDb/client/current', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../localDb/client/current')>()),
+  getCurrentDbClientSnapshot: () => dbAccount.current,
+}));
+
 // 新任务经公共入口 openSession(模型准入)—— 准入本身由 sessionOpening 的测试覆盖, 这里
 // 只把准入前的路由原样透传给建行回调。
 vi.mock('../../localDb/sessionOpening.js', () => ({
@@ -618,6 +625,19 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.createMessage).not.toHaveBeenCalled();
     expect(h.calls).toEqual(expect.arrayContaining(['touch:sess-new', 'created:sess-new']));
     expect(h.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('createOnly 建行后换了账号: 报失败, 不把补写落进新账号的库、不广播', async () => {
+    h.createSessionRow.mockImplementationOnce(async () => {
+      dbAccount.current = {};
+    });
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(baseReq({ createOnly: true }));
+
+    expect(outcome.status).toBe('error');
+    expect(h.touchUserSendInDb).not.toHaveBeenCalled();
+    expect(h.calls).not.toContain('created:sess-new');
   });
 
   it('新任务经 openSession 准入: 首条消息与 /new 都用准入后的路由建任务', async () => {

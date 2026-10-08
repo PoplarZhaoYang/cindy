@@ -512,6 +512,15 @@ export function createMakerHookSessionRunner(deps: {
       // 新任务的账号代次从读取偏好 / 默认配置之前算起(与个人 IM 同一判据): 中途换账号时
       // 不拿旧账号读到的配置去新账号的库里建任务。
       const assertAccount = req.isNew ? captureChannelAccount() : undefined;
+      /** 新任务建行后的补写(来源、发送时间、worktree)同样只写入口账号的库。 */
+      const accountStillCurrent = (): boolean => {
+        try {
+          assertAccount?.();
+          return true;
+        } catch {
+          return false;
+        }
+      };
 
       // 新建: 按「偏好 > 草稿默认」合成; 复用/接管: session meta 权威, 下方覆盖
       const resolved = req.isNew
@@ -705,20 +714,29 @@ export function createMakerHookSessionRunner(deps: {
             },
             assertAccount,
           );
+          // 建行之后的补写同样按入口账号复核: 中途换了账号就报失败, 不把补写落进新账号的库,
+          // 也不向服务端谎报创建成功。
           if (admittedProviderId) {
+            assertAccount?.();
             setSessionProvider(req.sessionId, admittedProviderId);
             await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
           if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+            assertAccount?.();
             await setSessionSourceInDb(req.sessionId, req.source.im);
           }
+          assertAccount?.();
           await touchUserSendInDb(req.sessionId).catch((err) => {
             log.warn(
               `hook create-only touchUserSend failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           });
           const wtMeta = worktreeStore.get(req.sessionId);
-          if (wtMeta) await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          if (wtMeta) {
+            assertAccount?.();
+            await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          }
+          assertAccount?.();
           broadcastSessionCreated(req.sessionId);
           return {
             status: 'ok',
@@ -906,7 +924,8 @@ export function createMakerHookSessionRunner(deps: {
         pendingInteractionNotices.clear();
       };
       // 新建会话广播 -> 侧边栏实时出现(复用/接管的会话本来就在列表里, 不用发)
-      if (req.isNew) {
+      // 换了账号就不再补写(会落进新账号的库); 这一轮的出站本就按账号代次作废。
+      if (req.isNew && accountStillCurrent()) {
         // hook 会话由用户消息(Slack / Telegram DM、群组或 topic)触发创建,
         // 与 IM 同语义(53b999601):
         // 广播前先落 userSendAt, 否则 renderer 重拉到 userSendAt=null && 0 消息的行
@@ -931,7 +950,7 @@ export function createMakerHookSessionRunner(deps: {
       // worktree 场景补写 sessions.worktree_path(同 send_to_session 做法):
       // prepareHandoffWorktree 时 session 行不存在, worktreeStore.set 的 DB
       // 同步落空; session 行建好后补一次, 失败非致命(store 是 source of truth)。
-      if (req.isNew) {
+      if (req.isNew && accountStillCurrent()) {
         const wtMeta = worktreeStore.get(session.id);
         if (wtMeta) {
           void setWorktreePathInDb(session.id, wtMeta.path);

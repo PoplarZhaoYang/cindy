@@ -88,7 +88,7 @@ Telegram / Slack / X）是同一件事的两套实现：把渠道里的一条消
     `subscribeUiTurnDispatching` 必须能按 clientId 认出它（否则会误撤续跑）。
 11. **一轮绑定入口时的账号**：新建任务从**读取**旧任务 / 默认配置之前捕获账号
     （`captureChannelAccount`，先 prepare 再建的沿用 prepare 时捕获的），经
-    `openChannelSession` 带进 `openSession`，准入前后与写库前都复核；一轮的出站 msg.op
+    `openChannelSession` 带进 `openSession`，准入前后与写库前都复核，建行之后的补写（来源、发送时间、worktree）也不例外；一轮的出站 msg.op
     （进度、终稿、卡片、旧卡片帧）只经所属账号代次的连接发出，换账号后视同离线。
 
 ## 4. 状态模型（一轮）
