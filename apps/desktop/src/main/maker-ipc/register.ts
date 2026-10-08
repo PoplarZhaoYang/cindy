@@ -8208,7 +8208,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     markOrcaRoleIfNeeded,
     markKnownNonOrcaIfApplicable,
-    persistPlanMode: (sessionId, enabled) => persistSessionFields(sessionId, { planModeEnabled: enabled }),
     allocateDialogueWorkspace: ensureDialogueWorkspaceDir,
     createSessionId: createId,
     now: Date.now,

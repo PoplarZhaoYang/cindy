@@ -5110,6 +5110,7 @@ export function NewMakerDraftRoute() {
       draftInitialEffort,
       chatInitialPermissionMode,
       effectiveFastMode,
+      effectivePlanMode,
       effectiveRemoteHostId,
       effectiveExtraDirs,
       chatInitialProviderId,

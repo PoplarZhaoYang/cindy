@@ -426,6 +426,18 @@ describe('Shared create project picker', () => {
     expect(branchHandler).toContain('setWtBranchPreferenceError(true);');
   });
 
+  it('refreshes both creation callbacks when the remote plan selection changes', () => {
+    for (const handler of ['handleSend', 'handleCreateGoal']) {
+      const start = newMakerDraftRouteSource.indexOf(`const ${handler} = useCallback(`);
+      expect(start).toBeGreaterThan(-1);
+      const end = newMakerDraftRouteSource.indexOf('\n  );', start);
+      const callback = newMakerDraftRouteSource.slice(start, end);
+      const dependencies = callback.slice(callback.lastIndexOf('\n    ['));
+      expect(callback).toContain('planModeEnabled: effectivePlanMode');
+      expect(dependencies).toMatch(/\beffectivePlanMode\s*,/);
+    }
+  });
+
   it('creates managed worktrees before starting either local or device-link goals', () => {
     const goal = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const handleCreateGoal = useCallback('),
