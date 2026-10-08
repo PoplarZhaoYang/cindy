@@ -24,8 +24,8 @@ import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind } from '@cindy/maker-core';
-import { createBotCapabilityService, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
-import { registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
+import { createBotCapabilityService, type BotCapabilityServiceDeps, type BotCapabilityUpdate } from '../../../maker-ipc/botCapabilityService';
+import { GroupToolAuthorizationError, registerGroupToolAuthority } from '../../../maker-ipc/botGroupToolAuthorization';
 import { buildBotMcpCatalog } from '../../../maker-host/botMcpCatalog';
 import { CustomMcpProvider } from '../../../mcp-integrations/custom-mcp-provider';
 import type { McpProvider } from '@cindy/maker-core';
@@ -4254,6 +4254,66 @@ describe('Bot Session task end-to-end runtime', () => {
       } finally { releaseOwner(); }
     } finally { release(); }
   });
+
+  it.each(['skill', 'mcp', 'toolset', 'models', 'profile', 'own-skills'] as const)(
+    'revalidates server authority after reading %s even while the local execution remains current', async surface => {
+      await seedPair(); seedGroupLane();
+      let serverAuthorized = true;
+      let revokeDuringRead = false;
+      const readFinished = vi.fn(() => { if (revokeDuringRead) serverAuthorized = false; });
+      const validate = vi.fn(async () => { if (!serverAuthorized) throw new GroupToolAuthorizationError(); });
+      const release = registerGroupToolAuthority('group-lane', {
+        botId: 'bot-a', mode: surface === 'profile' || surface === 'own-skills' ? 'tools' : 'owner',
+        isCurrent: () => true, validate,
+      });
+      const afterRead = async <T,>(read: () => Promise<T>): Promise<T> => {
+        const result = await read();
+        readFinished();
+        return result;
+      };
+      const deps: BotCapabilityServiceDeps = { ...capabilityDeps };
+      const restore: Array<() => void> = [];
+      if (surface === 'skill') deps.getMaker = () => ({
+        listAgentSkills: (...args) => afterRead(() => getMaker().listAgentSkills(...args)),
+      });
+      if (surface === 'mcp') deps.listMcpServers = input => afterRead(() => capabilityDeps.listMcpServers(input));
+      if (surface === 'toolset') deps.getPluginRegistry = () => ({
+        getPlugins: () => getPluginRegistry().getPlugins(),
+        getEnableState: (...args) => afterRead(() => getPluginRegistry().getEnableState(...args)),
+      });
+      if (surface === 'models') {
+        h.listProviders.mockImplementation(async () => afterRead(async () => h.providers));
+        restore.push(() => h.listProviders.mockImplementation(async () => h.providers));
+      }
+      if (surface === 'profile') {
+        const settings = await import('../../../maker-host/bot-model-chain-settings-store.js');
+        const read = settings.readEffectiveBotModelChain;
+        const spy = vi.spyOn(settings, 'readEffectiveBotModelChain').mockImplementation((...args) => afterRead(() => read(...args)));
+        restore.push(() => spy.mockRestore());
+      }
+      if (surface === 'own-skills') {
+        const index = await import('../../../maker-ipc/botSkillQueryIndex.js');
+        const read = index.queryBotSkillIndex;
+        const spy = vi.spyOn(index, 'queryBotSkillIndex').mockImplementation((...args) => afterRead(() => read(...args)));
+        restore.push(() => spy.mockRestore());
+      }
+      const service = createBotCapabilityService(deps);
+      const read = () => surface === 'models' ? service.models({ callerSessionId: 'group-lane' })
+        : surface === 'profile' ? service.inspect({ callerSessionId: 'group-lane' })
+        : surface === 'own-skills' ? listBotSkillsForSession({ callerSessionId: 'group-lane' })
+        : service.list({ callerSessionId: 'group-lane', kind: surface });
+      try {
+        expect(await read()).toMatchObject({ ok: true });
+        expect(readFinished).toHaveBeenCalled();
+        expect(validate).toHaveBeenCalledTimes(2);
+        readFinished.mockClear(); validate.mockClear();
+        revokeDuringRead = true;
+        expect(await read()).toEqual({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED', message: expect.any(String) });
+        expect(readFinished).toHaveBeenCalled();
+        expect(validate).toHaveBeenCalledTimes(2);
+      } finally { release(); for (const reset of restore) reset(); }
+    },
+  );
 
   it.each(['delete-first', 'message-first'])('serializes shared-history writes and deletion (%s)', async (order) => {
     await seedPair();

@@ -66,7 +66,7 @@ export interface BotSkillServiceDeps {
   ownerBoundaryPending?: () => boolean;
   requestRefresh?: typeof requestBotRuntimeEpochRefresh;
   resolveBotId?: (callerSessionId: string) => Promise<
-    | { ok: true; botId: string; canonicalSessionId?: string | null }
+    | { ok: true; botId: string; canonicalSessionId?: string | null; refresh?: () => Promise<void> }
     | { ok: false; errorCode: string; message: string }
   >;
 }
@@ -125,7 +125,7 @@ async function skillHomeOf(
 }
 
 async function defaultResolveBotId(callerSessionId: string, readOnly = false): Promise<
-  { ok: true; botId: string; canonicalSessionId: string | null; assertCurrent?: () => void } | { ok: false; errorCode: string; message: string }
+  { ok: true; botId: string; canonicalSessionId: string | null; refresh?: () => Promise<void> } | { ok: false; errorCode: string; message: string }
 > {
   const db = getDbClient().drizzle;
   const [row] = await db
@@ -238,7 +238,8 @@ export async function listBotSkillsForSession(
     assertOwnerBoundary(deps, boundary);
     const result = await queryBotSkillIndex(botSkillRootDir(home, owner.botId), home, owner.botId, params);
     assertOwnerBoundary(deps, boundary);
-    if ('assertCurrent' in owner) (owner.assertCurrent as (() => void) | undefined)?.();
+    await owner.refresh?.();
+    assertOwnerBoundary(deps, boundary);
     return { ok: true, ...result };
   } catch (cause) {
     return storeError(cause);

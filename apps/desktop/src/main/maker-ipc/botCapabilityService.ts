@@ -103,6 +103,10 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean; 
       : {};
   return { ...row, config: normalizeBotToolCapabilities(config), assertOwner: () => {
     assertOwner(); groupAuthority?.assertCurrent();
+  }, refresh: async () => {
+    assertOwner();
+    await groupAuthority?.refresh();
+    assertOwner();
   } };
 }
 
@@ -184,6 +188,7 @@ async function findBotCapabilities(input: Input & { query?: string }, deps: BotC
       (item) =>
         !query || `${item.id} ${item.name} ${item.description}`.toLocaleLowerCase().includes(query),
     );
+    await ctx.refresh();
     return { ok: true as const, capabilities: capabilities.slice(0, 50) };
   } catch (error) {
     if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
@@ -245,7 +250,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       try {
         const ctx = await context(input.callerSessionId, { readScope: 'owner' });
         const selection = await inspectAppDefaultModel();
-        ctx.assertOwner();
+        await ctx.refresh();
         return { ok: true as const, ...selection };
       } catch (error) {
         if (error instanceof GroupToolAuthorizationError) return { ok: false as const, errorCode: error.code, message: error.message };
@@ -267,7 +272,7 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
       try {
         const ctx = await context(input.callerSessionId, { readScope: 'self' });
         const candidates = await readEffectiveBotModelChain(ctx.config);
-        ctx.assertOwner();
+        await ctx.refresh();
         const state: BotControlState = {
           profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
             identitySource: ctx.identitySource, version: ctx.version },
