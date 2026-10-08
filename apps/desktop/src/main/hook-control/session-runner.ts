@@ -1239,6 +1239,10 @@ export function createMakerHookSessionRunner(deps: {
           ? (prependNoteToWireUserMessage(withPlanReconcile, goalInactiveNote) as UserMessage)
           : withPlanReconcile;
         const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
+        // 新任务从入口起绑定账号: 建行后的补写、附件与上下文准备期间换了账号, 就终止这次
+        // 派发(下面的 catch 统一收尾并回失败), 不让迟到的 send 在 teardown 之后重新启动
+        // 旧账号的请求。
+        assertAccount?.();
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
