@@ -4131,6 +4131,82 @@ describe('Bot Session task end-to-end runtime', () => {
       } finally { release(); runtime.dispose(); }
     });
 
+  it.each(['missing', 'deleted'] as const)('repairs a %s canonical chat for group private messages and independent tasks', async state => {
+    await seedPair(); seedGroupLane();
+    if (state === 'missing') {
+      h.sqlite!.pragma('foreign_keys = OFF');
+      h.sqlite!.prepare("DELETE FROM sessions WHERE id='session-1'").run();
+      h.sqlite!.pragma('foreign_keys = ON');
+    } else h.sqlite!.prepare("UPDATE sessions SET status='deleted' WHERE id='session-1'").run();
+    const release = registerGroupToolAuthority('group-lane', {
+      botId: 'bot-a', mode: 'owner', sourceGroup: { groupId: 'fixture' }, isCurrent: () => true, validate: async () => {},
+    });
+    const runtime = createDelegationRuntime();
+    const direct = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    try {
+      const sent = await direct.sendToUser({ callerSessionId: 'group-lane', message: 'Recovered private chat', idempotencyKey: 'recovery-fixture' });
+      expect(sent).toMatchObject({ ok: true, delivered: true });
+      if (!sent.ok) throw new Error(sent.message);
+      expect(sent.targetSessionId).not.toBe('session-1');
+      expect(h.sqlite!.prepare('SELECT role,session_id FROM messages WHERE id=?').get(sent.messageId))
+        .toEqual({ role: 'assistant', session_id: sent.targetSessionId });
+      expect(runtime.dispatch).not.toHaveBeenCalled();
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture task after private-chat recovery' });
+      expect(task).toMatchObject({ ok: true, completionDestination: 'teammate-private-chat' });
+      if (!task.ok) throw new Error(task.message);
+      expect(h.sqlite!.prepare('SELECT parent_session_id FROM bot_delegations WHERE id=?').get(task.delegationId))
+        .toEqual({ parent_session_id: sent.targetSessionId });
+      expect(await direct.sendToUser({ callerSessionId: 'group-lane', message: 'Recovered private chat', idempotencyKey: 'recovery-fixture' }))
+        .toMatchObject({ ok: true, messageId: sent.messageId, targetSessionId: sent.targetSessionId });
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each(['healthy', 'missing'] as const)('keeps or repairs the %s owner chat when group work is the first entry', async state => {
+    await seedPair(); seedGroupLane();
+    if (state === 'missing') {
+      h.sqlite!.pragma('foreign_keys = OFF');
+      h.sqlite!.prepare("DELETE FROM sessions WHERE id='session-1'").run();
+      h.sqlite!.pragma('foreign_keys = ON');
+    }
+    const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });
+    const runtime = createDelegationRuntime();
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Fixture task as first recovery entry' });
+      expect(task).toMatchObject({ ok: true });
+      if (!task.ok) throw new Error(task.message);
+      const parent = h.sqlite!.prepare('SELECT parent_session_id FROM bot_delegations WHERE id=?').pluck().get(task.delegationId);
+      if (state === 'healthy') expect(parent).toBe('session-1');
+      else expect(parent).not.toBe('session-1');
+      expect(h.sqlite!.prepare("SELECT session_id FROM bot_session_links WHERE bot_id='bot-a' AND role='canonical' AND archived_at IS NULL").all())
+        .toEqual([{ session_id: parent }]);
+    } finally { release(); runtime.dispose(); }
+  });
+
+  it.each([['private-message', 'revoked'], ['independent-task', 'revoked'], ['private-message', 'account'], ['independent-task', 'account']] as const)('does not deliver %s after %s during canonical recovery', async (operation, interruption) => {
+    await seedPair(); seedGroupLane();
+    h.sqlite!.pragma('foreign_keys = OFF');
+    h.sqlite!.prepare("DELETE FROM sessions WHERE id='session-1'").run();
+    h.sqlite!.pragma('foreign_keys = ON');
+    let revoked = false;
+    h.ensureGit.mockImplementationOnce(async () => { revoked = true; if (interruption === 'account') h.ownerScopeKey = 'owner-b:2'; });
+    const release = registerGroupToolAuthority('group-lane', {
+      botId: 'bot-a', mode: 'owner', sourceGroup: { groupId: 'fixture' }, isCurrent: () => h.ownerScopeKey === 'owner-a:1',
+      validate: async () => { if (revoked) throw new GroupToolAuthorizationError(); },
+    });
+    const runtime = createDelegationRuntime();
+    const direct = createBotDirectMessageService({ dispatch: runtime.dispatch, ensureCanonicalSession: runtime.delegation.ensureCanonicalSession });
+    try {
+      const result = operation === 'private-message'
+        ? await direct.sendToUser({ callerSessionId: 'group-lane', message: 'Must not deliver', idempotencyKey: 'revoke-fixture' })
+        : await runtime.delegation.startSessionTask({ callerSessionId: 'group-lane', objective: 'Must not start' });
+      expect(revoked).toBe(true);
+      expect(result).toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+      expect(runtime.dispatch).not.toHaveBeenCalled();
+      expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM bot_delegations').get()).toEqual({ count: 0 });
+      expect(h.sqlite!.prepare("SELECT COUNT(*) AS count FROM messages WHERE client_id LIKE 'bot-group-private:%'").get()).toEqual({ count: 0 });
+    } finally { release(); runtime.dispose(); }
+  });
+
   it('rejects revoked group authority after asynchronous worktree preparation, before any task exists', async () => {
     await seedPair(); seedGroupLane();
     const release = registerGroupToolAuthority('group-lane', { botId: 'bot-a', mode: 'owner', isCurrent: () => true, validate: async () => {} });

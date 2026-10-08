@@ -708,7 +708,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const ensureTargetCanonicalSession = async (target: {
     id: string;
     currentVersion: number;
-  }): Promise<BotDelegationResult<{ sessionId: string }>> => {
+  }, beforeRecovery?: () => Promise<void>): Promise<BotDelegationResult<{ sessionId: string }>> => {
     const db = getDbClient().drizzle;
     const registered = await resolveBotCanonicalSession(target.id);
     let expectedCanonicalSessionId = registered.status === 'resolved'
@@ -735,16 +735,20 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         ) {
           return { ok: true, sessionId: expectedCanonicalSessionId };
         }
+        await beforeRecovery?.();
         const replacement = await createBotCanonicalSession({
           botId: target.id,
+          // This is an authoritative link CAS, including a dangling link. The
+          // mirror-only recovery mode would incorrectly compare it against null.
+          // The shared transaction still refuses to replace a healthy Session.
           expectedCanonicalSessionId,
           expectedProfileVersion: target.currentVersion,
-          recoverMissingOnly: current === undefined,
         });
         if (replacement.created) deps.broadcastSessionCreated?.(replacement.canonicalSessionId);
         expectedCanonicalSessionId = replacement.canonicalSessionId;
         continue;
       }
+      await beforeRecovery?.();
       const created = await createBotCanonicalSession({
         botId: target.id,
         expectedCanonicalSessionId: null,
@@ -758,6 +762,19 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       errorCode: 'TARGET_CANONICAL_UNAVAILABLE',
       message: '目标伙伴的主任务正在变化，请稍后重试发送',
     };
+  };
+
+  const ensureCanonicalSession = async (botId: string, beforeRecovery?: () => Promise<void>) => {
+    const [profile] = await getDbClient().drizzle
+      .select({ id: botProfiles.id, currentVersion: botProfiles.currentVersion, status: botProfiles.status })
+      .from(botProfiles)
+      .where(eq(botProfiles.id, botId))
+      .limit(1);
+    if (!profile || profile.status !== 'active') {
+      return { ok: false as const, errorCode: 'TARGET_BOT_INACTIVE', message: '目标伙伴已暂停或归档' };
+    }
+    await beforeRecovery?.();
+    return ensureTargetCanonicalSession({ id: profile.id, currentVersion: profile.currentVersion }, beforeRecovery);
   };
 
   /**
@@ -2134,8 +2151,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     // The execution caller remains the group lane. Only its owner may create
     // independent work, whose durable cards/decisions return to that owner's
     // existing teammate chat rather than the hidden, short-lived group lane.
-    const parentSessionId = input.caller.role === 'group'
-      ? await requesterLiveSessionId(input.caller.botId, null) : input.callerSessionId;
+    let parentSessionId = input.callerSessionId;
+    if (input.caller.role === 'group') {
+      await input.caller.groupAuthority?.refresh();
+      const ensured = await ensureCanonicalSession(input.caller.botId, input.caller.groupAuthority?.refresh)
+        .finally(() => input.caller.groupAuthority?.refresh());
+      if (!ensured.ok) return ensured;
+      // Resolve the authoritative link again rather than trusting a stale recovery result.
+      parentSessionId = await requesterLiveSessionId(input.caller.botId, null) ?? '';
+    }
     if (!parentSessionId) return { ok: false, errorCode: 'TARGET_CANONICAL_UNAVAILABLE',
       message: new GroupToolAuthorizationError().message };
     const delegationId = createId();
@@ -4071,17 +4095,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   };
   return {
     startSessionTask: expose(startSessionTask),
-    ensureCanonicalSession: async (botId: string) => {
-      const [profile] = await getDbClient().drizzle
-        .select({ id: botProfiles.id, currentVersion: botProfiles.currentVersion, status: botProfiles.status })
-        .from(botProfiles)
-        .where(eq(botProfiles.id, botId))
-        .limit(1);
-      if (!profile || profile.status !== 'active') {
-        return { ok: false as const, errorCode: 'TARGET_BOT_INACTIVE', message: '目标伙伴已暂停或归档' };
-      }
-      return ensureTargetCanonicalSession({ id: profile.id, currentVersion: profile.currentVersion });
-    },
+    ensureCanonicalSession,
     listDelegations,
     getSessionTask: expose(getSessionTask),
     inspectSessionTaskRoute: expose(inspectSessionTaskRoute),

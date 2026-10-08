@@ -112,6 +112,7 @@ export interface BotDirectMessageServiceDeps {
   /** Reuses the canonical-session ensure path for newly-created/recovering Bots. */
   ensureCanonicalSession?: (
     botId: string,
+    beforeRecovery?: () => Promise<void>,
   ) => Promise<{ ok: true; sessionId: string } | { ok: false; errorCode: string; message: string }>;
   /** True only when the durable input queue already owns this delivery. */
   hasQueuedDelivery?: (sessionId: string, clientId: string) => Promise<boolean>;
@@ -1084,6 +1085,17 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
       const message = input.message.trim();
       if (!message || message.length > MAX_MESSAGE_CHARS || !/^[\w-]{8,100}$/.test(input.idempotencyKey))
         return { ok: false as const, errorCode: 'INVALID_ARGS', message: t('groupTools.invalidMessage') };
+      if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+        return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
+      // Use the same recovery as peer messages before taking the delivery lock.
+      // Recovery may await profile/Session preparation, so it cannot authorize delivery.
+      if (deps.ensureCanonicalSession) {
+        await authority.refresh();
+        const ensured = await deps.ensureCanonicalSession(caller.botId, authority.refresh).finally(() => authority.refresh());
+        if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
+          return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
+        if (!ensured.ok) return { ...ensured, message: t('groupTools.privateUnavailable') };
+      }
       return await withBotProfileLocks([caller.botId], async () => {
         const current = await loadCaller(input.callerSessionId);
         const target = await loadTargetCanonicalSession(caller.botId);
