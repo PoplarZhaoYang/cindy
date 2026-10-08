@@ -500,11 +500,12 @@ export class GoalController {
     const entrySession = this.deps.getSession(sessionId);
     const entryGeneration = entrySession?.getTurnGeneration?.();
     if (
-      !entryBoundary && entrySession && entryGeneration != null && entryGeneration > 0
+      (!entryBoundary || entryBoundary.cancelled) && entrySession && entryGeneration != null && entryGeneration > 0
       && this.isBusy(sessionId)
     ) {
       // 必须在首次 await 前记住身份，不能把落库期间新开始的一轮也当作旧轮。
-      entryBoundary = freshTurn();
+      // 无目标时的 Stop 也会留下 cancelled owner；保留其取消状态和未完成写入。
+      entryBoundary ??= freshTurn();
       entryBoundary.precedingTurn = { session: entrySession, generation: entryGeneration };
       this.turns.set(sessionId, entryBoundary);
     }
@@ -548,6 +549,7 @@ export class GoalController {
         entryBoundary.pendingPersistence,
         entryBoundary.pendingCompletion,
       );
+      takeoverBoundary.precedingTurn = entryBoundary.precedingTurn;
       this.stopSession(sessionId);
       this.turns.set(sessionId, takeoverBoundary);
       await this.awaitPendingLifecycle(takeoverBoundary);

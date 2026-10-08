@@ -1958,7 +1958,8 @@ describe('GoalController', () => {
     expect(h.userMessages.filter((m) => m.content === 'think about it').length).toBe(1);
   });
 
-  it('starts the first Goal turn after the pre-existing user turn finishes, without counting its output', async () => {
+  it.each([false, true])('waits for the pre-existing user turn without counting its output (previous Stop: %s)', async (previousStop) => {
+    if (previousStop) await h.controller.pauseGoal('s1');
     h.session.generation = 7;
     h.session.running = true;
     await startGoal(h);
@@ -1991,8 +1992,42 @@ describe('GoalController', () => {
     await h.controller.dispose();
   });
 
+  it.each([false, true])('preserves pending clear before creating a Goal (Stop again: %s)', async (stopAgain) => {
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => { releaseClear = resolve; });
+    const clear = h.storage.clear.bind(h.storage);
+    const clearSpy = vi.spyOn(h.storage, 'clear').mockImplementation(async (sessionId) => {
+      await blockedClear;
+      await clear(sessionId);
+    });
+    const clearing = h.controller.clearGoal('s1');
+    await vi.waitFor(() => expect(clearSpy).toHaveBeenCalledOnce());
+    h.session.generation = 7;
+    h.session.running = true;
+    const upsertSpy = vi.spyOn(h.storage, 'upsert');
+    const creating = startGoal(h);
+    await tick();
+    expect(upsertSpy).not.toHaveBeenCalled();
+    const stopping = stopAgain ? h.controller.pauseGoal('s1') : Promise.resolve();
+    releaseClear();
+    await Promise.all([clearing, creating, stopping]);
+    h.session.running = false;
+    h.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    if (stopAgain) {
+      await tick();
+      expect(upsertSpy).not.toHaveBeenCalled();
+      expect(await h.storage.get('s1')).toBeNull();
+      expect(h.session.sends).toHaveLength(0);
+    } else {
+      await vi.waitFor(() => expect(h.session.sends).toHaveLength(1));
+      expect(await h.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    }
+    await h.controller.dispose();
+  });
+
   it.each(['pause', 'clear', 'dispose'] as const)(
     'does not start a Goal after %s while the pre-existing turn is running', async (action) => {
+      await h.controller.pauseGoal('s1');
       h.session.generation = 7;
       h.session.running = true;
       await startGoal(h);
@@ -2011,6 +2046,7 @@ describe('GoalController', () => {
 
   it.each(['same-turn steer', 'new turn'] as const)(
     'still pauses for a new user message after Goal creation (%s)', async (delivery) => {
+      await h.controller.pauseGoal('s1');
       h.session.generation = 7;
       h.session.running = true;
       await startGoal(h);
@@ -2778,6 +2814,8 @@ describe('GoalController', () => {
     });
     await vi.waitFor(() => expect(clearCalls).toBe(1));
     await local.controller.pauseGoal('s1');
+    local.session.generation = 7;
+    local.session.running = true;
 
     let replacementSettled = false;
     const replacement = local.controller.setGoal({
@@ -2802,6 +2840,12 @@ describe('GoalController', () => {
       status: 'active',
       objective: 'replacement objective',
     });
+    expect(local.session.sends).toHaveLength(1);
+    local.session.running = false;
+    local.session.emit({ type: 'done', data: {}, sessionTurnGeneration: 7 });
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(2));
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'active', turnsUsed: 0 });
+    await local.controller.dispose();
   });
 
   it('resumeGoal resumes a paused goal: preserves counters, fires a continuation', async () => {
