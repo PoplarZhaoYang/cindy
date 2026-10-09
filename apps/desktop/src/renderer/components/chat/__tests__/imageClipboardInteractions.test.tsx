@@ -37,6 +37,13 @@ beforeEach(() => {
   save.mockResolvedValue({ canceled: false });
   open.mockResolvedValue(undefined);
   webCopy.mockRejectedValue(new Error('Document is not focused'));
+  vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+  vi.stubGlobal(
+    'ClipboardItem',
+    class {
+      constructor(readonly items: Record<string, Blob>) {}
+    },
+  );
   vi.stubGlobal('electronAPI', {
     copyMediaToClipboard: fileCopy,
     copyPngToClipboard: nativeCopy,
