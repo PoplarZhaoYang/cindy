@@ -274,7 +274,10 @@ describe('feishu outbound lane routing', () => {
     });
 
     await expect(outbound.resolveReplyMessage('om_parent_image', 'oc_group1')).resolves.toEqual({
-      replyContext: { author: 'Alice', text: '[图片]' },
+      replyContext: {
+        author: 'Alice', text: '[图片]',
+        unavailableAttachments: ['引用图片：仅提供原消息记录，未下载文件内容'],
+      },
     });
   });
 
