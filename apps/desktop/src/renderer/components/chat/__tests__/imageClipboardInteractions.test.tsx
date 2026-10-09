@@ -200,6 +200,41 @@ describe('shared production image interactions', () => {
     },
   );
 
+  it('burns local image annotations before copying the PNG instead of the source file', async () => {
+    const ctx = {
+      drawImage: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+    };
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(
+      ctx as unknown as CanvasRenderingContext2D,
+    );
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(200);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(100);
+    render(
+      <ImageLightbox
+        src={managed}
+        initialStrokes={[{ points: [{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.5 }] }]}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: label('chat.media.copyImage') }));
+    await waitFor(() => expect(nativeCopy).toHaveBeenCalledTimes(1));
+    expect(readBytes).toHaveBeenCalledWith({ url: managed });
+    expect(ctx.drawImage).toHaveBeenCalled();
+    expect(ctx.moveTo).toHaveBeenCalledWith(20, 20);
+    expect(ctx.lineTo).toHaveBeenCalledWith(100, 50);
+    expect(ctx.stroke).toHaveBeenCalledTimes(2);
+    expect(ctx.stroke.mock.invocationCallOrder[1]).toBeLessThan(
+      nativeCopy.mock.invocationCallOrder[0],
+    );
+    expect(fileCopy).not.toHaveBeenCalled();
+    expect(webCopy).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith(label('chat.media.imageCopied'));
+  });
+
   it.each(['returned', 'thrown'])(
     'reports local copy %s failures instead of an unhandled rejection',
     async (failure) => {
